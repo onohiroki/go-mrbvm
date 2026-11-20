@@ -1,0 +1,9 @@
+[1, ArgumentError]
+[{"a" => 1}, {b: 2}]
+{"a" => 1}
+[[], {"a" => 1, b: 2}]
+[[1, 2], {c: 3}, true]
+[[9, 1, 2], {c: 3}, true]
+[1, 2, 3, 4, 1, 2, 3, 4, 4]
+ArgumentError
+:super_outside_method

@@ -1,0 +1,11 @@
+body
+boom
+ensure
+after
+"caught method"
+custom
+5
+normal
+else
+ensure-only
+multi

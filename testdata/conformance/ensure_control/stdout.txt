@@ -1,0 +1,7 @@
+ensure return
+1
+ensure 1
+ensure 2
+done
+ensure raise
+x

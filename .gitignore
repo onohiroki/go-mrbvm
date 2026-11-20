@@ -1,0 +1,6 @@
+bin/
+mruby
+*.mrb
+*.test
+dist/
+.DS_Store

@@ -1,0 +1,26 @@
+go-mrbvm
+Copyright (c) 2026 go-mrbvm contributors
+
+This product includes knowledge derived from the mruby project.
+
+mruby
+Copyright (c) 2010-2026 mruby developers
+Licensed under the MIT License.
+https://github.com/mruby/mruby
+
+The RITE binary format, opcode definitions, argument specifications, and
+bytecode semantics implemented by this project follow mruby 4.0.0.
+
+This project consumes the bytecode package from go-mrbc.
+
+go-mrbc
+Copyright (c) 2026 go-mrbc contributors
+Licensed under the MIT License.
+https://github.com/onohiroki/go-mrbc
+
+ChibiRuby is referenced as prior art for VM architecture and host API design.
+
+ChibiRuby
+Copyright (c) hadashiA
+Licensed under the MIT License.
+https://github.com/hadashiA/ChibiRuby

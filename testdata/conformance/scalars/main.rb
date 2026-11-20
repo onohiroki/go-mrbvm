@@ -1,0 +1,9 @@
+puts 1234567890123
+puts -1
+puts 1.5
+puts "a\nb"
+puts :sym
+puts 255
+puts 256
+puts -300
+puts 70000

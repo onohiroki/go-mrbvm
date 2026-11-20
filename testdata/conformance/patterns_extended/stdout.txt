@@ -1,0 +1,17 @@
+3
+1
+3
+:alternation
+:no_alternation
+[1, [2], 3]
+[1, [2]]
+:find
+[[1, 2], [4]]
+:no_find
+{"b" => 2, "a" => 1}
+:required_ok
+:no_match
+[10, [20, 30]]
+:when_splat
+[{b: true}]
+15
