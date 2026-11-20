@@ -4,3 +4,5 @@ mruby
 *.test
 dist/
 .DS_Store
+ChibiRuby
+mruby
