@@ -9,17 +9,18 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-The repository is at the scaffold stage. The VM plan is in:
+**VM-0** is implemented: RITE 04.00 loading through `go-mrbc/bytecode`, a
+minimal value/object model, `STRING` / `MOVE` / `SSEND` / `RETURN` / `STOP`,
+and `Kernel#puts`. `puts "hello"` runs from bytecode produced by both
+`go-mrbc` and the official mruby 4.0.0 `mrbc`.
 
-- [docs/go-mrbvm-plan.md](docs/go-mrbvm-plan.md) — detailed plan
-- [docs/go-mrbvm-plan.ja.md](docs/go-mrbvm-plan.ja.md) — Japanese summary
+Next: **VM-1** (expressions, locals, arrays/hashes, methods, blocks, `yield`).
 
-The first milestone is **VM-0**:
+Design and plan:
 
-- load RITE 04.00
-- decode instructions through `go-mrbc/bytecode`
-- minimal value/object model
-- execute `puts "hello"` end to end
+- [docs/architecture.md](docs/architecture.md) — architecture and design
+- [docs/implementation-plan.ja.md](docs/implementation-plan.ja.md) — implementation plan (Japanese)
+- [docs/bytecode-format.md](docs/bytecode-format.md) — RITE 04.00 format
 
 ## Relationship to go-mrbc
 
