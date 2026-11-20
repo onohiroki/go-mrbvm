@@ -33,13 +33,114 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	frameArgs := args
 	frameKw := kw
 	frameBlock := block
-	frameEnv := &environment{parent: capturedEnv, regs: regs, block: block}
+	frameEnv := &environment{parent: capturedEnv, regs: regs, block: block, methodFrame: mid != ""}
 	_ = frameEnv
 	keywordSlot := -1
 	_ = keywordSlot
 	pcByOffset := make(map[int]int, len(instructions))
 	for i, in := range instructions {
 		pcByOffset[in.Offset] = i
+	}
+
+	// caught holds the signal that transferred control into an ensure or
+	// rescue handler. OP_EXCEPT turns it back into a register value.
+	var caught *unwindSignal
+
+	handlerAt := func(offset int) *bytecode.CatchHandler {
+		for i := len(irep.Catch) - 1; i >= 0; i-- {
+			handler := &irep.Catch[i]
+			if offset >= int(handler.Begin) && offset < int(handler.End) {
+				return handler
+			}
+		}
+		return nil
+	}
+	ensureAt := func(offset, target int) *bytecode.CatchHandler {
+		for i := len(irep.Catch) - 1; i >= 0; i-- {
+			handler := &irep.Catch[i]
+			if handler.Type != bytecode.CatchEnsure {
+				continue
+			}
+			if offset < int(handler.Begin) || offset >= int(handler.End) {
+				continue
+			}
+			if target >= 0 && target >= int(handler.Begin) && target < int(handler.End) {
+				return nil
+			}
+			return handler
+		}
+		return nil
+	}
+	// handle routes a signal through catch handlers. It returns either a new
+	// pc, a value to return from this frame, or the signal to propagate.
+	targetPC := func(handler *bytecode.CatchHandler) (int, error) {
+		target, ok := pcByOffset[int(handler.Target)]
+		if !ok {
+			return 0, fmt.Errorf("mrbvm: catch target %d is not an instruction boundary", handler.Target)
+		}
+		return target, nil
+	}
+	handle := func(sig *unwindSignal, offset int) (int, Value, bool, error) {
+		switch sig.kind {
+		case unwindJump:
+			jumpOffset := -1
+			if sig.jumpTarget >= 0 && sig.jumpTarget < len(instructions) {
+				jumpOffset = instructions[sig.jumpTarget].Offset
+			}
+			if handler := ensureAt(offset, jumpOffset); handler != nil {
+				target, err := targetPC(handler)
+				if err != nil {
+					return 0, Nil, false, err
+				}
+				caught = sig
+				return target, Nil, false, nil
+			}
+			return sig.jumpTarget, Nil, false, nil
+		case unwindException:
+			if handler := handlerAt(offset); handler != nil {
+				target, err := targetPC(handler)
+				if err != nil {
+					return 0, Nil, false, err
+				}
+				caught = sig
+				return target, Nil, false, nil
+			}
+			return 0, Nil, false, sig
+		case unwindReturn:
+			if handler := ensureAt(offset, -1); handler != nil {
+				target, err := targetPC(handler)
+				if err != nil {
+					return 0, Nil, false, err
+				}
+				caught = sig
+				return target, Nil, false, nil
+			}
+			if sig.target == frameEnv {
+				return 0, sig.value, true, nil
+			}
+			return 0, Nil, false, sig
+		case unwindBreak:
+			if handler := ensureAt(offset, -1); handler != nil {
+				target, err := targetPC(handler)
+				if err != nil {
+					return 0, Nil, false, err
+				}
+				caught = sig
+				return target, Nil, false, nil
+			}
+			return 0, Nil, false, sig
+		}
+		return 0, Nil, false, sig
+	}
+	dispatch := func(err error, offset int) (int, Value, bool, error) {
+		sig, ok := err.(*unwindSignal)
+		if !ok {
+			return 0, Nil, false, err
+		}
+		return handle(sig, offset)
+	}
+	returnFrom := func(value Value, offset int) (int, Value, bool, error) {
+		return handle(&unwindSignal{kind: unwindReturn, value: value, target: frameEnv}, offset)
 	}
 
 	for pc := 0; pc < len(instructions); pc++ {
@@ -85,9 +186,21 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			key := int((aspec >> 2) & 0x1f)
 			kdict := (aspec>>1)&1 != 0
 			hasBlock := aspec&1 != 0
+			noBlock := (aspec>>23)&1 != 0
+			if noBlock && !frameBlock.IsNil() {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block accepted")}
+			}
+			// A keyword dictionary passed to a method without keyword
+			// parameters becomes the last positional argument.
+			if key == 0 && !kdict && !frameKw.IsNil() {
+				if hash, ok := frameKw.obj.data.(*hashData); ok && len(hash.entries) > 0 {
+					frameArgs = append(append([]Value(nil), frameArgs...), frameKw)
+				}
+				frameKw = Nil
+			}
 			provided := len(frameArgs)
 			if strict && provided < req+post {
-				return Nil, fmt.Errorf("mrbvm: wrong number of arguments (given %d, expected %d)", provided, req)
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, fmt.Sprintf("wrong number of arguments (given %d, expected %d)", provided, req+post))}
 			}
 			optional := provided - req - post
 			if optional < 0 {
@@ -111,7 +224,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				restCount = 0
 			}
 			if strict && !hasRest && restCount > 0 {
-				return Nil, fmt.Errorf("mrbvm: too many arguments")
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, fmt.Sprintf("wrong number of arguments (given %d, expected %d)", provided, req+opt+post))}
 			}
 			restSlot := 1 + req + opt
 			if hasRest {
@@ -317,7 +430,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			result, err := s.executeFrame(ctx, irep.Reps[childIndex], regs[a], class, nil, Nil, Nil, nil, "", class, false)
 			if err != nil {
-				return Nil, err
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			regs[a] = result
 
@@ -353,13 +474,8 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			a := int(in.Operands[0])
 			slot := int(in.Operands[1])
 			level := int(in.Operands[2])
-			env := frameEnv
-			for i := 0; i <= level; i++ {
-				if env == nil {
-					return Nil, fmt.Errorf("mrbvm: broken upvar chain")
-				}
-				env = env.parent
-			}
+			adjust := strict && mid != "" && pc+1 < len(instructions) && instructions[pc+1].Op == bytecode.OpSUPER
+			env := resolveUpvar(frameEnv, level, adjust)
 			if env == nil || slot < 0 || slot >= len(env.regs) {
 				return Nil, fmt.Errorf("mrbvm: upvar slot %d out of range", slot)
 			}
@@ -368,13 +484,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			a := int(in.Operands[0])
 			slot := int(in.Operands[1])
 			level := int(in.Operands[2])
-			env := frameEnv
-			for i := 0; i <= level; i++ {
-				if env == nil {
-					return Nil, fmt.Errorf("mrbvm: broken upvar chain")
-				}
-				env = env.parent
-			}
+			env := resolveUpvar(frameEnv, level, false)
 			if env == nil || slot < 0 || slot >= len(env.regs) {
 				return Nil, fmt.Errorf("mrbvm: upvar slot %d out of range", slot)
 			}
@@ -392,6 +502,8 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				self:        self,
 				targetClass: targetClass,
 				strict:      in.Op == bytecode.OpLAMBDA,
+				mid:         mid,
+				owner:       owner,
 			}})
 		case bytecode.OpBLKPUSH:
 			a := int(in.Operands[0])
@@ -414,14 +526,116 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			copy(args, regs[a+1:a+1+n])
 			result, err := s.callBlock(ctx, regs[a], args, Nil)
 			if err != nil {
-				return Nil, err
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			regs[a] = result
+		case bytecode.OpMATCHERR:
+			if !regs[in.Operands[0]].IsTruthy() {
+				sig := &unwindSignal{kind: unwindException, value: newException(s.NoMatchingPatternErrorClass, "pattern not matched")}
+				np, rv, done, fatal := handle(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+			}
+
+		case bytecode.OpEXCEPT:
+			a := int(in.Operands[0])
+			if caught != nil {
+				if caught.kind == unwindException {
+					regs[a] = caught.value
+					s.currentException = caught.value
+				} else {
+					regs[a] = signalValue(caught)
+				}
+				caught = nil
+			} else {
+				regs[a] = Nil
+			}
+		case bytecode.OpRESCUE:
+			a := int(in.Operands[0])
+			b := int(in.Operands[1])
+			if sig, ok := asSignal(regs[a]); ok && sig.kind != unwindException {
+				regs[b] = False
+				break
+			}
+			class, ok := s.asClass(regs[b])
+			if !ok {
+				return Nil, fmt.Errorf("mrbvm: class or module required for rescue clause")
+			}
+			regs[b] = BoolValue(s.isA(regs[a], class))
+		case bytecode.OpRAISEIF:
+			value := regs[in.Operands[0]]
+			if value.IsNil() {
+				s.currentException = Nil
+				break
+			}
+			sig, ok := asSignal(value)
+			if !ok {
+				sig = &unwindSignal{kind: unwindException, value: value}
+			}
+			np, rv, done, fatal := handle(sig, in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
+
 		case bytecode.OpBREAK:
-			return Nil, &breakError{value: regs[in.Operands[0]]}
+			value := regs[in.Operands[0]]
+			sig := &unwindSignal{kind: unwindBreak, value: value}
+			if strict {
+				sig = &unwindSignal{kind: unwindReturn, value: value, target: frameEnv}
+			}
+			np, rv, done, fatal := handle(sig, in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
 		case bytecode.OpRETURN_BLK:
-			// TODO: non-local return from the enclosing method.
-			return Nil, fmt.Errorf("mrbvm: return from a block is not supported yet")
+			value := regs[in.Operands[0]]
+			var target *environment
+			if strict {
+				target = frameEnv
+			} else {
+				target = nearestMethodEnv(capturedEnv)
+			}
+			if target == nil {
+				sig := &unwindSignal{kind: unwindException, value: newException(s.LocalJumpErrorClass, "unexpected return")}
+				np, rv, done, fatal := handle(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
+			}
+			np, rv, done, fatal := handle(&unwindSignal{kind: unwindReturn, value: value, target: target}, in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
 
 		case bytecode.OpSENDB, bytecode.OpSSENDB:
 			recv := self
@@ -434,7 +648,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			if err != nil {
-				return Nil, err
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			regs[in.Operands[0]] = result
 
@@ -486,7 +708,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			a := int(in.Operands[0])
 			argInfo := in.Operands[1]
 			if owner == nil {
-				return Nil, fmt.Errorf("mrbvm: super outside a method")
+				sig := &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, "super called outside of method")}
+				np, rv, done, fatal := handle(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			var m *method
 			var ok bool
@@ -498,7 +729,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				m, ok = owner.super.lookup(mid)
 			}
 			if !ok {
-				return Nil, fmt.Errorf("mrbvm: no superclass method %q", mid)
+				sig := &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, fmt.Sprintf("no superclass method %q", mid))}
+				np, rv, done, fatal := handle(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			args, kw, block, err := sendArguments(irep, regs, a, argInfo, true)
 			if err != nil {
@@ -506,7 +746,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			result, err := s.invoke(ctx, m, self, args, kw, block)
 			if err != nil {
-				return Nil, err
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			regs[a] = result
 
@@ -517,7 +765,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], nil, Nil, Nil)
 			if err != nil {
-				return Nil, err
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			regs[in.Operands[0]] = result
 
@@ -532,16 +788,37 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			if err != nil {
-				return Nil, err
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			regs[in.Operands[0]] = result
 
-		case bytecode.OpJMP, bytecode.OpJMPUW:
+		case bytecode.OpJMP:
 			target, err := jumpTarget(in, pcByOffset)
 			if err != nil {
 				return Nil, err
 			}
 			pc = target - 1
+		case bytecode.OpJMPUW:
+			target, err := jumpTarget(in, pcByOffset)
+			if err != nil {
+				return Nil, err
+			}
+			np, rv, done, fatal := handle(&unwindSignal{kind: unwindJump, jumpTarget: target}, in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
 		case bytecode.OpJMPIF:
 			if regs[in.Operands[0]].IsTruthy() {
 				target, err := jumpTarget(in, pcByOffset)
@@ -782,15 +1059,50 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[a] = value
 
 		case bytecode.OpRETURN:
-			return regs[in.Operands[0]], nil
+			np, rv, done, fatal := returnFrom(regs[in.Operands[0]], in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
 		case bytecode.OpRETNIL:
-			return Nil, nil
+			np, rv, done, fatal := returnFrom(Nil, in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
 		case bytecode.OpRETSELF:
-			return self, nil
+			np, rv, done, fatal := returnFrom(self, in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
 		case bytecode.OpRETTRUE:
-			return True, nil
+			np, rv, done, fatal := returnFrom(True, in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
 		case bytecode.OpRETFALSE:
-			return False, nil
+			np, rv, done, fatal := returnFrom(False, in.Offset)
+			if fatal != nil {
+				return Nil, fatal
+			}
+			if done {
+				return rv, nil
+			}
+			pc = np - 1
 
 		case bytecode.OpSTOP:
 			return Nil, nil
@@ -800,6 +1112,37 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		}
 	}
 	return Nil, nil
+}
+
+// resolveUpvar maps an upvar level to an environment. mruby counts
+// environments above the current proc, and a block's proc shares the stack of
+// the scope where it was defined, so the search starts at the captured
+// environment. Official mrbc emits one extra level for implicit super
+// arguments inside a lambda; the caller compensates for that instruction.
+func resolveUpvar(frameEnv *environment, level int, adjust bool) *environment {
+	env := frameEnv
+	if env != nil {
+		env = env.parent
+	}
+	if adjust && level > 0 {
+		level--
+	}
+	for i := 0; i < level; i++ {
+		if env == nil {
+			return nil
+		}
+		env = env.parent
+	}
+	return env
+}
+
+func nearestMethodEnv(env *environment) *environment {
+	for current := env; current != nil; current = current.parent {
+		if current.methodFrame {
+			return current
+		}
+	}
+	return nil
 }
 
 func lookupClassVar(class *Class, name string) Value {
@@ -863,12 +1206,17 @@ func sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, hasBlock boo
 func (s *State) call(ctx context.Context, recv Value, name string, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) == 0 {
 		switch name {
+		case "nil?":
+			return BoolValue(recv.IsNil()), nil
 		case "!":
 			return BoolValue(!recv.IsTruthy()), nil
 		case "-@":
 			switch recv.Kind() {
 			case KindInt:
 				return IntValue(-recv.Int()), nil
+			case KindBigInt:
+				value, _ := recv.BigInt()
+				return normalizedBigInt(new(big.Int).Neg(value)), nil
 			case KindFloat:
 				return FloatValue(-recv.Float()), nil
 			}
@@ -890,7 +1238,7 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 	}
 	m, ok := s.classOf(recv).lookup(name)
 	if !ok {
-		return Nil, fmt.Errorf("undefined method %q for %s", name, recv.Inspect())
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, fmt.Sprintf("undefined method %q for %s", name, recv.Inspect()))}
 	}
 	return s.invoke(ctx, m, recv, args, kw, block)
 }
@@ -915,7 +1263,9 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		return BoolValue(valuesEqual(left, right)), true
 	case "<", "<=", ">", ">=":
 		var cmp int
-		if li, ri, ok := bothInts(left, right); ok {
+		if li, ri, ok := bothBigInts(left, right); ok {
+			cmp = li.Cmp(ri)
+		} else if li, ri, ok := bothInts(left, right); ok {
 			switch {
 			case li < ri:
 				cmp = -1
@@ -946,6 +1296,9 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		if left.Kind() == KindString && right.Kind() == KindString {
 			return StringValue(left.String() + right.String()), true
 		}
+		if li, ri, ok := bothBigInts(left, right); ok {
+			return normalizedBigInt(new(big.Int).Add(li, ri)), true
+		}
 		if li, ri, ok := bothInts(left, right); ok {
 			return IntValue(li + ri), true
 		}
@@ -953,6 +1306,9 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 			return FloatValue(lf + rf), true
 		}
 	case "-":
+		if li, ri, ok := bothBigInts(left, right); ok {
+			return normalizedBigInt(new(big.Int).Sub(li, ri)), true
+		}
 		if li, ri, ok := bothInts(left, right); ok {
 			return IntValue(li - ri), true
 		}
@@ -960,6 +1316,9 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 			return FloatValue(lf - rf), true
 		}
 	case "*":
+		if li, ri, ok := bothBigInts(left, right); ok {
+			return normalizedBigInt(new(big.Int).Mul(li, ri)), true
+		}
 		if li, ri, ok := bothInts(left, right); ok {
 			return IntValue(li * ri), true
 		}
@@ -967,6 +1326,12 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 			return FloatValue(lf * rf), true
 		}
 	case "/":
+		if li, ri, ok := bothBigInts(left, right); ok {
+			if ri.Sign() == 0 {
+				return Nil, false
+			}
+			return normalizedBigInt(new(big.Int).Quo(li, ri)), true
+		}
 		if li, ri, ok := bothInts(left, right); ok {
 			if ri == 0 {
 				return Nil, false
@@ -981,6 +1346,35 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		}
 	}
 	return Nil, false
+}
+
+func integerBig(v Value) (*big.Int, bool) {
+	switch v.Kind() {
+	case KindInt:
+		return big.NewInt(v.Int()), true
+	case KindBigInt:
+		return v.BigInt()
+	}
+	return nil, false
+}
+
+func bothBigInts(left, right Value) (*big.Int, *big.Int, bool) {
+	if left.Kind() != KindBigInt && right.Kind() != KindBigInt {
+		return nil, nil, false
+	}
+	li, ok1 := integerBig(left)
+	ri, ok2 := integerBig(right)
+	if !ok1 || !ok2 {
+		return nil, nil, false
+	}
+	return li, ri, true
+}
+
+func normalizedBigInt(value *big.Int) Value {
+	if value.IsInt64() {
+		return IntValue(value.Int64())
+	}
+	return BigIntValue(value)
 }
 
 func bothInts(left, right Value) (int64, int64, bool) {
@@ -1014,6 +1408,9 @@ func numeric(v Value) (int64, float64, bool) {
 
 func valuesEqual(left, right Value) bool {
 	if left.Kind() != right.Kind() {
+		if li, ri, ok := bothBigInts(left, right); ok {
+			return li.Cmp(ri) == 0
+		}
 		if li, lf, ok := numeric(left); ok {
 			if ri, rf, ok := numeric(right); ok {
 				_ = li
@@ -1030,6 +1427,10 @@ func valuesEqual(left, right Value) bool {
 		return true
 	case KindInt:
 		return left.Int() == right.Int()
+	case KindBigInt:
+		li, _ := left.BigInt()
+		ri, _ := right.BigInt()
+		return li.Cmp(ri) == 0
 	case KindFloat:
 		return left.Float() == right.Float()
 	case KindString, KindSymbol:
@@ -1097,10 +1498,7 @@ func (s *State) poolValue(irep *Irep, index int) (Value, error) {
 		if err != nil {
 			return Nil, err
 		}
-		if !value.IsInt64() {
-			return Nil, fmt.Errorf("mrbvm: big integer outside int64 range is not supported yet")
-		}
-		return IntValue(value.Int64()), nil
+		return normalizedBigInt(value), nil
 	default:
 		return Nil, fmt.Errorf("mrbvm: unsupported pool entry kind %d", entry.Kind)
 	}

@@ -9,32 +9,38 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-**VM-1 is in progress.** The VM loads RITE 04.00 through
+**VM-3 is largely implemented.** The VM loads RITE 04.00 through
 `go-mrbc/bytecode` and supports:
 
 - values, objects, classes, methods, blocks, closures, and upvars
-- locals, arrays, hashes, ranges, strings, symbols
-- `ENTER` argument binding (required/optional/rest/post/block)
+- locals, arrays, hashes, ranges, strings, symbols, arbitrary-precision
+  integers
+- `ENTER` argument binding (required/optional/rest/post/keyword/block/noblock)
 - methods, `yield`, `BLOCK` / `BLKPUSH` / `BLKCALL`, `Proc#call`
+- classes, modules, inheritance, `super`, `ARGARY`, singleton classes,
+  constants, class variables
 - arithmetic/comparison opcodes, including official `mrbc`'s optimized
   `ADD`, `ADDI`, `ADDILV`, `SUB`, `EQ`, `LT`, `LE`, `GT`, `GE`
+- `raise` / `rescue` / `ensure`, catch handlers, `EXCEPT` / `RESCUE` /
+  `RAISEIF`, `MATCHERR`
+- non-local `return`, lambda `return` / `break`, `retry` / `redo`,
+  and ensure unwinding for `return` / `break` / `next`
+- exception classes, `message`, and rescue by class
 - array/hash access and pattern helpers
 
-The following 20 shared conformance cases pass with bytecode from both
+The following 29 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
 `advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
 `blocks`, `case_and_logic`, `classes`, `collections`, `control_flow`,
-`for_blocks`, `for_loops`, `keywords`, `methods`, `modern_syntax`,
-`multiple_assignment`, `operator_assignment`, `parameters`,
-`pattern_matching`, `scalars`, `splat`.
+`destructuring`, `ensure_control`, `exceptions`, `for_blocks`,
+`for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,
+`modern_syntax`, `multiple_assignment`, `operator_assignment`,
+`parameters`, `pattern_matching`, `patterns_extended`, `retry_redo`,
+`runtime_edges`, `scalars`, `semantic_edges`, `splat`.
 
-VM-2 is largely implemented: classes, modules, inheritance, `super`,
-class methods, `class << self`, class variables, keyword arguments, and
-pattern-matching helpers. The remaining conformance failures are centred
-on exceptions, big integers, and a few block/lambda edge cases.
-
-Next: **VM-3** (`raise` / `rescue` / `ensure` and non-local control flow).
+Remaining VM-3 work is backtraces and richer exception introspection.
+Next: **VM-4** (core library and mrblib coverage).
 
 Design and plan:
 

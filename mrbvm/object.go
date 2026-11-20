@@ -1,6 +1,9 @@
 package mrbvm
 
-import "context"
+import (
+	"context"
+	"math/big"
+)
 
 type stringData struct {
 	value string
@@ -73,9 +76,10 @@ type method struct {
 type NativeFunc func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error)
 
 type environment struct {
-	parent *environment
-	regs   []Value
-	block  Value
+	parent      *environment
+	regs        []Value
+	block       Value
+	methodFrame bool
 }
 
 type blockData struct {
@@ -84,13 +88,83 @@ type blockData struct {
 	self        Value
 	targetClass *Class
 	strict      bool
+	mid         string
+	owner       *Class
 }
 
-type breakError struct {
-	value Value
+// exceptionData is the payload of a Ruby exception object.
+type exceptionData struct {
+	message string
 }
 
-func (e *breakError) Error() string { return "break" }
+type bigIntData struct {
+	value *big.Int
+}
+
+// unwindKind identifies a non-local control-flow signal.
+type unwindKind int
+
+const (
+	unwindException unwindKind = iota
+	unwindReturn
+	unwindBreak
+	unwindJump
+)
+
+// unwindSignal travels through Go error returns while a rescue or ensure
+// handler catches it. Carrying the signal as a value lets OP_EXCEPT and
+// OP_RAISEIF reproduce mruby's mrb->exc based unwinding.
+type unwindSignal struct {
+	kind       unwindKind
+	value      Value
+	target     *environment
+	jumpTarget int
+}
+
+func (e *unwindSignal) Error() string {
+	switch e.kind {
+	case unwindException:
+		return "unhandled exception: " + e.value.Inspect() + " (" + exceptionMessage(e.value) + ")"
+	case unwindReturn:
+		return "return"
+	case unwindBreak:
+		return "break"
+	default:
+		return "jump"
+	}
+}
+
+// signalData wraps a control-flow signal so it can live in a register while
+// an ensure body runs.
+type signalData struct {
+	signal *unwindSignal
+}
+
+func newException(class *Class, message string) Value {
+	return ObjectValue(&Object{class: class, data: &exceptionData{message: message}})
+}
+
+func exceptionMessage(v Value) string {
+	if v.Kind() == KindObject && v.obj != nil {
+		if data, ok := v.obj.data.(*exceptionData); ok {
+			return data.message
+		}
+	}
+	return v.ToS()
+}
+
+func signalValue(sig *unwindSignal) Value {
+	return ObjectValue(&Object{data: &signalData{signal: sig}})
+}
+
+func asSignal(v Value) (*unwindSignal, bool) {
+	if v.Kind() == KindObject && v.obj != nil {
+		if data, ok := v.obj.data.(*signalData); ok {
+			return data.signal, true
+		}
+	}
+	return nil, false
+}
 
 func newClass(name string, super *Class) *Class {
 	return &Class{
@@ -175,7 +249,7 @@ func (s *State) classOf(v Value) *Class {
 		}
 	}
 	switch v.kind {
-	case KindInt:
+	case KindInt, KindBigInt:
 		return s.IntegerClass
 	case KindFloat:
 		return s.FloatClass

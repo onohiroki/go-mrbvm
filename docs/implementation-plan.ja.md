@@ -304,14 +304,12 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 
 ## 15. 直近の作業
 
-1. VM-3 の実装
-   - `raise` / `rescue` / `ensure`
-   - catch handler、`EXCEPT` / `RESCUE` / `RAISEIF`
-   - `return` / `break` / `next` の ensure 巻き戻し
-   - `retry` / `redo`
-   - 例外オブジェクトと `message` / `backtrace`
+1. VM-4 の実装
+   - コアライブラリと mrblib の拡充
+   - `String` / `Array` / `Hash` / `Integer` / `Enumerable` の未実装メソッド
+   - `Comparable`、`Object#inspect`、`Object#to_s` の整理
 2. `cmd/vmcompat` の整備
-3. bigint と lambda の非局所制御
+3. 例外の `backtrace` と `Exception#full_message`
 
 ## 16. 現在の状態
 
@@ -348,4 +346,20 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
     `keywords`, `methods`, `modern_syntax`, `multiple_assignment`,
     `operator_assignment`, `parameters`, `pattern_matching`,
     `scalars`, `splat`
-- 次は VM-3（例外と非局所制御）
+- **VM-3 実装済み（主要部分）**
+  - `raise` / `rescue` / `ensure` と例外クラス階層
+  - catch handler、`EXCEPT` / `RESCUE` / `RAISEIF` / `MATCHERR`
+  - `return` / `break` / `next` の ensure 巻き戻し
+  - ブロックからの非局所 `return`、lambda の `return` / `break`
+  - `retry` / `redo`、`JMPUW` の ensure 連携
+  - 任意精度整数（bigint）と配列の Range スライス
+  - 次の 29 conformance が両コンパイラで成功:
+    `advanced_classes`, `alias_undef`, `assignment_targets`,
+    `basic_hello`, `blocks`, `case_and_logic`, `classes`,
+    `collections`, `control_flow`, `destructuring`, `ensure_control`,
+    `exceptions`, `for_blocks`, `for_loops`, `keywords`, `lambda`,
+    `lambda_super`, `methods`, `modern_syntax`, `multiple_assignment`,
+    `operator_assignment`, `parameters`, `pattern_matching`,
+    `patterns_extended`, `retry_redo`, `runtime_edges`, `scalars`,
+    `semantic_edges`, `splat`
+- 次は VM-4（コアライブラリと mrblib）

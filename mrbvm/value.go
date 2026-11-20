@@ -3,6 +3,7 @@ package mrbvm
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,7 @@ const (
 	KindFalse
 	KindTrue
 	KindInt
+	KindBigInt
 	KindFloat
 	KindSymbol
 	KindString
@@ -52,6 +54,21 @@ func BoolValue(v bool) Value {
 		return True
 	}
 	return False
+}
+
+// BigIntValue returns an arbitrary-precision integer value.
+func BigIntValue(v *big.Int) Value {
+	return Value{kind: KindBigInt, obj: &Object{data: &bigIntData{value: v}}}
+}
+
+// BigInt returns the arbitrary-precision payload.
+func (v Value) BigInt() (*big.Int, bool) {
+	if v.kind == KindBigInt && v.obj != nil {
+		if data, ok := v.obj.data.(*bigIntData); ok {
+			return data.value, true
+		}
+	}
+	return nil, false
 }
 
 // FloatValue returns a floating-point value.
@@ -139,6 +156,11 @@ func (v Value) Inspect() string {
 		return "true"
 	case KindInt:
 		return strconv.FormatInt(v.Int(), 10)
+	case KindBigInt:
+		if value, ok := v.BigInt(); ok {
+			return value.String()
+		}
+		return "0"
 	case KindFloat:
 		return strconv.FormatFloat(v.Float(), 'g', -1, 64)
 	case KindSymbol:
