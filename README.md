@@ -9,12 +9,24 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-**VM-0** is implemented: RITE 04.00 loading through `go-mrbc/bytecode`, a
-minimal value/object model, `STRING` / `MOVE` / `SSEND` / `RETURN` / `STOP`,
-and `Kernel#puts`. `puts "hello"` runs from bytecode produced by both
-`go-mrbc` and the official mruby 4.0.0 `mrbc`.
+**VM-1 is in progress.** The VM loads RITE 04.00 through
+`go-mrbc/bytecode` and supports:
 
-Next: **VM-1** (expressions, locals, arrays/hashes, methods, blocks, `yield`).
+- values, objects, classes, methods, blocks, closures, and upvars
+- locals, arrays, hashes, ranges, strings, symbols
+- `ENTER` argument binding (required/optional/rest/post/block)
+- methods, `yield`, `BLOCK` / `BLKPUSH` / `BLKCALL`, `Proc#call`
+- arithmetic/comparison opcodes, including official `mrbc`'s optimized
+  `ADD`, `ADDI`, `ADDILV`, `SUB`, `EQ`, `LT`, `LE`, `GT`, `GE`
+- array/hash access and pattern helpers
+
+The following shared conformance cases pass with bytecode from both
+`go-mrbc` and the official mruby 4.0.0 `mrbc`:
+
+`basic_hello`, `blocks`, `case_and_logic`, `collections`, `control_flow`,
+`methods`, `multiple_assignment`, `scalars`.
+
+Next: **VM-2** (classes/modules, inheritance, `super`, keyword arguments).
 
 Design and plan:
 

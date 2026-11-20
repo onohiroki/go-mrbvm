@@ -304,14 +304,14 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 
 ## 15. 直近の作業
 
-1. VM-1 の実装
-   - ローカル変数、グローバル変数、定数
-   - 配列、ハッシュ、範囲、文字列
-   - メソッド、ブロック、`yield`、upvar
-   - 条件分岐、ループ
-   - 本家 `mrbc` の最適化 opcode（`ADDI`, `ADD`, `LT` など）
-2. `cmd/vmcompat` の骨組み
-3. 基本 conformance ケースの実行
+1. VM-2 の実装
+   - `CLASS` / `MODULE` / `EXEC` / `TCLASS` / `SCLASS`
+   - 継承、`super`、`ARGARY`
+   - キーワード引数、`**rest`、`K_*` opcode
+   - インスタンス変数・クラス変数・定数のクラススコープ
+   - `DEF` / `SDEF` / `define_method`
+2. `cmd/vmcompat` の整備
+3. conformance ケースの拡大
 
 ## 16. 現在の状態
 
@@ -326,5 +326,13 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - `Kernel#puts`
   - `go-mrbc` と本家 `mrbc` の `puts "hello"` が動作
   - `cmd/gomruby` から `.mrb` / `.rb` を実行可能
-  - `mrbvm/hello_test.go` で両コンパイラを検証
-- 次は VM-1
+- **VM-1 実装中（主要部分は動作）**
+  - ローカル変数、配列、ハッシュ、範囲、文字列、シンボル
+  - メソッド、`ENTER` の引数束縛、ブロック、`yield`、upvar
+  - `BLOCK` / `BLKPUSH` / `BLKCALL`、`Proc#call`
+  - 最適化 opcode（`ADD`, `ADDI`, `ADDILV`, `SUB`, `EQ`, `LT` など）
+  - 配列/ハッシュのパターンヘルパー
+  - 次の conformance が両コンパイラで成功:
+    `basic_hello`, `blocks`, `case_and_logic`, `collections`,
+    `control_flow`, `methods`, `multiple_assignment`, `scalars`
+- 次は VM-2（クラス/モジュール、継承、`super`、キーワード引数）

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 )
 
 // Kind identifies the runtime type of a Value.
@@ -45,6 +46,14 @@ func IntValue(v int64) Value {
 	return Value{kind: KindInt, bits: uint64(v)}
 }
 
+// BoolValue returns true or false.
+func BoolValue(v bool) Value {
+	if v {
+		return True
+	}
+	return False
+}
+
 // FloatValue returns a floating-point value.
 func FloatValue(v float64) Value {
 	return Value{kind: KindFloat, bits: math.Float64bits(v)}
@@ -65,6 +74,21 @@ func ObjectValue(v *Object) Value {
 	return Value{kind: KindObject, obj: v}
 }
 
+// ArrayValue returns an array value.
+func ArrayValue(values []Value) Value {
+	return Value{kind: KindObject, obj: &Object{data: &arrayData{values: values}}}
+}
+
+// HashValue returns a hash value.
+func HashValue(entries []hashEntry) Value {
+	return Value{kind: KindObject, obj: &Object{data: &hashData{entries: entries}}}
+}
+
+// RangeValue returns a range value.
+func RangeValue(low, high Value, exclusive bool) Value {
+	return Value{kind: KindObject, obj: &Object{data: &rangeData{low: low, high: high, exclusive: exclusive}}}
+}
+
 // Kind returns the value's runtime kind.
 func (v Value) Kind() Kind { return v.kind }
 
@@ -79,6 +103,20 @@ func (v Value) Int() int64 { return int64(v.bits) }
 
 // Float returns the float payload.
 func (v Value) Float() float64 { return math.Float64frombits(v.bits) }
+
+// ToS returns Ruby's to_s representation.
+func (v Value) ToS() string {
+	switch v.kind {
+	case KindNil:
+		return ""
+	case KindSymbol:
+		return v.String()
+	case KindString:
+		return v.String()
+	default:
+		return v.Inspect()
+	}
+}
 
 // String returns the string or symbol payload.
 func (v Value) String() string {
@@ -108,8 +146,36 @@ func (v Value) Inspect() string {
 	case KindString:
 		return strconv.Quote(v.String())
 	case KindObject:
-		if v.obj != nil && v.obj.class != nil {
-			return fmt.Sprintf("#<%s>", v.obj.class.name)
+		if v.obj != nil {
+			switch data := v.obj.data.(type) {
+			case *arrayData:
+				parts := make([]string, len(data.values))
+				for i, item := range data.values {
+					parts[i] = item.Inspect()
+				}
+				return "[" + strings.Join(parts, ", ") + "]"
+			case *hashData:
+				parts := make([]string, len(data.entries))
+				for i, entry := range data.entries {
+					if entry.key.Kind() == KindSymbol {
+						parts[i] = entry.key.String() + ": " + entry.value.Inspect()
+					} else {
+						parts[i] = entry.key.Inspect() + " => " + entry.value.Inspect()
+					}
+				}
+				return "{" + strings.Join(parts, ", ") + "}"
+			case *rangeData:
+				op := ".."
+				if data.exclusive {
+					op = "..."
+				}
+				return data.low.Inspect() + op + data.high.Inspect()
+			case *blockData:
+				return "#<Proc>"
+			}
+			if v.obj.class != nil {
+				return fmt.Sprintf("#<%s>", v.obj.class.name)
+			}
 		}
 		return "#<Object>"
 	default:
