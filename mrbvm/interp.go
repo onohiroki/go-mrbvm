@@ -10,10 +10,10 @@ import (
 )
 
 func (s *State) executeIrep(ctx context.Context, irep *Irep, self Value) (Value, error) {
-	return s.executeFrame(ctx, irep, self, s.ObjectClass, nil, Nil, nil)
+	return s.executeFrame(ctx, irep, self, s.ObjectClass, nil, Nil, Nil, nil, "", nil, false)
 }
 
-func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, block Value, capturedEnv *environment) (Value, error) {
+func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, strict bool) (Value, error) {
 	instructions, err := bytecode.Decode(irep.Code)
 	if err != nil {
 		return Nil, err
@@ -25,12 +25,18 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	if nregs < 1 {
 		nregs = 1
 	}
+	// Some mruby compiler outputs use a register just past nregs for
+	// method/class definition results. Keep a small guard area.
+	nregs += 2
 	regs := make([]Value, nregs)
 	regs[0] = self
 	frameArgs := args
+	frameKw := kw
 	frameBlock := block
 	frameEnv := &environment{parent: capturedEnv, regs: regs, block: block}
 	_ = frameEnv
+	keywordSlot := -1
+	_ = keywordSlot
 	pcByOffset := make(map[int]int, len(instructions))
 	for i, in := range instructions {
 		pcByOffset[in.Offset] = i
@@ -48,6 +54,28 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpMOVE:
 			regs[in.Operands[0]] = regs[in.Operands[1]]
 
+		case bytecode.OpKEY_P:
+			a := int(in.Operands[0])
+			if keywordSlot < 0 {
+				regs[a] = False
+				continue
+			}
+			regs[a] = BoolValue(hashHasKey(regs[keywordSlot], irep.Syms[in.Operands[1]]))
+		case bytecode.OpKARG:
+			a := int(in.Operands[0])
+			name := irep.Syms[in.Operands[1]]
+			value, ok := hashDeleteKey(regs[keywordSlot], name)
+			if !ok {
+				return Nil, fmt.Errorf("mrbvm: missing keyword: %s", name)
+			}
+			regs[a] = value
+		case bytecode.OpKEYEND:
+			if keywordSlot >= 0 && regs[keywordSlot].Kind() == KindObject && regs[keywordSlot].obj != nil {
+				if hash, ok := regs[keywordSlot].obj.data.(*hashData); ok && len(hash.entries) > 0 {
+					return Nil, fmt.Errorf("mrbvm: unknown keyword: %s", hash.entries[0].key.Inspect())
+				}
+			}
+
 		case bytecode.OpENTER:
 			aspec := in.Operands[0]
 			req := int((aspec >> 18) & 0x1f)
@@ -57,11 +85,8 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			key := int((aspec >> 2) & 0x1f)
 			kdict := (aspec>>1)&1 != 0
 			hasBlock := aspec&1 != 0
-			if key != 0 || kdict {
-				return Nil, fmt.Errorf("mrbvm: keyword arguments are not supported yet")
-			}
 			provided := len(frameArgs)
-			if provided < req+post {
+			if strict && provided < req+post {
 				return Nil, fmt.Errorf("mrbvm: wrong number of arguments (given %d, expected %d)", provided, req)
 			}
 			optional := provided - req - post
@@ -71,10 +96,21 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if optional > opt {
 				optional = opt
 			}
-			copy(regs[1:1+req], frameArgs[:req])
-			copy(regs[1+req:1+req+optional], frameArgs[req:req+optional])
+			for i := 0; i < req; i++ {
+				if i < provided {
+					regs[1+i] = frameArgs[i]
+				} else {
+					regs[1+i] = Nil
+				}
+			}
+			for i := 0; i < optional; i++ {
+				regs[1+req+i] = frameArgs[req+i]
+			}
 			restCount := provided - req - optional - post
-			if !hasRest && restCount > 0 {
+			if restCount < 0 {
+				restCount = 0
+			}
+			if strict && !hasRest && restCount > 0 {
 				return Nil, fmt.Errorf("mrbvm: too many arguments")
 			}
 			restSlot := 1 + req + opt
@@ -87,15 +123,61 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if hasRest {
 				postStart++
 			}
-			copy(regs[postStart:postStart+post], frameArgs[provided-post:provided])
-			if hasBlock {
-				blockSlot := postStart + post
-				if blockSlot < len(regs) {
-					regs[blockSlot] = frameBlock
+			for i := 0; i < post; i++ {
+				index := provided - post + i
+				if index >= 0 && index < provided {
+					regs[postStart+i] = frameArgs[index]
+				} else {
+					regs[postStart+i] = Nil
 				}
+			}
+			positional := req + opt
+			if hasRest {
+				positional++
+			}
+			positional += post
+			keywordSlot = -1
+			blockSlot := 1 + positional
+			if key > 0 || kdict {
+				keywordSlot = 1 + positional
+				if keywordSlot < len(regs) {
+					regs[keywordSlot] = frameKw
+				}
+				blockSlot = keywordSlot + 1
+			}
+			if hasBlock && blockSlot < len(regs) {
+				regs[blockSlot] = frameBlock
 			}
 			// The next opt+1 instructions are the optional-default jump table.
 			pc += optional
+
+		case bytecode.OpALIAS:
+			a := irep.Syms[in.Operands[0]]
+			b := irep.Syms[in.Operands[1]]
+			if m, ok := targetClass.methods[b]; ok {
+				targetClass.methods[a] = m
+			}
+		case bytecode.OpUNDEF:
+			delete(targetClass.methods, irep.Syms[in.Operands[0]])
+
+		case bytecode.OpSCLASS:
+			a := int(in.Operands[0])
+			class, ok := s.asClass(regs[a])
+			if !ok {
+				return Nil, fmt.Errorf("mrbvm: SCLASS on non-class is not supported yet")
+			}
+			if class.singleton == nil {
+				class.singleton = newClass(class.name, nil)
+				class.singleton.singletonOf = class
+				s.ensureClassObject(class.singleton)
+			}
+			regs[a] = s.classValue(class.singleton)
+		case bytecode.OpTCLASS:
+			a := int(in.Operands[0])
+			if targetClass == nil {
+				return Nil, fmt.Errorf("mrbvm: TCLASS outside a class")
+			}
+			regs[a] = s.classValue(targetClass)
 
 		case bytecode.OpTDEF:
 			a := int(in.Operands[0])
@@ -150,10 +232,108 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[in.Operands[0]] = self.obj.ivar(irep.Syms[in.Operands[1]])
 		case bytecode.OpSETIV:
 			self.obj.setIvar(irep.Syms[in.Operands[1]], regs[in.Operands[0]])
+		case bytecode.OpOCLASS:
+			regs[in.Operands[0]] = s.classValue(s.ObjectClass)
+		case bytecode.OpGETCV:
+			regs[in.Operands[0]] = lookupClassVar(targetClass, irep.Syms[in.Operands[1]])
+		case bytecode.OpSETCV:
+			targetClass.classVars[irep.Syms[in.Operands[1]]] = regs[in.Operands[0]]
 		case bytecode.OpGETCONST:
-			regs[in.Operands[0]] = s.constants[irep.Syms[in.Operands[1]]]
+			name := irep.Syms[in.Operands[1]]
+			value := s.constants[name]
+			if value.IsNil() {
+				value = s.ObjectClass.constants[name]
+			}
+			regs[in.Operands[0]] = value
 		case bytecode.OpSETCONST:
-			s.constants[irep.Syms[in.Operands[1]]] = regs[in.Operands[0]]
+			name := irep.Syms[in.Operands[1]]
+			s.constants[name] = regs[in.Operands[0]]
+			if targetClass != nil {
+				targetClass.constants[name] = regs[in.Operands[0]]
+			}
+		case bytecode.OpGETMCNST:
+			a := int(in.Operands[0])
+			class, ok := s.asClass(regs[a])
+			if !ok {
+				return Nil, fmt.Errorf("mrbvm: GETMCNST receiver is not a class")
+			}
+			regs[a] = s.lookupConstant(class, irep.Syms[in.Operands[1]])
+		case bytecode.OpSETMCNST:
+			a := int(in.Operands[0])
+			class, ok := s.asClass(regs[a+1])
+			if !ok {
+				return Nil, fmt.Errorf("mrbvm: SETMCNST receiver is not a class")
+			}
+			class.constants[irep.Syms[in.Operands[1]]] = regs[a]
+
+		case bytecode.OpMODULE, bytecode.OpCLASS:
+			a := int(in.Operands[0])
+			name := irep.Syms[in.Operands[1]]
+			var outer *Class
+			if !regs[a].IsNil() {
+				var ok bool
+				outer, ok = s.asClass(regs[a])
+				if !ok {
+					return Nil, fmt.Errorf("mrbvm: class/module outer is not a class")
+				}
+			} else {
+				outer = s.ObjectClass
+			}
+			var super *Class
+			if in.Op == bytecode.OpCLASS {
+				if !regs[a+1].IsNil() {
+					var ok bool
+					super, ok = s.asClass(regs[a+1])
+					if !ok {
+						return Nil, fmt.Errorf("mrbvm: superclass is not a class")
+					}
+				} else {
+					super = s.ObjectClass
+				}
+			}
+			var class *Class
+			if existing := s.lookupConstant(outer, name); !existing.IsNil() {
+				if c, ok := s.asClass(existing); ok {
+					class = c
+				}
+			}
+			if class == nil {
+				class = newClass(name, super)
+				s.ensureClassObject(class)
+				outer.constants[name] = s.classValue(class)
+				s.constants[name] = s.classValue(class)
+			}
+			regs[a] = s.classValue(class)
+
+		case bytecode.OpEXEC:
+			a := int(in.Operands[0])
+			childIndex := int(in.Operands[1])
+			if childIndex < 0 || childIndex >= len(irep.Reps) {
+				return Nil, fmt.Errorf("mrbvm: EXEC child irep %d out of range", childIndex)
+			}
+			class, ok := s.asClass(regs[a])
+			if !ok {
+				return Nil, fmt.Errorf("mrbvm: EXEC target is not a class")
+			}
+			result, err := s.executeFrame(ctx, irep.Reps[childIndex], regs[a], class, nil, Nil, Nil, nil, "", class, false)
+			if err != nil {
+				return Nil, err
+			}
+			regs[a] = result
+
+		case bytecode.OpSDEF:
+			a := int(in.Operands[0])
+			name := irep.Syms[in.Operands[1]]
+			childIndex := int(in.Operands[2])
+			if childIndex < 0 || childIndex >= len(irep.Reps) {
+				return Nil, fmt.Errorf("mrbvm: SDEF child irep %d out of range", childIndex)
+			}
+			if class, ok := s.asClass(regs[a]); ok {
+				class.defineClassIrep(name, irep.Reps[childIndex])
+			} else {
+				return Nil, fmt.Errorf("mrbvm: singleton method definition on non-class is not supported yet")
+			}
+			regs[a] = SymbolValue(name)
 
 		case bytecode.OpLOADL:
 			value, err := s.poolValue(irep, int(in.Operands[1]))
@@ -211,6 +391,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				env:         frameEnv,
 				self:        self,
 				targetClass: targetClass,
+				strict:      in.Op == bytecode.OpLAMBDA,
 			}})
 		case bytecode.OpBLKPUSH:
 			a := int(in.Operands[0])
@@ -231,7 +412,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			n := int(in.Operands[1])
 			args := make([]Value, n)
 			copy(args, regs[a+1:a+1+n])
-			result, err := s.callBlock(ctx, regs[a], args)
+			result, err := s.callBlock(ctx, regs[a], args, Nil)
 			if err != nil {
 				return Nil, err
 			}
@@ -247,29 +428,94 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSENDB {
 				recv = regs[in.Operands[0]]
 			}
-			argInfo := in.Operands[2]
-			if argInfo>>4 != 0 {
-				return Nil, fmt.Errorf("mrbvm: keyword arguments are not supported yet")
+			args, kw, block, err := sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], true)
+			if err != nil {
+				return Nil, err
 			}
-			n := int(argInfo & 0x0f)
-			if n == 15 {
-				return Nil, fmt.Errorf("mrbvm: packed argument arrays are not supported yet")
-			}
-			args := make([]Value, n)
-			copy(args, regs[in.Operands[0]+1:in.Operands[0]+1+uint32(n)])
-			block := regs[in.Operands[0]+1+uint32(n)]
-			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, block)
+			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			if err != nil {
 				return Nil, err
 			}
 			regs[in.Operands[0]] = result
+
+		case bytecode.OpARGARY:
+			a := int(in.Operands[0])
+			spec := in.Operands[1]
+			m1 := int((spec >> 11) & 0x3f)
+			hasRest := (spec>>10)&1 != 0
+			m2 := int((spec >> 5) & 0x1f)
+			hasKeyword := (spec>>4)&1 != 0
+			level := int(spec & 0x0f)
+			env := frameEnv
+			for i := 0; i < level; i++ {
+				if env == nil {
+					return Nil, fmt.Errorf("mrbvm: broken ARGARY environment")
+				}
+				env = env.parent
+			}
+			if env == nil {
+				return Nil, fmt.Errorf("mrbvm: broken ARGARY environment")
+			}
+			source := env.regs
+			values := make([]Value, 0, m1+m2)
+			for i := 0; i < m1; i++ {
+				values = append(values, source[1+i])
+			}
+			if hasRest {
+				if rest, ok := source[1+m1].obj.data.(*arrayData); ok {
+					values = append(values, rest.values...)
+				}
+			}
+			base := 1 + m1
+			if hasRest {
+				base++
+			}
+			for i := 0; i < m2; i++ {
+				values = append(values, source[base+i])
+			}
+			regs[a] = ArrayValue(values)
+			keywordIndex := base + m2
+			if keywordIndex < len(source) {
+				regs[a+1] = source[keywordIndex]
+			}
+			if hasKeyword && keywordIndex+1 < len(source) {
+				regs[a+2] = source[keywordIndex+1]
+			}
+
+		case bytecode.OpSUPER:
+			a := int(in.Operands[0])
+			argInfo := in.Operands[1]
+			if owner == nil {
+				return Nil, fmt.Errorf("mrbvm: super outside a method")
+			}
+			var m *method
+			var ok bool
+			if _, isClassMethod := owner.classMethods[mid]; isClassMethod {
+				if owner.super != nil {
+					m, ok = owner.super.lookupClassMethod(mid)
+				}
+			} else if owner.super != nil {
+				m, ok = owner.super.lookup(mid)
+			}
+			if !ok {
+				return Nil, fmt.Errorf("mrbvm: no superclass method %q", mid)
+			}
+			args, kw, block, err := sendArguments(irep, regs, a, argInfo, true)
+			if err != nil {
+				return Nil, err
+			}
+			result, err := s.invoke(ctx, m, self, args, kw, block)
+			if err != nil {
+				return Nil, err
+			}
+			regs[a] = result
 
 		case bytecode.OpSEND0, bytecode.OpSSEND0:
 			recv := self
 			if in.Op == bytecode.OpSEND0 {
 				recv = regs[in.Operands[0]]
 			}
-			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], nil, Nil)
+			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], nil, Nil, Nil)
 			if err != nil {
 				return Nil, err
 			}
@@ -280,17 +526,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSEND {
 				recv = regs[in.Operands[0]]
 			}
-			argInfo := in.Operands[2]
-			if argInfo>>4 != 0 {
-				return Nil, fmt.Errorf("mrbvm: keyword arguments are not supported yet")
+			args, kw, block, err := sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], false)
+			if err != nil {
+				return Nil, err
 			}
-			n := int(argInfo & 0x0f)
-			if n == 15 {
-				return Nil, fmt.Errorf("mrbvm: packed argument arrays are not supported yet")
-			}
-			args := make([]Value, n)
-			copy(args, regs[in.Operands[0]+1:in.Operands[0]+1+uint32(n)])
-			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, Nil)
+			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			if err != nil {
 				return Nil, err
 			}
@@ -403,9 +643,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 		case bytecode.OpARYCAT:
 			a := int(in.Operands[0])
+			if regs[a].IsNil() {
+				regs[a] = ArrayValue(nil)
+			}
 			dst, ok := regs[a].obj.data.(*arrayData)
 			if !ok {
 				return Nil, fmt.Errorf("mrbvm: ARYCAT receiver is not an array")
+			}
+			if regs[a+1].IsNil() {
+				break
 			}
 			src, ok := regs[a+1].obj.data.(*arrayData)
 			if !ok {
@@ -520,6 +766,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				}
 			}
 
+		case bytecode.OpSETIDX:
+			a := int(in.Operands[0])
+			if _, err := s.setIndex(ctx, regs[a], regs[a+1], regs[a+2]); err != nil {
+				return Nil, err
+			}
+
 		case bytecode.OpGETIDX0:
 			a := int(in.Operands[0])
 			b := int(in.Operands[1])
@@ -550,7 +802,65 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	return Nil, nil
 }
 
-func (s *State) call(ctx context.Context, recv Value, name string, args []Value, block Value) (Value, error) {
+func lookupClassVar(class *Class, name string) Value {
+	for current := class; current != nil; current = current.super {
+		if value, ok := current.classVars[name]; ok {
+			return value
+		}
+	}
+	return Nil
+}
+
+func (s *State) lookupConstant(class *Class, name string) Value {
+	for current := class; current != nil; current = current.super {
+		if value, ok := current.constants[name]; ok {
+			return value
+		}
+	}
+	return Nil
+}
+
+func sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, hasBlock bool) ([]Value, Value, Value, error) {
+	n := int(argInfo & 0x0f)
+	k := int((argInfo >> 4) & 0x0f)
+	var args []Value
+	positionalRegs := n
+	if n == 15 {
+		positionalRegs = 1
+		array := regs[a+1]
+		data, ok := array.obj.data.(*arrayData)
+		if !ok {
+			return nil, Nil, Nil, fmt.Errorf("mrbvm: packed arguments are not an array")
+		}
+		args = append(args, data.values...)
+	} else {
+		args = make([]Value, n)
+		copy(args, regs[a+1:a+1+n])
+	}
+	kwRegs := 0
+	kw := Nil
+	if k == 15 {
+		kwRegs = 1
+		kw = regs[a+1+positionalRegs]
+	} else if k > 0 {
+		kwRegs = 2 * k
+		entries := make([]hashEntry, k)
+		for i := 0; i < k; i++ {
+			entries[i] = hashEntry{
+				key:   regs[a+1+positionalRegs+2*i],
+				value: regs[a+1+positionalRegs+2*i+1],
+			}
+		}
+		kw = HashValue(entries)
+	}
+	block := Nil
+	if hasBlock {
+		block = regs[a+1+positionalRegs+kwRegs]
+	}
+	return args, kw, block, nil
+}
+
+func (s *State) call(ctx context.Context, recv Value, name string, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) == 0 {
 		switch name {
 		case "!":
@@ -564,9 +874,14 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 			}
 		}
 	}
+	if class, ok := s.asClass(recv); ok {
+		if m, ok := class.lookupClassMethod(name); ok {
+			return s.invoke(ctx, m, recv, args, kw, block)
+		}
+	}
 	if name == "===" && len(args) == 1 {
 		if m, ok := s.classOf(recv).lookup(name); ok {
-			return s.invoke(ctx, m, recv, args, block)
+			return s.invoke(ctx, m, recv, args, kw, block)
 		}
 		return BoolValue(valuesEqual(recv, args[0])), nil
 	}
@@ -577,14 +892,14 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 	if !ok {
 		return Nil, fmt.Errorf("undefined method %q for %s", name, recv.Inspect())
 	}
-	return s.invoke(ctx, m, recv, args, block)
+	return s.invoke(ctx, m, recv, args, kw, block)
 }
 
-func (s *State) invoke(ctx context.Context, m *method, recv Value, args []Value, block Value) (Value, error) {
+func (s *State) invoke(ctx context.Context, m *method, recv Value, args []Value, kw Value, block Value) (Value, error) {
 	if m.native != nil {
-		return m.native(ctx, recv, args, block)
+		return m.native(ctx, recv, args, kw, block)
 	}
-	return s.executeFrame(ctx, m.irep, recv, m.owner, args, block, nil)
+	return s.executeFrame(ctx, m.irep, recv, m.owner, args, kw, block, nil, m.name, m.owner, true)
 }
 
 func binaryCall(recv Value, name string, args []Value) (Value, bool) {

@@ -20,13 +20,21 @@ compiler and the reference implementation is always C mruby 4.0.0.
   `ADD`, `ADDI`, `ADDILV`, `SUB`, `EQ`, `LT`, `LE`, `GT`, `GE`
 - array/hash access and pattern helpers
 
-The following shared conformance cases pass with bytecode from both
+The following 20 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
-`basic_hello`, `blocks`, `case_and_logic`, `collections`, `control_flow`,
-`methods`, `multiple_assignment`, `scalars`.
+`advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
+`blocks`, `case_and_logic`, `classes`, `collections`, `control_flow`,
+`for_blocks`, `for_loops`, `keywords`, `methods`, `modern_syntax`,
+`multiple_assignment`, `operator_assignment`, `parameters`,
+`pattern_matching`, `scalars`, `splat`.
 
-Next: **VM-2** (classes/modules, inheritance, `super`, keyword arguments).
+VM-2 is largely implemented: classes, modules, inheritance, `super`,
+class methods, `class << self`, class variables, keyword arguments, and
+pattern-matching helpers. The remaining conformance failures are centred
+on exceptions, big integers, and a few block/lambda edge cases.
+
+Next: **VM-3** (`raise` / `rescue` / `ensure` and non-local control flow).
 
 Design and plan:
 

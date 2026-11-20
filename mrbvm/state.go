@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Options controls VM construction.
@@ -16,6 +17,7 @@ type Options struct {
 // State is one mruby VM instance. A State is owned by a single goroutine.
 type State struct {
 	ObjectClass  *Class
+	ClassClass   *Class
 	IntegerClass *Class
 	FloatClass   *Class
 	StringClass  *Class
@@ -52,6 +54,7 @@ func New(opts Options) *State {
 		stderr:    stderr,
 	}
 	s.ObjectClass = newClass("Object", nil)
+	s.ClassClass = newClass("Class", s.ObjectClass)
 	s.IntegerClass = newClass("Integer", s.ObjectClass)
 	s.FloatClass = newClass("Float", s.ObjectClass)
 	s.StringClass = newClass("String", s.ObjectClass)
@@ -61,26 +64,151 @@ func New(opts Options) *State {
 	s.RangeClass = newClass("Range", s.ObjectClass)
 	s.ProcClass = newClass("Proc", s.ObjectClass)
 
+	for _, class := range []*Class{
+		s.ObjectClass, s.ClassClass, s.IntegerClass, s.FloatClass,
+		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
+		s.RangeClass, s.ProcClass,
+	} {
+		s.ensureClassObject(class)
+	}
+
+	s.ClassClass.define("new", s.classNewMethod)
+	s.ClassClass.define("superclass", s.classSuperclassMethod)
+	s.ClassClass.define("name", s.classNameMethod)
+	s.ClassClass.define("include", s.classIncludeMethod)
+	s.ClassClass.define("===", s.classCaseEqMethod)
+	s.ObjectClass.define("class", s.objectClassMethod)
+	s.ObjectClass.define("initialize", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return Nil, nil
+	})
+
+	for name, class := range map[string]*Class{
+		"Object": s.ObjectClass, "Class": s.ClassClass, "Integer": s.IntegerClass,
+		"Float": s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
+		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
+		"Proc": s.ProcClass,
+	} {
+		value := s.classValue(class)
+		s.constants[name] = value
+		s.ObjectClass.constants[name] = value
+	}
+
 	s.TopSelf = ObjectValue(&Object{class: s.ObjectClass})
 	s.ObjectClass.define("puts", s.kernelPuts)
 	s.ObjectClass.define("p", s.kernelP)
 
 	s.ArrayClass.define("[]", s.arrayIndexMethod)
 	s.ArrayClass.define("length", s.arrayLengthMethod)
-	s.ArrayClass.define("to_a", func(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+	s.ArrayClass.define("size", s.arrayLengthMethod)
+	s.ArrayClass.define("to_a", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return self, nil
 	})
 	s.HashClass.define("[]", s.hashIndexMethod)
 	s.HashClass.define("length", s.hashLengthMethod)
+	s.HashClass.define("size", s.hashLengthMethod)
 	s.HashClass.define("deconstruct_keys", s.hashDeconstructKeysMethod)
 	s.HashClass.define("__pat_values", s.hashPatValuesMethod)
 	s.HashClass.define("__except", s.hashExceptMethod)
 	s.RangeClass.define("to_a", s.rangeToAMethod)
 	s.RangeClass.define("===", s.rangeCaseEqMethod)
+	s.RangeClass.define("include?", s.rangeCaseEqMethod)
+	s.RangeClass.define("each", s.rangeEachMethod)
 	s.StringClass.define("length", s.stringLengthMethod)
+	s.StringClass.define("upcase", s.stringUpcaseMethod)
+	s.StringClass.define("downcase", s.stringDowncaseMethod)
 	s.ArrayClass.define("each", s.arrayEachMethod)
+	s.ArrayClass.define("deconstruct", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return self, nil
+	})
+	s.ArrayClass.define("map", s.arrayMapMethod)
+	s.ArrayClass.define("<<", s.arrayPushMethod)
+	s.ArrayClass.define("push", s.arrayPushMethod)
+	s.ArrayClass.define("[]=", s.arraySetMethod)
+	s.HashClass.define("[]=", s.hashSetMethod)
 	s.ProcClass.define("call", s.procCallMethod)
+	s.ObjectClass.define("respond_to?", s.objectRespondToMethod)
+	s.ObjectClass.define("proc", s.kernelProcMethod)
+	s.ObjectClass.define("lambda", s.kernelProcMethod)
 	return s
+}
+
+func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: Class#new receiver is not a class")
+	}
+	instance := ObjectValue(&Object{class: class})
+	if m, ok := class.lookup("initialize"); ok {
+		if _, err := s.invoke(ctx, m, instance, args, kw, block); err != nil {
+			return Nil, err
+		}
+	}
+	return instance, nil
+}
+
+func (s *State) classSuperclassMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: Class#superclass receiver is not a class")
+	}
+	if class.super == nil {
+		return Nil, nil
+	}
+	return s.classValue(class.super), nil
+}
+
+func (s *State) classNameMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: Class#name receiver is not a class")
+	}
+	return StringValue(class.name), nil
+}
+
+func (s *State) classCaseEqMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok || len(args) != 1 {
+		return False, nil
+	}
+	return BoolValue(s.isA(args[0], class)), nil
+}
+
+func (s *State) isA(value Value, class *Class) bool {
+	for current := s.classOf(value); current != nil; current = current.super {
+		if current == class {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) classIncludeMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: Class#include receiver is not a class")
+	}
+	if len(args) != 1 {
+		return Nil, fmt.Errorf("mrbvm: include expects one module")
+	}
+	module, ok := s.asClass(args[0])
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: include expects a module")
+	}
+	for name, m := range module.methods {
+		if _, exists := class.methods[name]; !exists {
+			class.methods[name] = m
+		}
+	}
+	for name, value := range module.constants {
+		if _, exists := class.constants[name]; !exists {
+			class.constants[name] = value
+		}
+	}
+	return self, nil
+}
+
+func (s *State) objectClassMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	return s.classValue(s.classOf(self)), nil
 }
 
 func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
@@ -123,21 +251,21 @@ func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
 	return Nil, fmt.Errorf("mrbvm: %s is not indexable", recv.Inspect())
 }
 
-func (s *State) arrayIndexMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) arrayIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) != 1 {
 		return Nil, fmt.Errorf("mrbvm: Array#[] expects one argument")
 	}
 	return s.index(ctx, self, args[0])
 }
 
-func (s *State) hashIndexMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) hashIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) != 1 {
 		return Nil, fmt.Errorf("mrbvm: Hash#[] expects one argument")
 	}
 	return s.index(ctx, self, args[0])
 }
 
-func (s *State) arrayLengthMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) arrayLengthMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if self.obj == nil {
 		return IntValue(0), nil
 	}
@@ -148,7 +276,7 @@ func (s *State) arrayLengthMethod(ctx context.Context, self Value, args []Value,
 	return IntValue(int64(len(data.values))), nil
 }
 
-func (s *State) hashLengthMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) hashLengthMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if self.obj == nil {
 		return IntValue(0), nil
 	}
@@ -159,8 +287,43 @@ func (s *State) hashLengthMethod(ctx context.Context, self Value, args []Value, 
 	return IntValue(int64(len(data.entries))), nil
 }
 
-func (s *State) stringLengthMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) stringLengthMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	return IntValue(int64(len([]rune(self.String())))), nil
+}
+
+func hashHasKey(hash Value, name string) bool {
+	if hash.Kind() != KindObject || hash.obj == nil {
+		return false
+	}
+	data, ok := hash.obj.data.(*hashData)
+	if !ok {
+		return false
+	}
+	key := SymbolValue(name)
+	for _, entry := range data.entries {
+		if valuesEqual(entry.key, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func hashDeleteKey(hash Value, name string) (Value, bool) {
+	if hash.Kind() != KindObject || hash.obj == nil {
+		return Nil, false
+	}
+	data, ok := hash.obj.data.(*hashData)
+	if !ok {
+		return Nil, false
+	}
+	key := SymbolValue(name)
+	for i, entry := range data.entries {
+		if valuesEqual(entry.key, key) {
+			data.entries = append(data.entries[:i], data.entries[i+1:]...)
+			return entry.value, true
+		}
+	}
+	return Nil, false
 }
 
 func (s *State) hashEntries(self Value) ([]hashEntry, bool) {
@@ -174,7 +337,7 @@ func (s *State) hashEntries(self Value) ([]hashEntry, bool) {
 	return data.entries, true
 }
 
-func (s *State) hashDeconstructKeysMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) hashDeconstructKeysMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	entries, ok := s.hashEntries(self)
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a hash")
@@ -204,7 +367,7 @@ func (s *State) hashDeconstructKeysMethod(ctx context.Context, self Value, args 
 	return HashValue(result), nil
 }
 
-func (s *State) hashPatValuesMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) hashPatValuesMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	entries, ok := s.hashEntries(self)
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a hash")
@@ -233,7 +396,7 @@ func (s *State) hashPatValuesMethod(ctx context.Context, self Value, args []Valu
 	return ArrayValue(values), nil
 }
 
-func (s *State) hashExceptMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) hashExceptMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	entries, ok := s.hashEntries(self)
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a hash")
@@ -261,7 +424,7 @@ func (s *State) hashExceptMethod(ctx context.Context, self Value, args []Value, 
 	return HashValue(result), nil
 }
 
-func (s *State) rangeCaseEqMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) rangeCaseEqMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) != 1 || self.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: Range#=== expects one argument")
 	}
@@ -269,7 +432,12 @@ func (s *State) rangeCaseEqMethod(ctx context.Context, self Value, args []Value,
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a range")
 	}
-	if low, ok := binaryValue(args[0], ">=", data.low); ok && low.IsTruthy() {
+	if !data.low.IsNil() {
+		if low, ok := binaryValue(args[0], ">=", data.low); !ok || !low.IsTruthy() {
+			return False, nil
+		}
+	}
+	if !data.high.IsNil() {
 		op := "<="
 		if data.exclusive {
 			op = "<"
@@ -277,11 +445,20 @@ func (s *State) rangeCaseEqMethod(ctx context.Context, self Value, args []Value,
 		if high, ok := binaryValue(args[0], op, data.high); ok {
 			return high, nil
 		}
+		return False, nil
 	}
-	return False, nil
+	return True, nil
 }
 
-func (s *State) rangeToAMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) stringUpcaseMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	return StringValue(strings.ToUpper(self.String())), nil
+}
+
+func (s *State) stringDowncaseMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	return StringValue(strings.ToLower(self.String())), nil
+}
+
+func (s *State) rangeToAMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if self.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: not a range")
 	}
@@ -322,7 +499,7 @@ func (s *State) Execute(ctx context.Context, irep *Irep) (Value, error) {
 	if irep == nil {
 		return Nil, fmt.Errorf("mrbvm: nil irep")
 	}
-	return s.executeFrame(ctx, irep, s.TopSelf, s.ObjectClass, nil, Nil, nil)
+	return s.executeFrame(ctx, irep, s.TopSelf, s.ObjectClass, nil, Nil, Nil, nil, "", nil, false)
 }
 
 func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, error) {
@@ -358,7 +535,7 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 	return Nil, fmt.Errorf("mrbvm: %s does not support index assignment", recv.Inspect())
 }
 
-func (s *State) kernelP(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) kernelP(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	for _, arg := range args {
 		fmt.Fprintln(s.stdout, arg.Inspect())
 	}
@@ -372,7 +549,103 @@ func (s *State) kernelP(ctx context.Context, self Value, args []Value, block Val
 	}
 }
 
-func (s *State) arrayEachMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) rangeEachMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.obj == nil {
+		return Nil, fmt.Errorf("mrbvm: not a range")
+	}
+	data, ok := self.obj.data.(*rangeData)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: not a range")
+	}
+	if data.low.Kind() != KindInt || data.high.Kind() != KindInt {
+		return Nil, fmt.Errorf("mrbvm: only integer ranges are supported")
+	}
+	for i := data.low.Int(); i <= data.high.Int(); i++ {
+		if data.exclusive && i == data.high.Int() {
+			break
+		}
+		if _, err := s.callBlock(ctx, block, []Value{IntValue(i)}, Nil); err != nil {
+			if br, ok := err.(*breakError); ok {
+				return br.value, nil
+			}
+			return Nil, err
+		}
+	}
+	return self, nil
+}
+
+func (s *State) arrayPushMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.obj == nil {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	data, ok := self.obj.data.(*arrayData)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	data.values = append(data.values, args...)
+	return self, nil
+}
+
+func (s *State) arraySetMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 2 {
+		return Nil, fmt.Errorf("mrbvm: Array#[]= expects two arguments")
+	}
+	return s.setIndex(ctx, self, args[0], args[1])
+}
+
+func (s *State) hashSetMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 2 {
+		return Nil, fmt.Errorf("mrbvm: Hash#[]= expects two arguments")
+	}
+	return s.setIndex(ctx, self, args[0], args[1])
+}
+
+func (s *State) objectRespondToMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return False, nil
+	}
+	name := args[0].String()
+	if class, ok := s.asClass(self); ok {
+		if _, ok := class.lookupClassMethod(name); ok {
+			return True, nil
+		}
+	}
+	if _, ok := s.classOf(self).lookup(name); ok {
+		return True, nil
+	}
+	return False, nil
+}
+
+func (s *State) kernelProcMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return Nil, fmt.Errorf("mrbvm: tried to create Proc without a block")
+	}
+	return block, nil
+}
+
+func (s *State) arrayMapMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.obj == nil {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	data, ok := self.obj.data.(*arrayData)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	values := make([]Value, 0, len(data.values))
+	for _, value := range data.values {
+		result, err := s.callBlock(ctx, block, []Value{value}, Nil)
+		if err != nil {
+			if br, ok := err.(*breakError); ok {
+				return br.value, nil
+			}
+			return Nil, err
+		}
+		values = append(values, result)
+	}
+	return ArrayValue(values), nil
+}
+
+func (s *State) arrayEachMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if self.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: not an array")
 	}
@@ -381,7 +654,7 @@ func (s *State) arrayEachMethod(ctx context.Context, self Value, args []Value, b
 		return Nil, fmt.Errorf("mrbvm: not an array")
 	}
 	for _, value := range data.values {
-		_, err := s.callBlock(ctx, block, []Value{value})
+		_, err := s.callBlock(ctx, block, []Value{value}, Nil)
 		if err != nil {
 			if br, ok := err.(*breakError); ok {
 				return br.value, nil
@@ -392,11 +665,11 @@ func (s *State) arrayEachMethod(ctx context.Context, self Value, args []Value, b
 	return self, nil
 }
 
-func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
-	return s.callBlock(ctx, self, args)
+func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	return s.callBlock(ctx, self, args, kw)
 }
 
-func (s *State) callBlock(ctx context.Context, block Value, args []Value) (Value, error) {
+func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Value) (Value, error) {
 	if block.Kind() != KindObject || block.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: no block given")
 	}
@@ -404,10 +677,10 @@ func (s *State) callBlock(ctx context.Context, block Value, args []Value) (Value
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: value is not a block")
 	}
-	return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, Nil, data.env)
+	return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, Nil, data.env, "", nil, data.strict)
 }
 
-func (s *State) kernelPuts(ctx context.Context, self Value, args []Value, block Value) (Value, error) {
+func (s *State) kernelPuts(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	for _, arg := range args {
 		fmt.Fprintln(s.stdout, arg.ToS())
 	}

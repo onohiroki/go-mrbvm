@@ -48,13 +48,20 @@ func (o *Object) setIvar(name string, value Value) {
 
 // Class is a minimal mruby class or module.
 type Class struct {
-	name    string
-	super   *Class
-	methods map[string]*method
+	name         string
+	super        *Class
+	methods      map[string]*method
+	classMethods map[string]*method
+	constants    map[string]Value
+	classVars    map[string]Value
+	object       *Object
+	singletonOf  *Class
+	singleton    *Class
 }
 
 type method struct {
 	owner  *Class
+	name   string
 	native NativeFunc
 	irep   *Irep
 }
@@ -63,7 +70,7 @@ type method struct {
 //
 // The host API will grow a more ergonomic wrapper later; this is the minimal
 // internal calling convention used by the VM.
-type NativeFunc func(ctx context.Context, self Value, args []Value, block Value) (Value, error)
+type NativeFunc func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error)
 
 type environment struct {
 	parent *environment
@@ -76,6 +83,7 @@ type blockData struct {
 	env         *environment
 	self        Value
 	targetClass *Class
+	strict      bool
 }
 
 type breakError struct {
@@ -86,9 +94,12 @@ func (e *breakError) Error() string { return "break" }
 
 func newClass(name string, super *Class) *Class {
 	return &Class{
-		name:    name,
-		super:   super,
-		methods: make(map[string]*method),
+		name:         name,
+		super:        super,
+		methods:      make(map[string]*method),
+		classMethods: make(map[string]*method),
+		constants:    make(map[string]Value),
+		classVars:    make(map[string]Value),
 	}
 }
 
@@ -102,11 +113,47 @@ func (c *Class) lookup(name string) (*method, bool) {
 }
 
 func (c *Class) define(name string, fn NativeFunc) {
-	c.methods[name] = &method{owner: c, native: fn}
+	c.methods[name] = &method{owner: c, name: name, native: fn}
 }
 
 func (c *Class) defineIrep(name string, irep *Irep) {
-	c.methods[name] = &method{owner: c, irep: irep}
+	if c.singletonOf != nil {
+		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, irep: irep}
+		return
+	}
+	c.methods[name] = &method{owner: c, name: name, irep: irep}
+}
+
+func (c *Class) defineClassIrep(name string, irep *Irep) {
+	c.classMethods[name] = &method{owner: c, name: name, irep: irep}
+}
+
+func (c *Class) lookupClassMethod(name string) (*method, bool) {
+	for current := c; current != nil; current = current.super {
+		if m, ok := current.classMethods[name]; ok {
+			return m, true
+		}
+	}
+	return nil, false
+}
+
+func (s *State) ensureClassObject(c *Class) *Object {
+	if c.object == nil {
+		c.object = &Object{class: s.ClassClass, data: c}
+	}
+	return c.object
+}
+
+func (s *State) classValue(c *Class) Value {
+	return ObjectValue(s.ensureClassObject(c))
+}
+
+func (s *State) asClass(v Value) (*Class, bool) {
+	if v.Kind() == KindObject && v.obj != nil {
+		c, ok := v.obj.data.(*Class)
+		return c, ok
+	}
+	return nil, false
 }
 
 func (s *State) classOf(v Value) *Class {
@@ -118,6 +165,8 @@ func (s *State) classOf(v Value) *Class {
 			return s.HashClass
 		case *rangeData:
 			return s.RangeClass
+		case *Class:
+			return s.ClassClass
 		case *blockData:
 			return s.ProcClass
 		}

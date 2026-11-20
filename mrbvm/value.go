@@ -147,6 +147,9 @@ func (v Value) Inspect() string {
 		return strconv.Quote(v.String())
 	case KindObject:
 		if v.obj != nil {
+			if c, ok := v.obj.data.(*Class); ok {
+				return c.name
+			}
 			switch data := v.obj.data.(type) {
 			case *arrayData:
 				parts := make([]string, len(data.values))

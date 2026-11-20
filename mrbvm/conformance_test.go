@@ -17,14 +17,26 @@ import (
 // The list grows as the VM implements more of mruby.
 func TestConformance(t *testing.T) {
 	cases := []string{
+		"advanced_classes",
+		"alias_undef",
+		"assignment_targets",
 		"basic_hello",
 		"blocks",
 		"case_and_logic",
+		"classes",
 		"collections",
 		"control_flow",
+		"for_blocks",
+		"for_loops",
+		"keywords",
 		"methods",
+		"modern_syntax",
 		"multiple_assignment",
+		"operator_assignment",
+		"parameters",
+		"pattern_matching",
 		"scalars",
+		"splat",
 	}
 
 	root := filepath.Join("..", "testdata", "conformance")

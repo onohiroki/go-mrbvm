@@ -304,14 +304,14 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 
 ## 15. 直近の作業
 
-1. VM-2 の実装
-   - `CLASS` / `MODULE` / `EXEC` / `TCLASS` / `SCLASS`
-   - 継承、`super`、`ARGARY`
-   - キーワード引数、`**rest`、`K_*` opcode
-   - インスタンス変数・クラス変数・定数のクラススコープ
-   - `DEF` / `SDEF` / `define_method`
+1. VM-3 の実装
+   - `raise` / `rescue` / `ensure`
+   - catch handler、`EXCEPT` / `RESCUE` / `RAISEIF`
+   - `return` / `break` / `next` の ensure 巻き戻し
+   - `retry` / `redo`
+   - 例外オブジェクトと `message` / `backtrace`
 2. `cmd/vmcompat` の整備
-3. conformance ケースの拡大
+3. bigint と lambda の非局所制御
 
 ## 16. 現在の状態
 
@@ -326,7 +326,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - `Kernel#puts`
   - `go-mrbc` と本家 `mrbc` の `puts "hello"` が動作
   - `cmd/gomruby` から `.mrb` / `.rb` を実行可能
-- **VM-1 実装中（主要部分は動作）**
+- **VM-1 実装済み（主要部分）**
   - ローカル変数、配列、ハッシュ、範囲、文字列、シンボル
   - メソッド、`ENTER` の引数束縛、ブロック、`yield`、upvar
   - `BLOCK` / `BLKPUSH` / `BLKCALL`、`Proc#call`
@@ -335,4 +335,17 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - 次の conformance が両コンパイラで成功:
     `basic_hello`, `blocks`, `case_and_logic`, `collections`,
     `control_flow`, `methods`, `multiple_assignment`, `scalars`
-- 次は VM-2（クラス/モジュール、継承、`super`、キーワード引数）
+- **VM-2 実装済み（主要部分）**
+  - `CLASS` / `MODULE` / `EXEC` / `SCLASS` / `TCLASS`
+  - クラス、モジュール、継承、`super`、`ARGARY`
+  - クラスメソッド、`class << self`、クラス変数
+  - キーワード引数、`**rest`、`KEY_P` / `KARG` / `KEYEND`
+  - コアクラスの定数登録、`Class#===`、パターンヘルパー
+  - 次の 20 conformance が両コンパイラで成功:
+    `advanced_classes`, `alias_undef`, `assignment_targets`,
+    `basic_hello`, `blocks`, `case_and_logic`, `classes`,
+    `collections`, `control_flow`, `for_blocks`, `for_loops`,
+    `keywords`, `methods`, `modern_syntax`, `multiple_assignment`,
+    `operator_assignment`, `parameters`, `pattern_matching`,
+    `scalars`, `splat`
+- 次は VM-3（例外と非局所制御）
