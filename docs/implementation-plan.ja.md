@@ -381,6 +381,10 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - 最小 `Enumerator` を追加（`next` / `peek` / `rewind` / `size` /
     `with_index`）。ブロックなしの `each` / `map` / `times` などが
     Enumerator を返す
+  - ネイティブ `Comparable` モジュールを追加し、ユーザー定義クラスの
+    `<` / `<=` / `==` / `>` / `>=` / `between?` / `clamp` を実装
+  - `Symbol#to_proc`、`&:symbol` ブロック、`attr_reader` の ivar 参照を修正
   - `core_library` / `core_library_extended` / `enumerable` /
-    `enumerator` conformance を追加し、33 ケースが両コンパイラで成功
+    `enumerator` / `comparable` conformance を追加し、34 ケースが
+    両コンパイラで成功
   - 次は mrblib のロードと `Enumerator`

@@ -34,13 +34,16 @@ compiler and the reference implementation is always C mruby 4.0.0.
 - a native `Enumerable` module that works with user-defined `each`
 - a minimal eager `Enumerator` for blockless `each` / `map` / `times`
   and friends, including `next`, `peek`, `rewind`, `size`, and `with_index`
+- a native `Comparable` module, `Symbol#to_proc`, and working
+  `attr_reader` / `attr_writer` / `attr_accessor`
 - `cmd/vmcompat` for differential runs against the reference mruby
 
-The following 33 shared conformance cases pass with bytecode from both
+The following 34 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
 `advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
-`blocks`, `case_and_logic`, `classes`, `collections`, `control_flow`,
+`blocks`, `case_and_logic`, `classes`, `collections`, `comparable`,
+`control_flow`,
 `core_library`, `core_library_extended`, `destructuring`, `enumerable`,
 `enumerator`, `ensure_control`, `exceptions`, `for_blocks`,
 `for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,

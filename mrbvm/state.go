@@ -29,6 +29,7 @@ type State struct {
 	ProcClass       *Class
 	EnumerableClass *Class
 	EnumeratorClass *Class
+	ComparableClass *Class
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -84,6 +85,7 @@ func New(opts Options) *State {
 	s.ProcClass = newClass("Proc", s.ObjectClass)
 	s.EnumerableClass = newClass("Enumerable", nil)
 	s.EnumeratorClass = newClass("Enumerator", s.ObjectClass)
+	s.ComparableClass = newClass("Comparable", nil)
 	s.ExceptionClass = newClass("Exception", s.ObjectClass)
 	s.StandardErrorClass = newClass("StandardError", s.ExceptionClass)
 	s.RuntimeErrorClass = newClass("RuntimeError", s.StandardErrorClass)
@@ -102,6 +104,7 @@ func New(opts Options) *State {
 		s.ObjectClass, s.ClassClass, s.NumericClass, s.IntegerClass, s.FloatClass,
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
 		s.RangeClass, s.ProcClass, s.EnumerableClass, s.EnumeratorClass,
+		s.ComparableClass,
 		s.ExceptionClass, s.StandardErrorClass, s.RuntimeErrorClass,
 		s.ArgumentErrorClass, s.TypeErrorClass, s.NameErrorClass,
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
@@ -133,6 +136,7 @@ func New(opts Options) *State {
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
 		"Proc": s.ProcClass, "Enumerable": s.EnumerableClass,
 		"Enumerator":    s.EnumeratorClass,
+		"Comparable":    s.ComparableClass,
 		"Exception":     s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
 		"ArgumentError": s.ArgumentErrorClass, "TypeError": s.TypeErrorClass,
@@ -201,6 +205,9 @@ func New(opts Options) *State {
 
 	s.installEnumerableLibrary()
 	s.installEnumeratorLibrary()
+	s.installComparableLibrary()
+	includeModule(s.NumericClass, s.ComparableClass)
+	includeModule(s.StringClass, s.ComparableClass)
 	includeModule(s.EnumeratorClass, s.EnumerableClass)
 	for _, class := range []*Class{s.ArrayClass, s.HashClass, s.RangeClass} {
 		includeModule(class, s.EnumerableClass)
@@ -230,11 +237,12 @@ func (s *State) classAttrReaderMethod(ctx context.Context, self Value, args []Va
 	}
 	for _, arg := range args {
 		name := arg.String()
+		ivar := "@" + strings.TrimPrefix(name, "@")
 		class.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 			if self.obj == nil {
 				return Nil, nil
 			}
-			return self.obj.ivar(name), nil
+			return self.obj.ivar(ivar), nil
 		})
 	}
 	return Nil, nil
@@ -246,11 +254,12 @@ func (s *State) classAttrWriterMethod(ctx context.Context, self Value, args []Va
 		return Nil, fmt.Errorf("mrbvm: attr_writer receiver is not a class")
 	}
 	for _, arg := range args {
-		name := arg.String() + "="
-		ivar := strings.TrimSuffix(name, "=")
-		class.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		name := arg.String()
+		ivar := "@" + strings.TrimPrefix(name, "@")
+		setter := name + "="
+		class.define(setter, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 			if len(args) != 1 {
-				return Nil, fmt.Errorf("mrbvm: %s expects one argument", name)
+				return Nil, fmt.Errorf("mrbvm: %s expects one argument", setter)
 			}
 			if self.obj != nil {
 				self.obj.setIvar(ivar, args[0])
@@ -1086,6 +1095,13 @@ func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw
 }
 
 func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Value) (Value, error) {
+	if block.Kind() == KindSymbol {
+		proc, err := s.call(ctx, block, "to_proc", nil, Nil, Nil)
+		if err != nil {
+			return Nil, err
+		}
+		return s.callBlock(ctx, proc, args, kw)
+	}
 	if block.Kind() != KindObject || block.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: no block given")
 	}

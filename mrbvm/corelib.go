@@ -315,6 +315,24 @@ func (s *State) installObjectLibrary() {
 	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return BoolValue(len(args) == 1 && valuesEqual(self, args[0])), nil
 	})
+	class.define("==", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return False, nil
+		}
+		if self.Kind() == KindObject && args[0].Kind() == KindObject {
+			return BoolValue(self.obj == args[0].obj), nil
+		}
+		return BoolValue(valuesEqual(self, args[0])), nil
+	})
+	class.define("!=", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return True, nil
+		}
+		if self.Kind() == KindObject && args[0].Kind() == KindObject {
+			return BoolValue(self.obj != args[0].obj), nil
+		}
+		return BoolValue(!valuesEqual(self, args[0])), nil
+	})
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.ToS()), nil
 	})
@@ -324,6 +342,15 @@ func (s *State) installObjectLibrary() {
 	class.define("send", s.objectSendMethod)
 	class.define("__send__", s.objectSendMethod)
 	class.define("tap", s.objectTapMethod)
+	s.SymbolClass.define("to_proc", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		name := self.String()
+		return nativeBlockValue(func(ctx context.Context, args []Value) (Value, error) {
+			if len(args) == 0 {
+				return Nil, nil
+			}
+			return s.call(ctx, args[0], name, args[1:], Nil, Nil)
+		}), nil
+	})
 }
 
 func (s *State) installRangeLibrary() {

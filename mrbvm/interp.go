@@ -1318,7 +1318,10 @@ func binaryCall(recv Value, name string, args []Value) (Value, bool) {
 func binaryValue(left Value, name string, right Value) (Value, bool) {
 	switch name {
 	case "==":
-		return BoolValue(valuesEqual(left, right)), true
+		if builtinComparable(left) && builtinComparable(right) {
+			return BoolValue(valuesEqual(left, right)), true
+		}
+		return Nil, false
 	case "<", "<=", ">", ">=":
 		var cmp int
 		if li, ri, ok := bothBigInts(left, right); ok {
@@ -1451,6 +1454,20 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		}
 	}
 	return Nil, false
+}
+
+func builtinComparable(v Value) bool {
+	if v.Kind() != KindObject {
+		return true
+	}
+	if v.obj == nil {
+		return true
+	}
+	switch v.obj.data.(type) {
+	case *arrayData, *hashData, *rangeData, *stringData:
+		return true
+	}
+	return false
 }
 
 func integerBig(v Value) (*big.Int, bool) {

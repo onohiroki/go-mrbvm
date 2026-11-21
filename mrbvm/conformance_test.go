@@ -25,6 +25,7 @@ func TestConformance(t *testing.T) {
 		"case_and_logic",
 		"classes",
 		"collections",
+		"comparable",
 		"control_flow",
 		"core_library",
 		"core_library_extended",
