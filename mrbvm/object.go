@@ -140,6 +140,13 @@ type signalData struct {
 	signal *unwindSignal
 }
 
+type enumeratorData struct {
+	collect func(ctx context.Context, yield func([]Value) error) error
+	items   [][]Value
+	loaded  bool
+	index   int
+}
+
 // nativeBlockData lets Go code act as a Ruby block. Enumerable uses it to
 // pass a collector block to an arbitrary object's each method.
 type nativeBlockData struct {
@@ -249,6 +256,8 @@ func (s *State) classOf(v Value) *Class {
 			return s.ClassClass
 		case *blockData:
 			return s.ProcClass
+		case *enumeratorData:
+			return s.EnumeratorClass
 		}
 		if v.obj.class != nil {
 			return v.obj.class

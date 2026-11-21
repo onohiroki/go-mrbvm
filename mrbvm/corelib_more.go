@@ -286,18 +286,10 @@ func (s *State) arrayEachSliceMethod(ctx context.Context, self Value, args []Val
 	if size <= 0 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "invalid slice size")}
 	}
-	values := arrayValues(self)
 	if block.IsNil() {
-		var result []Value
-		for i := 0; i < len(values); i += size {
-			end := i + size
-			if end > len(values) {
-				end = len(values)
-			}
-			result = append(result, ArrayValue(append([]Value(nil), values[i:end]...)))
-		}
-		return ArrayValue(result), nil
+		return s.toEnum(self, "each_slice", args), nil
 	}
+	values := arrayValues(self)
 	for i := 0; i < len(values); i += size {
 		end := i + size
 		if end > len(values) {
@@ -315,14 +307,10 @@ func (s *State) arrayEachConsMethod(ctx context.Context, self Value, args []Valu
 	if size <= 0 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "invalid size")}
 	}
-	values := arrayValues(self)
 	if block.IsNil() {
-		var result []Value
-		for i := 0; i+size <= len(values); i++ {
-			result = append(result, ArrayValue(append([]Value(nil), values[i:i+size]...)))
-		}
-		return ArrayValue(result), nil
+		return s.toEnum(self, "each_cons", args), nil
 	}
+	values := arrayValues(self)
 	for i := 0; i+size <= len(values); i++ {
 		if _, err := s.callBlock(ctx, block, []Value{ArrayValue(append([]Value(nil), values[i:i+size]...))}, Nil); err != nil {
 			return Nil, err
@@ -572,6 +560,9 @@ func (s *State) arrayTransposeMethod(ctx context.Context, self Value, args []Val
 }
 
 func (s *State) hashMapMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "map", nil), nil
+	}
 	var result []Value
 	for _, entry := range hashEntries(self) {
 		if block.IsNil() {
@@ -588,6 +579,9 @@ func (s *State) hashMapMethod(ctx context.Context, self Value, args []Value, kw 
 }
 
 func (s *State) hashSelectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "select", nil), nil
+	}
 	var result []hashEntry
 	for _, entry := range hashEntries(self) {
 		matched := true
@@ -606,6 +600,9 @@ func (s *State) hashSelectMethod(ctx context.Context, self Value, args []Value, 
 }
 
 func (s *State) hashRejectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "reject", nil), nil
+	}
 	var result []hashEntry
 	for _, entry := range hashEntries(self) {
 		matched := false
@@ -624,10 +621,10 @@ func (s *State) hashRejectMethod(ctx context.Context, self Value, args []Value, 
 }
 
 func (s *State) hashFindMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "find", nil), nil
+	}
 	for _, entry := range hashEntries(self) {
-		if block.IsNil() {
-			return entry.key, nil
-		}
 		match, err := s.callBlock(ctx, block, []Value{entry.key, entry.value}, Nil)
 		if err != nil {
 			return Nil, err
@@ -640,6 +637,9 @@ func (s *State) hashFindMethod(ctx context.Context, self Value, args []Value, kw
 }
 
 func (s *State) hashSortByMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "sort_by", nil), nil
+	}
 	type pair struct {
 		key   Value
 		entry hashEntry
@@ -677,6 +677,9 @@ func (s *State) hashSortByMethod(ctx context.Context, self Value, args []Value, 
 }
 
 func (s *State) hashGroupByMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "group_by", nil), nil
+	}
 	groups := make([]hashEntry, 0)
 	for _, entry := range hashEntries(self) {
 		key := ArrayValue([]Value{entry.key, entry.value})

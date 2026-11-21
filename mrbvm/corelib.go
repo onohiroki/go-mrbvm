@@ -694,7 +694,7 @@ func (s *State) arrayCompactMethod(ctx context.Context, self Value, args []Value
 
 func (s *State) arrayEachIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
+		return s.toEnum(self, "each_index", nil), nil
 	}
 	for i := range arrayValues(self) {
 		if _, err := s.callBlock(ctx, block, []Value{IntValue(int64(i))}, Nil); err != nil {
@@ -732,7 +732,7 @@ func (s *State) arraySliceMethod(ctx context.Context, self Value, args []Value, 
 
 func (s *State) arraySelectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return ArrayValue(nil), nil
+		return s.toEnum(self, "select", nil), nil
 	}
 	var result []Value
 	for _, value := range arrayValues(self) {
@@ -749,7 +749,7 @@ func (s *State) arraySelectMethod(ctx context.Context, self Value, args []Value,
 
 func (s *State) arrayRejectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return ArrayValue(append([]Value(nil), arrayValues(self)...)), nil
+		return s.toEnum(self, "reject", nil), nil
 	}
 	var result []Value
 	for _, value := range arrayValues(self) {
@@ -766,7 +766,7 @@ func (s *State) arrayRejectMethod(ctx context.Context, self Value, args []Value,
 
 func (s *State) arrayFindMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return Nil, nil
+		return s.toEnum(self, "find", nil), nil
 	}
 	for _, value := range arrayValues(self) {
 		match, err := s.callBlock(ctx, block, []Value{value}, Nil)
@@ -797,7 +797,7 @@ func (s *State) arrayIncludeMethod(ctx context.Context, self Value, args []Value
 
 func (s *State) arrayEachWithIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
+		return s.toEnum(self, "each_with_index", nil), nil
 	}
 	for i, value := range arrayValues(self) {
 		if _, err := s.callBlock(ctx, block, []Value{value, IntValue(int64(i))}, Nil); err != nil {
@@ -1003,7 +1003,7 @@ func (s *State) hashValueMethod(ctx context.Context, self Value, args []Value, k
 
 func (s *State) hashEachMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
+		return s.toEnum(self, "each", nil), nil
 	}
 	for _, entry := range hashEntries(self) {
 		if _, err := s.callBlock(ctx, block, []Value{entry.key, entry.value}, Nil); err != nil {
@@ -1015,7 +1015,7 @@ func (s *State) hashEachMethod(ctx context.Context, self Value, args []Value, kw
 
 func (s *State) hashEachKeyMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
+		return s.toEnum(self, "each_key", nil), nil
 	}
 	for _, entry := range hashEntries(self) {
 		if _, err := s.callBlock(ctx, block, []Value{entry.key}, Nil); err != nil {
@@ -1027,7 +1027,7 @@ func (s *State) hashEachKeyMethod(ctx context.Context, self Value, args []Value,
 
 func (s *State) hashEachValueMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
+		return s.toEnum(self, "each_value", nil), nil
 	}
 	for _, entry := range hashEntries(self) {
 		if _, err := s.callBlock(ctx, block, []Value{entry.value}, Nil); err != nil {

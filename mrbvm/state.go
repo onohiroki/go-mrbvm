@@ -28,6 +28,7 @@ type State struct {
 	RangeClass      *Class
 	ProcClass       *Class
 	EnumerableClass *Class
+	EnumeratorClass *Class
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -82,6 +83,7 @@ func New(opts Options) *State {
 	s.RangeClass = newClass("Range", s.ObjectClass)
 	s.ProcClass = newClass("Proc", s.ObjectClass)
 	s.EnumerableClass = newClass("Enumerable", nil)
+	s.EnumeratorClass = newClass("Enumerator", s.ObjectClass)
 	s.ExceptionClass = newClass("Exception", s.ObjectClass)
 	s.StandardErrorClass = newClass("StandardError", s.ExceptionClass)
 	s.RuntimeErrorClass = newClass("RuntimeError", s.StandardErrorClass)
@@ -99,7 +101,7 @@ func New(opts Options) *State {
 	for _, class := range []*Class{
 		s.ObjectClass, s.ClassClass, s.NumericClass, s.IntegerClass, s.FloatClass,
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
-		s.RangeClass, s.ProcClass, s.EnumerableClass,
+		s.RangeClass, s.ProcClass, s.EnumerableClass, s.EnumeratorClass,
 		s.ExceptionClass, s.StandardErrorClass, s.RuntimeErrorClass,
 		s.ArgumentErrorClass, s.TypeErrorClass, s.NameErrorClass,
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
@@ -130,6 +132,7 @@ func New(opts Options) *State {
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
 		"Proc": s.ProcClass, "Enumerable": s.EnumerableClass,
+		"Enumerator":    s.EnumeratorClass,
 		"Exception":     s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
 		"ArgumentError": s.ArgumentErrorClass, "TypeError": s.TypeErrorClass,
@@ -197,6 +200,8 @@ func New(opts Options) *State {
 	s.ObjectClass.define("lambda", s.kernelProcMethod)
 
 	s.installEnumerableLibrary()
+	s.installEnumeratorLibrary()
+	includeModule(s.EnumeratorClass, s.EnumerableClass)
 	for _, class := range []*Class{s.ArrayClass, s.HashClass, s.RangeClass} {
 		includeModule(class, s.EnumerableClass)
 	}
@@ -758,6 +763,9 @@ func (s *State) kernelP(ctx context.Context, self Value, args []Value, kw Value,
 }
 
 func (s *State) rangeEachMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "each", nil), nil
+	}
 	if self.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: not a range")
 	}
@@ -1026,6 +1034,9 @@ func (s *State) arrayCaseEqMethod(ctx context.Context, self Value, args []Value,
 }
 
 func (s *State) arrayMapMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "map", nil), nil
+	}
 	if self.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: not an array")
 	}
@@ -1048,6 +1059,9 @@ func (s *State) arrayMapMethod(ctx context.Context, self Value, args []Value, kw
 }
 
 func (s *State) arrayEachMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "each", nil), nil
+	}
 	if self.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: not an array")
 	}

@@ -31,6 +31,7 @@ func TestConformance(t *testing.T) {
 		"destructuring",
 		"ensure_control",
 		"enumerable",
+		"enumerator",
 		"exceptions",
 		"for_blocks",
 		"for_loops",

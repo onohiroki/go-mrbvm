@@ -89,7 +89,7 @@ func (s *State) enumerableToAMethod(ctx context.Context, self Value, args []Valu
 
 func (s *State) enumerableMapMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return ArrayValue(nil), nil
+		return s.toEnum(self, "map", nil), nil
 	}
 	var result []Value
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
@@ -107,6 +107,9 @@ func (s *State) enumerableMapMethod(ctx context.Context, self Value, args []Valu
 }
 
 func (s *State) enumerableSelectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "select", nil), nil
+	}
 	var result []Value
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
 		matched := true
@@ -129,6 +132,9 @@ func (s *State) enumerableSelectMethod(ctx context.Context, self Value, args []V
 }
 
 func (s *State) enumerableRejectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "reject", nil), nil
+	}
 	var result []Value
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
 		matched := false
@@ -151,6 +157,9 @@ func (s *State) enumerableRejectMethod(ctx context.Context, self Value, args []V
 }
 
 func (s *State) enumerableFindMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "find", args), nil
+	}
 	var found Value
 	matched := false
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
@@ -242,15 +251,7 @@ func (s *State) enumerableInjectMethod(ctx context.Context, self Value, args []V
 
 func (s *State) enumerableEachWithIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		values, err := s.enumerableCollect(ctx, self, block)
-		if err != nil {
-			return Nil, err
-		}
-		result := make([]Value, len(values))
-		for i, value := range values {
-			result[i] = ArrayValue([]Value{value, IntValue(int64(i))})
-		}
-		return ArrayValue(result), nil
+		return s.toEnum(self, "each_with_index", nil), nil
 	}
 	index := 0
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
@@ -266,8 +267,11 @@ func (s *State) enumerableEachWithIndexMethod(ctx context.Context, self Value, a
 }
 
 func (s *State) enumerableEachWithObjectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) != 1 || block.IsNil() {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "each_with_object expects a memo and a block")}
+	if len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "each_with_object expects a memo")}
+	}
+	if block.IsNil() {
+		return s.toEnum(self, "each_with_object", args), nil
 	}
 	memo := args[0]
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
@@ -424,10 +428,16 @@ func (s *State) enumerableMinmaxMethod(ctx context.Context, self Value, args []V
 }
 
 func (s *State) enumerableMinByMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "min_by", nil), nil
+	}
 	return s.enumerableExtremeBy(ctx, self, block, true)
 }
 
 func (s *State) enumerableMaxByMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "max_by", nil), nil
+	}
 	return s.enumerableExtremeBy(ctx, self, block, false)
 }
 
@@ -487,6 +497,9 @@ func (s *State) enumerableSortMethod(ctx context.Context, self Value, args []Val
 }
 
 func (s *State) enumerableSortByMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "sort_by", nil), nil
+	}
 	type pair struct {
 		key   Value
 		value Value
@@ -527,6 +540,9 @@ func (s *State) enumerableSortByMethod(ctx context.Context, self Value, args []V
 }
 
 func (s *State) enumerableGroupByMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "group_by", nil), nil
+	}
 	var groups []hashEntry
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
 		value := svalueOf(raw)
@@ -555,6 +571,9 @@ func (s *State) enumerableGroupByMethod(ctx context.Context, self Value, args []
 }
 
 func (s *State) enumerablePartitionMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "partition", nil), nil
+	}
 	var yes, no []Value
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
 		value := svalueOf(raw)
@@ -580,6 +599,9 @@ func (s *State) enumerablePartitionMethod(ctx context.Context, self Value, args 
 }
 
 func (s *State) enumerableFlatMapMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "flat_map", nil), nil
+	}
 	var result []Value
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
 		mapped := svalueOf(raw)
@@ -661,6 +683,9 @@ func (s *State) enumerableEachSliceMethod(ctx context.Context, self Value, args 
 	if size <= 0 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "invalid slice size")}
 	}
+	if block.IsNil() {
+		return s.toEnum(self, "each_slice", args), nil
+	}
 	values, err := s.enumerableCollect(ctx, self, block)
 	if err != nil {
 		return Nil, err
@@ -688,6 +713,9 @@ func (s *State) enumerableEachConsMethod(ctx context.Context, self Value, args [
 	size := intArg(args, 0, 1)
 	if size <= 0 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "invalid size")}
+	}
+	if block.IsNil() {
+		return s.toEnum(self, "each_cons", args), nil
 	}
 	values, err := s.enumerableCollect(ctx, self, block)
 	if err != nil {

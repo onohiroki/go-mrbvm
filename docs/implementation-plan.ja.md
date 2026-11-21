@@ -378,6 +378,9 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - ネイティブ `Enumerable` モジュールを追加し、ユーザー定義クラスの
     `each` に対して `map` / `select` / `inject` / `sort_by` などを提供
   - 非 strict ブロックの引数配列の自動分解（`|a, b|`）を実装
-  - `core_library` / `core_library_extended` / `enumerable` conformance を
-    追加し、32 ケースが両コンパイラで成功
+  - 最小 `Enumerator` を追加（`next` / `peek` / `rewind` / `size` /
+    `with_index`）。ブロックなしの `each` / `map` / `times` などが
+    Enumerator を返す
+  - `core_library` / `core_library_extended` / `enumerable` /
+    `enumerator` conformance を追加し、33 ケースが両コンパイラで成功
   - 次は mrblib のロードと `Enumerator`
