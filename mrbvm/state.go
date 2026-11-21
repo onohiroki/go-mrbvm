@@ -18,6 +18,7 @@ type Options struct {
 type State struct {
 	ObjectClass  *Class
 	ClassClass   *Class
+	NumericClass *Class
 	IntegerClass *Class
 	FloatClass   *Class
 	StringClass  *Class
@@ -37,6 +38,9 @@ type State struct {
 	ZeroDivisionErrorClass      *Class
 	LocalJumpErrorClass         *Class
 	NoMatchingPatternErrorClass *Class
+	IndexErrorClass             *Class
+	StopIterationClass          *Class
+	KeyErrorClass               *Class
 
 	TopSelf Value
 
@@ -67,8 +71,9 @@ func New(opts Options) *State {
 	}
 	s.ObjectClass = newClass("Object", nil)
 	s.ClassClass = newClass("Class", s.ObjectClass)
-	s.IntegerClass = newClass("Integer", s.ObjectClass)
-	s.FloatClass = newClass("Float", s.ObjectClass)
+	s.NumericClass = newClass("Numeric", s.ObjectClass)
+	s.IntegerClass = newClass("Integer", s.NumericClass)
+	s.FloatClass = newClass("Float", s.NumericClass)
 	s.StringClass = newClass("String", s.ObjectClass)
 	s.SymbolClass = newClass("Symbol", s.ObjectClass)
 	s.ArrayClass = newClass("Array", s.ObjectClass)
@@ -85,15 +90,19 @@ func New(opts Options) *State {
 	s.ZeroDivisionErrorClass = newClass("ZeroDivisionError", s.StandardErrorClass)
 	s.LocalJumpErrorClass = newClass("LocalJumpError", s.StandardErrorClass)
 	s.NoMatchingPatternErrorClass = newClass("NoMatchingPatternError", s.StandardErrorClass)
+	s.IndexErrorClass = newClass("IndexError", s.StandardErrorClass)
+	s.StopIterationClass = newClass("StopIteration", s.IndexErrorClass)
+	s.KeyErrorClass = newClass("KeyError", s.IndexErrorClass)
 
 	for _, class := range []*Class{
-		s.ObjectClass, s.ClassClass, s.IntegerClass, s.FloatClass,
+		s.ObjectClass, s.ClassClass, s.NumericClass, s.IntegerClass, s.FloatClass,
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
 		s.RangeClass, s.ProcClass,
 		s.ExceptionClass, s.StandardErrorClass, s.RuntimeErrorClass,
 		s.ArgumentErrorClass, s.TypeErrorClass, s.NameErrorClass,
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
 		s.NoMatchingPatternErrorClass,
+		s.IndexErrorClass, s.StopIterationClass, s.KeyErrorClass,
 	} {
 		s.ensureClassObject(class)
 	}
@@ -103,14 +112,20 @@ func New(opts Options) *State {
 	s.ClassClass.define("name", s.classNameMethod)
 	s.ClassClass.define("include", s.classIncludeMethod)
 	s.ClassClass.define("===", s.classCaseEqMethod)
+	s.ClassClass.define("attr_reader", s.classAttrReaderMethod)
+	s.ClassClass.define("attr", s.classAttrReaderMethod)
+	s.ClassClass.define("attr_writer", s.classAttrWriterMethod)
+	s.ClassClass.define("attr_accessor", s.classAttrAccessorMethod)
+	s.ClassClass.define("const_defined?", s.classConstDefinedMethod)
 	s.ObjectClass.define("class", s.objectClassMethod)
 	s.ObjectClass.define("initialize", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return Nil, nil
 	})
 
 	for name, class := range map[string]*Class{
-		"Object": s.ObjectClass, "Class": s.ClassClass, "Integer": s.IntegerClass,
-		"Float": s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
+		"Object": s.ObjectClass, "Class": s.ClassClass, "Numeric": s.NumericClass,
+		"Integer": s.IntegerClass,
+		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
 		"Proc": s.ProcClass, "Exception": s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
@@ -119,6 +134,9 @@ func New(opts Options) *State {
 		"ZeroDivisionError":      s.ZeroDivisionErrorClass,
 		"LocalJumpError":         s.LocalJumpErrorClass,
 		"NoMatchingPatternError": s.NoMatchingPatternErrorClass,
+		"IndexError":             s.IndexErrorClass,
+		"StopIteration":          s.StopIterationClass,
+		"KeyError":               s.KeyErrorClass,
 	} {
 		value := s.classValue(class)
 		s.constants[name] = value
@@ -127,6 +145,7 @@ func New(opts Options) *State {
 
 	s.TopSelf = ObjectValue(&Object{class: s.ObjectClass})
 	s.ObjectClass.define("puts", s.kernelPuts)
+	s.ObjectClass.define("print", s.kernelPrint)
 	s.ObjectClass.define("p", s.kernelP)
 	s.ObjectClass.define("raise", s.kernelRaise)
 	s.ObjectClass.define("fail", s.kernelRaise)
@@ -158,16 +177,83 @@ func New(opts Options) *State {
 		return self, nil
 	})
 	s.ArrayClass.define("map", s.arrayMapMethod)
+	s.ArrayClass.define("sort", s.arraySortMethod)
+	s.ArrayClass.define("sort!", s.arraySortBangMethod)
 	s.ArrayClass.define("__case_eqq", s.arrayCaseEqMethod)
+	s.ArrayClass.define("__svalue", s.arraySValueMethod)
+	s.ArrayClass.define("__svalue_eq", s.arraySValueEqMethod)
 	s.ArrayClass.define("<<", s.arrayPushMethod)
 	s.ArrayClass.define("push", s.arrayPushMethod)
 	s.ArrayClass.define("[]=", s.arraySetMethod)
 	s.HashClass.define("[]=", s.hashSetMethod)
 	s.ProcClass.define("call", s.procCallMethod)
 	s.ObjectClass.define("respond_to?", s.objectRespondToMethod)
+	s.ObjectClass.define("dup", s.objectDupMethod)
+	s.ObjectClass.define("clone", s.objectDupMethod)
 	s.ObjectClass.define("proc", s.kernelProcMethod)
 	s.ObjectClass.define("lambda", s.kernelProcMethod)
+
+	s.installCoreLibrary()
 	return s
+}
+
+func (s *State) classConstDefinedMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok || len(args) != 1 {
+		return False, nil
+	}
+	name := args[0].String()
+	for current := class; current != nil; current = current.super {
+		if _, ok := current.constants[name]; ok {
+			return True, nil
+		}
+	}
+	return False, nil
+}
+
+func (s *State) classAttrReaderMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: attr_reader receiver is not a class")
+	}
+	for _, arg := range args {
+		name := arg.String()
+		class.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+			if self.obj == nil {
+				return Nil, nil
+			}
+			return self.obj.ivar(name), nil
+		})
+	}
+	return Nil, nil
+}
+
+func (s *State) classAttrWriterMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: attr_writer receiver is not a class")
+	}
+	for _, arg := range args {
+		name := arg.String() + "="
+		ivar := strings.TrimSuffix(name, "=")
+		class.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+			if len(args) != 1 {
+				return Nil, fmt.Errorf("mrbvm: %s expects one argument", name)
+			}
+			if self.obj != nil {
+				self.obj.setIvar(ivar, args[0])
+			}
+			return args[0], nil
+		})
+	}
+	return Nil, nil
+}
+
+func (s *State) classAttrAccessorMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if _, err := s.classAttrReaderMethod(ctx, self, args, kw, block); err != nil {
+		return Nil, err
+	}
+	return s.classAttrWriterMethod(ctx, self, args, kw, block)
 }
 
 func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -262,7 +348,7 @@ func (s *State) objectClassMethod(ctx context.Context, self Value, args []Value,
 }
 
 func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
-	if recv.kind == KindObject && recv.obj != nil {
+	if recv.obj != nil {
 		switch data := recv.obj.data.(type) {
 		case *arrayData:
 			if index.Kind() == KindObject && index.obj != nil {
@@ -289,6 +375,11 @@ func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
 			}
 			return Nil, nil
 		case *stringData:
+			if index.Kind() == KindObject && index.obj != nil {
+				if rangeIndex, ok := index.obj.data.(*rangeData); ok {
+					return sliceString(data.value, rangeIndex), nil
+				}
+			}
 			if index.Kind() != KindInt {
 				return Nil, fmt.Errorf("mrbvm: string index must be an integer")
 			}
@@ -697,6 +788,36 @@ func (s *State) hashSetMethod(ctx context.Context, self Value, args []Value, kw 
 	return s.setIndex(ctx, self, args[0], args[1])
 }
 
+func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.Kind() != KindObject || self.obj == nil {
+		return self, nil
+	}
+	switch data := self.obj.data.(type) {
+	case *arrayData:
+		values := make([]Value, len(data.values))
+		copy(values, data.values)
+		return ArrayValue(values), nil
+	case *hashData:
+		entries := make([]hashEntry, len(data.entries))
+		copy(entries, data.entries)
+		return HashValue(entries), nil
+	case *stringData:
+		return StringValue(data.value), nil
+	case *exceptionData:
+		return ObjectValue(&Object{class: self.obj.class, data: &exceptionData{message: data.message}, ivars: self.obj.ivars}), nil
+	case *Class:
+		return self, nil
+	case *blockData:
+		copyData := *data
+		return ObjectValue(&Object{data: &copyData}), nil
+	}
+	ivars := make(map[string]Value, len(self.obj.ivars))
+	for name, value := range self.obj.ivars {
+		ivars[name] = value
+	}
+	return ObjectValue(&Object{class: self.obj.class, ivars: ivars}), nil
+}
+
 func (s *State) objectRespondToMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) != 1 {
 		return False, nil
@@ -762,6 +883,107 @@ func (s *State) exceptionMessageMethod(ctx context.Context, self Value, args []V
 func (s *State) exceptionInspectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class := s.classOf(self)
 	return StringValue("#<" + class.name + ": " + exceptionMessage(self) + ">"), nil
+}
+
+func (s *State) arraySortMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.obj == nil {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	data, ok := self.obj.data.(*arrayData)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	values := make([]Value, len(data.values))
+	copy(values, data.values)
+	copyValue := ArrayValue(values)
+	return s.arraySortBangMethod(ctx, copyValue, args, kw, block)
+}
+
+func (s *State) arraySortBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.obj == nil {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	data, ok := self.obj.data.(*arrayData)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	for i := 1; i < len(data.values); i++ {
+		for j := i; j > 0; j-- {
+			cmp, err := s.compareValues(ctx, data.values[j-1], data.values[j], block)
+			if err != nil {
+				return Nil, err
+			}
+			if cmp <= 0 {
+				break
+			}
+			data.values[j-1], data.values[j] = data.values[j], data.values[j-1]
+		}
+	}
+	return self, nil
+}
+
+func (s *State) compareValues(ctx context.Context, left, right Value, block Value) (int, error) {
+	if !block.IsNil() {
+		result, err := s.callBlock(ctx, block, []Value{left, right}, Nil)
+		if err != nil {
+			return 0, err
+		}
+		if result.Kind() == KindInt {
+			switch {
+			case result.Int() < 0:
+				return -1, nil
+			case result.Int() > 0:
+				return 1, nil
+			default:
+				return 0, nil
+			}
+		}
+		return 0, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "comparison of values failed")}
+	}
+	result, err := s.call(ctx, left, "<=>", []Value{right}, Nil, Nil)
+	if err != nil {
+		return 0, err
+	}
+	if result.Kind() != KindInt {
+		return 0, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "comparison failed")}
+	}
+	switch {
+	case result.Int() < 0:
+		return -1, nil
+	case result.Int() > 0:
+		return 1, nil
+	default:
+		return 0, nil
+	}
+}
+
+func (s *State) arraySValueMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.obj == nil {
+		return Nil, nil
+	}
+	data, ok := self.obj.data.(*arrayData)
+	if !ok {
+		return self, nil
+	}
+	switch len(data.values) {
+	case 0:
+		return Nil, nil
+	case 1:
+		return data.values[0], nil
+	default:
+		return self, nil
+	}
+}
+
+func (s *State) arraySValueEqMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return False, nil
+	}
+	value, err := s.arraySValueMethod(ctx, self, nil, Nil, Nil)
+	if err != nil {
+		return Nil, err
+	}
+	return BoolValue(valuesEqual(value, args[0])), nil
 }
 
 func (s *State) arrayCaseEqMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -840,8 +1062,27 @@ func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Val
 	return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, Nil, data.env, data.mid, data.owner, data.strict)
 }
 
-func (s *State) kernelPuts(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+func (s *State) kernelPrint(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	for _, arg := range args {
+		fmt.Fprint(s.stdout, arg.ToS())
+	}
+	return Nil, nil
+}
+
+func (s *State) kernelPuts(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) == 0 {
+		fmt.Fprintln(s.stdout)
+		return Nil, nil
+	}
+	for _, arg := range args {
+		if arg.Kind() == KindObject && arg.obj != nil {
+			if value, ok := arg.obj.data.(*arrayData); ok {
+				for _, item := range value.values {
+					fmt.Fprintln(s.stdout, item.ToS())
+				}
+				continue
+			}
+		}
 		fmt.Fprintln(s.stdout, arg.ToS())
 	}
 	return Nil, nil

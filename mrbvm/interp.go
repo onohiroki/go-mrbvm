@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strings"
 
 	"github.com/onohiroki/go-mrbc/bytecode"
 )
@@ -1227,6 +1228,11 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 			return s.invoke(ctx, m, recv, args, kw, block)
 		}
 	}
+	if name == "<=>" && len(args) == 1 {
+		if cmp, ok := compareNative(recv, args[0]); ok {
+			return IntValue(int64(cmp)), nil
+		}
+	}
 	if name == "===" && len(args) == 1 {
 		if m, ok := s.classOf(recv).lookup(name); ok {
 			return s.invoke(ctx, m, recv, args, kw, block)
@@ -1279,6 +1285,9 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 			case lf > rf:
 				cmp = 1
 			}
+		} else if (left.Kind() == KindString || left.Kind() == KindSymbol) &&
+			(right.Kind() == KindString || right.Kind() == KindSymbol) {
+			cmp = strings.Compare(left.String(), right.String())
 		} else {
 			return Nil, false
 		}
@@ -1324,6 +1333,53 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		}
 		if lf, rf, ok := bothFloats(left, right); ok {
 			return FloatValue(lf * rf), true
+		}
+	case "%":
+		if li, ri, ok := bothBigInts(left, right); ok {
+			if ri.Sign() == 0 {
+				return Nil, false
+			}
+			rem := new(big.Int).Rem(li, ri)
+			if rem.Sign() != 0 && rem.Sign() != ri.Sign() {
+				rem.Add(rem, ri)
+			}
+			return normalizedBigInt(rem), true
+		}
+		if li, ri, ok := bothInts(left, right); ok {
+			if ri == 0 {
+				return Nil, false
+			}
+			rem := li % ri
+			if rem != 0 && (rem < 0) != (ri < 0) {
+				rem += ri
+			}
+			return IntValue(rem), true
+		}
+		if lf, rf, ok := bothFloats(left, right); ok {
+			if rf == 0 {
+				return Nil, false
+			}
+			rem := math.Mod(lf, rf)
+			if rem != 0 && (rem < 0) != (rf < 0) {
+				rem += rf
+			}
+			return FloatValue(rem), true
+		}
+	case "**":
+		if li, ri, ok := bothBigInts(left, right); ok {
+			if ri.Sign() < 0 {
+				return Nil, false
+			}
+			return normalizedBigInt(new(big.Int).Exp(li, ri, nil)), true
+		}
+		if li, ri, ok := bothInts(left, right); ok {
+			if ri < 0 {
+				return FloatValue(math.Pow(float64(li), float64(ri))), true
+			}
+			return normalizedBigInt(new(big.Int).Exp(big.NewInt(li), big.NewInt(ri), nil)), true
+		}
+		if lf, rf, ok := bothFloats(left, right); ok {
+			return FloatValue(math.Pow(lf, rf)), true
 		}
 	case "/":
 		if li, ri, ok := bothBigInts(left, right); ok {
@@ -1375,6 +1431,36 @@ func normalizedBigInt(value *big.Int) Value {
 		return IntValue(value.Int64())
 	}
 	return BigIntValue(value)
+}
+
+func compareNative(left, right Value) (int, bool) {
+	if li, ri, ok := bothBigInts(left, right); ok {
+		return li.Cmp(ri), true
+	}
+	if li, ri, ok := bothInts(left, right); ok {
+		switch {
+		case li < ri:
+			return -1, true
+		case li > ri:
+			return 1, true
+		default:
+			return 0, true
+		}
+	}
+	if lf, rf, ok := bothFloats(left, right); ok {
+		switch {
+		case lf < rf:
+			return -1, true
+		case lf > rf:
+			return 1, true
+		default:
+			return 0, true
+		}
+	}
+	if (left.Kind() == KindString || left.Kind() == KindSymbol) && (right.Kind() == KindString || right.Kind() == KindSymbol) {
+		return strings.Compare(left.String(), right.String()), true
+	}
+	return 0, false
 }
 
 func bothInts(left, right Value) (int64, int64, bool) {
@@ -1436,7 +1522,49 @@ func valuesEqual(left, right Value) bool {
 	case KindString, KindSymbol:
 		return left.String() == right.String()
 	case KindObject:
-		return left.obj == right.obj
+		if left.obj == nil || right.obj == nil {
+			return left.obj == right.obj
+		}
+		switch ldata := left.obj.data.(type) {
+		case *arrayData:
+			rdata, ok := right.obj.data.(*arrayData)
+			if !ok || len(ldata.values) != len(rdata.values) {
+				return false
+			}
+			for i := range ldata.values {
+				if !valuesEqual(ldata.values[i], rdata.values[i]) {
+					return false
+				}
+			}
+			return true
+		case *hashData:
+			rdata, ok := right.obj.data.(*hashData)
+			if !ok || len(ldata.entries) != len(rdata.entries) {
+				return false
+			}
+			for _, entry := range ldata.entries {
+				found := false
+				for _, other := range rdata.entries {
+					if valuesEqual(entry.key, other.key) && valuesEqual(entry.value, other.value) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return false
+				}
+			}
+			return true
+		case *rangeData:
+			rdata, ok := right.obj.data.(*rangeData)
+			return ok && ldata.exclusive == rdata.exclusive &&
+				valuesEqual(ldata.low, rdata.low) && valuesEqual(ldata.high, rdata.high)
+		case *stringData:
+			rdata, ok := right.obj.data.(*stringData)
+			return ok && ldata.value == rdata.value
+		default:
+			return left.obj == right.obj
+		}
 	default:
 		return false
 	}

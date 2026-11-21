@@ -9,7 +9,7 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-**VM-3 is largely implemented.** The VM loads RITE 04.00 through
+**VM-4 is in progress.** The VM loads RITE 04.00 through
 `go-mrbc/bytecode` and supports:
 
 - values, objects, classes, methods, blocks, closures, and upvars
@@ -27,20 +27,26 @@ compiler and the reference implementation is always C mruby 4.0.0.
   and ensure unwinding for `return` / `break` / `next`
 - exception classes, `message`, and rescue by class
 - array/hash access and pattern helpers
+- core `Array`, `Hash`, `String`, `Integer`, `Range`, and `Object` methods,
+  including `Enumerable`-style `map` / `select` / `reject` / `find` /
+  `inject` / `min` / `max` / `sort`
+- `cmd/vmcompat` for differential runs against the reference mruby
 
-The following 29 shared conformance cases pass with bytecode from both
+The following 30 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
 `advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
 `blocks`, `case_and_logic`, `classes`, `collections`, `control_flow`,
-`destructuring`, `ensure_control`, `exceptions`, `for_blocks`,
+`core_library`, `destructuring`, `ensure_control`, `exceptions`, `for_blocks`,
 `for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,
 `modern_syntax`, `multiple_assignment`, `operator_assignment`,
 `parameters`, `pattern_matching`, `patterns_extended`, `retry_redo`,
 `runtime_edges`, `scalars`, `semantic_edges`, `splat`.
 
-Remaining VM-3 work is backtraces and richer exception introspection.
-Next: **VM-4** (core library and mrblib coverage).
+VM-3 leftovers are backtraces and richer exception introspection. VM-4 has
+started with the native core library and the differential runner; the next
+step is loading mruby's Ruby-level `mrblib` and widening official test
+coverage.
 
 Design and plan:
 
@@ -89,15 +95,19 @@ Requirements:
 ```sh
 go build ./...
 go test ./...
+
+# Differential run against the reference mruby.
+go run ./cmd/vmcompat testdata/conformance/*/main.rb
 ```
 
 The `testdata/conformance` corpus is copied from `go-mrbc` for bootstrapping.
 It will later move to an importable shared package.
 
-## Planned commands
+## Commands
 
 - `gomruby` — run `.mrb` bytecode, or compile `.rb` with `go-mrbc`
-- `gomirb` — interactive shell over `go-mrbc` and `go-mrbvm`
+- `vmcompat` — compare go-mrbc/mrbc bytecode against the reference `mruby`
+- `gomirb` — planned interactive shell
 
 ## License
 

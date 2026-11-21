@@ -305,10 +305,11 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 ## 15. 直近の作業
 
 1. VM-4 の実装
-   - コアライブラリと mrblib の拡充
-   - `String` / `Array` / `Hash` / `Integer` / `Enumerable` の未実装メソッド
-   - `Comparable`、`Object#inspect`、`Object#to_s` の整理
-2. `cmd/vmcompat` の整備
+   - mrblib のロードと pure-Ruby メソッドの有効化
+   - `Enumerable` / `Comparable` のモジュール化
+   - `Enumerator` の最小実装
+   - `String` / `Array` / `Hash` / `Integer` の残りメソッド
+2. 公式テストの subset 実行
 3. 例外の `backtrace` と `Exception#full_message`
 
 ## 16. 現在の状態
@@ -362,4 +363,13 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
     `operator_assignment`, `parameters`, `pattern_matching`,
     `patterns_extended`, `retry_redo`, `runtime_edges`, `scalars`,
     `semantic_edges`, `splat`
-- 次は VM-4（コアライブラリと mrblib）
+- **VM-4 進行中**
+  - ネイティブの `Array` / `Hash` / `String` / `Integer` / `Range` /
+    `Object` メソッドを拡充
+  - `map` / `select` / `reject` / `find` / `inject` / `min` / `max` /
+    `sort`、`Hash#fetch` / `merge`、`String#split` / `sub` / `gsub`、
+    `Integer#times` / `upto` / `downto` / `step` など
+  - `Object#is_a?` / `send`、`Comparable` 相当の `<=>` 比較
+  - `cmd/vmcompat` を追加（C mruby / go-mrbc / 本家 mrbc の差分実行）
+  - `core_library` conformance を追加し、30 ケースが両コンパイラで成功
+  - 次は mrblib のロードと `Enumerator`
