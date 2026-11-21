@@ -16,17 +16,18 @@ type Options struct {
 
 // State is one mruby VM instance. A State is owned by a single goroutine.
 type State struct {
-	ObjectClass  *Class
-	ClassClass   *Class
-	NumericClass *Class
-	IntegerClass *Class
-	FloatClass   *Class
-	StringClass  *Class
-	SymbolClass  *Class
-	ArrayClass   *Class
-	HashClass    *Class
-	RangeClass   *Class
-	ProcClass    *Class
+	ObjectClass     *Class
+	ClassClass      *Class
+	NumericClass    *Class
+	IntegerClass    *Class
+	FloatClass      *Class
+	StringClass     *Class
+	SymbolClass     *Class
+	ArrayClass      *Class
+	HashClass       *Class
+	RangeClass      *Class
+	ProcClass       *Class
+	EnumerableClass *Class
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -80,6 +81,7 @@ func New(opts Options) *State {
 	s.HashClass = newClass("Hash", s.ObjectClass)
 	s.RangeClass = newClass("Range", s.ObjectClass)
 	s.ProcClass = newClass("Proc", s.ObjectClass)
+	s.EnumerableClass = newClass("Enumerable", nil)
 	s.ExceptionClass = newClass("Exception", s.ObjectClass)
 	s.StandardErrorClass = newClass("StandardError", s.ExceptionClass)
 	s.RuntimeErrorClass = newClass("RuntimeError", s.StandardErrorClass)
@@ -97,7 +99,7 @@ func New(opts Options) *State {
 	for _, class := range []*Class{
 		s.ObjectClass, s.ClassClass, s.NumericClass, s.IntegerClass, s.FloatClass,
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
-		s.RangeClass, s.ProcClass,
+		s.RangeClass, s.ProcClass, s.EnumerableClass,
 		s.ExceptionClass, s.StandardErrorClass, s.RuntimeErrorClass,
 		s.ArgumentErrorClass, s.TypeErrorClass, s.NameErrorClass,
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
@@ -127,7 +129,8 @@ func New(opts Options) *State {
 		"Integer": s.IntegerClass,
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
-		"Proc": s.ProcClass, "Exception": s.ExceptionClass,
+		"Proc": s.ProcClass, "Enumerable": s.EnumerableClass,
+		"Exception":     s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
 		"ArgumentError": s.ArgumentErrorClass, "TypeError": s.TypeErrorClass,
 		"NameError": s.NameErrorClass, "NoMethodError": s.NoMethodErrorClass,
@@ -193,6 +196,10 @@ func New(opts Options) *State {
 	s.ObjectClass.define("proc", s.kernelProcMethod)
 	s.ObjectClass.define("lambda", s.kernelProcMethod)
 
+	s.installEnumerableLibrary()
+	for _, class := range []*Class{s.ArrayClass, s.HashClass, s.RangeClass} {
+		includeModule(class, s.EnumerableClass)
+	}
 	s.installCoreLibrary()
 	return s
 }
@@ -254,6 +261,19 @@ func (s *State) classAttrAccessorMethod(ctx context.Context, self Value, args []
 		return Nil, err
 	}
 	return s.classAttrWriterMethod(ctx, self, args, kw, block)
+}
+
+func includeModule(class, module *Class) {
+	for name, method := range module.methods {
+		if _, exists := class.methods[name]; !exists {
+			class.methods[name] = method
+		}
+	}
+	for name, value := range module.constants {
+		if _, exists := class.constants[name]; !exists {
+			class.constants[name] = value
+		}
+	}
 }
 
 func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1054,6 +1074,9 @@ func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw
 func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Value) (Value, error) {
 	if block.Kind() != KindObject || block.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: no block given")
+	}
+	if data, ok := block.obj.data.(*nativeBlockData); ok {
+		return data.fn(ctx, args)
 	}
 	data, ok := block.obj.data.(*blockData)
 	if !ok {

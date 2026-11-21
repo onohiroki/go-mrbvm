@@ -30,6 +30,7 @@ func TestConformance(t *testing.T) {
 		"core_library_extended",
 		"destructuring",
 		"ensure_control",
+		"enumerable",
 		"exceptions",
 		"for_blocks",
 		"for_loops",

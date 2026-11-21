@@ -199,6 +199,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				}
 				frameKw = Nil
 			}
+			argCount := req + opt + post
+			if hasRest {
+				argCount++
+			}
+			if !strict && argCount > 1 && len(frameArgs) == 1 && frameArgs[0].obj != nil {
+				if array, ok := frameArgs[0].obj.data.(*arrayData); ok {
+					frameArgs = array.values
+				}
+			}
 			provided := len(frameArgs)
 			if strict && provided < req+post {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, fmt.Sprintf("wrong number of arguments (given %d, expected %d)", provided, req+post))}

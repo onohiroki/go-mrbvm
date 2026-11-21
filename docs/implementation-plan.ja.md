@@ -375,6 +375,9 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
     `Float#round` / `floor` / `ceil` / `nan?` / `infinite?` など
   - `Object#is_a?` / `send`、`Comparable` 相当の `<=>` 比較
   - `cmd/vmcompat` を追加（C mruby / go-mrbc / 本家 mrbc の差分実行）
-  - `core_library` / `core_library_extended` conformance を追加し、
-    31 ケースが両コンパイラで成功
+  - ネイティブ `Enumerable` モジュールを追加し、ユーザー定義クラスの
+    `each` に対して `map` / `select` / `inject` / `sort_by` などを提供
+  - 非 strict ブロックの引数配列の自動分解（`|a, b|`）を実装
+  - `core_library` / `core_library_extended` / `enumerable` conformance を
+    追加し、32 ケースが両コンパイラで成功
   - 次は mrblib のロードと `Enumerator`

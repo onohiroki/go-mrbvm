@@ -31,14 +31,15 @@ compiler and the reference implementation is always C mruby 4.0.0.
   `Object` methods, including `Enumerable`-style `map` / `select` /
   `reject` / `find` / `inject` / `min` / `max` / `sort`, `group_by`,
   `sort_by`, `each_with_object`, `zip`, and `flat_map`
+- a native `Enumerable` module that works with user-defined `each`
 - `cmd/vmcompat` for differential runs against the reference mruby
 
-The following 31 shared conformance cases pass with bytecode from both
+The following 32 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
 `advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
 `blocks`, `case_and_logic`, `classes`, `collections`, `control_flow`,
-`core_library`, `core_library_extended`, `destructuring`, `ensure_control`, `exceptions`, `for_blocks`,
+`core_library`, `core_library_extended`, `destructuring`, `enumerable`, `ensure_control`, `exceptions`, `for_blocks`,
 `for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,
 `modern_syntax`, `multiple_assignment`, `operator_assignment`,
 `parameters`, `pattern_matching`, `patterns_extended`, `retry_redo`,
