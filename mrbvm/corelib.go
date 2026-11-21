@@ -18,6 +18,7 @@ func (s *State) installCoreLibrary() {
 	s.installIntegerLibrary()
 	s.installObjectLibrary()
 	s.installRangeLibrary()
+	s.installAdvancedCoreLibrary()
 }
 
 func (s *State) installArrayLibrary() {
@@ -313,6 +314,12 @@ func (s *State) installObjectLibrary() {
 	})
 	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return BoolValue(len(args) == 1 && valuesEqual(self, args[0])), nil
+	})
+	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return StringValue(self.ToS()), nil
+	})
+	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return StringValue(self.Inspect()), nil
 	})
 	class.define("send", s.objectSendMethod)
 	class.define("__send__", s.objectSendMethod)

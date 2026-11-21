@@ -27,6 +27,7 @@ func TestConformance(t *testing.T) {
 		"collections",
 		"control_flow",
 		"core_library",
+		"core_library_extended",
 		"destructuring",
 		"ensure_control",
 		"exceptions",

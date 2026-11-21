@@ -852,9 +852,22 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				bytecode.OpDIV: "/", bytecode.OpEQ: "==", bytecode.OpLT: "<",
 				bytecode.OpLE: "<=", bytecode.OpGT: ">", bytecode.OpGE: ">=",
 			}[in.Op]
-			value, ok := binaryValue(regs[in.Operands[0]], name, regs[in.Operands[0]+1])
+			left := regs[in.Operands[0]]
+			value, ok := binaryValue(left, name, regs[in.Operands[0]+1])
 			if !ok {
-				return Nil, fmt.Errorf("mrbvm: cannot apply %s to %s and %s", name, regs[in.Operands[0]].Inspect(), regs[in.Operands[0]+1].Inspect())
+				result, err := s.call(ctx, left, name, []Value{regs[in.Operands[0]+1]}, Nil, Nil)
+				if err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				value = result
 			}
 			regs[in.Operands[0]] = value
 		case bytecode.OpADDI, bytecode.OpSUBI:
@@ -862,9 +875,22 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSUBI {
 				name = "-"
 			}
-			value, ok := binaryValue(regs[in.Operands[0]], name, IntValue(int64(in.Operands[1])))
+			left := regs[in.Operands[0]]
+			value, ok := binaryValue(left, name, IntValue(int64(in.Operands[1])))
 			if !ok {
-				return Nil, fmt.Errorf("mrbvm: cannot apply %s to %s and %d", name, regs[in.Operands[0]].Inspect(), in.Operands[1])
+				result, err := s.call(ctx, left, name, []Value{IntValue(int64(in.Operands[1]))}, Nil, Nil)
+				if err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				value = result
 			}
 			regs[in.Operands[0]] = value
 		case bytecode.OpADDILV, bytecode.OpSUBILV:
@@ -872,9 +898,22 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSUBILV {
 				name = "-"
 			}
-			value, ok := binaryValue(regs[in.Operands[0]], name, IntValue(int64(in.Operands[2])))
+			left := regs[in.Operands[0]]
+			value, ok := binaryValue(left, name, IntValue(int64(in.Operands[2])))
 			if !ok {
-				return Nil, fmt.Errorf("mrbvm: cannot apply %s to %s and %d", name, regs[in.Operands[0]].Inspect(), in.Operands[2])
+				result, err := s.call(ctx, left, name, []Value{IntValue(int64(in.Operands[2]))}, Nil, Nil)
+				if err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				value = result
 			}
 			regs[in.Operands[0]] = value
 
@@ -1228,6 +1267,10 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 			return s.invoke(ctx, m, recv, args, kw, block)
 		}
 	}
+	if (name == "/" || name == "%") && len(args) == 1 && args[0].Kind() == KindInt && args[0].Int() == 0 &&
+		(recv.Kind() == KindInt || recv.Kind() == KindBigInt) {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ZeroDivisionErrorClass, "divided by 0")}
+	}
 	if name == "<=>" && len(args) == 1 {
 		if cmp, ok := compareNative(recv, args[0]); ok {
 			return IntValue(int64(cmp)), nil
@@ -1392,12 +1435,9 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 			if ri == 0 {
 				return Nil, false
 			}
-			return IntValue(li / ri), true
+			return IntValue(floorDiv(li, ri)), true
 		}
 		if lf, rf, ok := bothFloats(left, right); ok {
-			if rf == 0 {
-				return Nil, false
-			}
 			return FloatValue(lf / rf), true
 		}
 	}

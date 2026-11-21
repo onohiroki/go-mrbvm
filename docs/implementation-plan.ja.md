@@ -367,9 +367,14 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - ネイティブの `Array` / `Hash` / `String` / `Integer` / `Range` /
     `Object` メソッドを拡充
   - `map` / `select` / `reject` / `find` / `inject` / `min` / `max` /
-    `sort`、`Hash#fetch` / `merge`、`String#split` / `sub` / `gsub`、
-    `Integer#times` / `upto` / `downto` / `step` など
+    `sort` / `group_by` / `sort_by` / `each_with_object` / `zip` /
+    `flat_map`
+  - `Hash#fetch` / `merge` / `dig` / `transform_*`、
+    `String#split` / `sub` / `gsub` / `%` / `ljust` / `rjust` / `tr`、
+    `Integer#times` / `upto` / `downto` / `step` / `div` / `divmod`、
+    `Float#round` / `floor` / `ceil` / `nan?` / `infinite?` など
   - `Object#is_a?` / `send`、`Comparable` 相当の `<=>` 比較
   - `cmd/vmcompat` を追加（C mruby / go-mrbc / 本家 mrbc の差分実行）
-  - `core_library` conformance を追加し、30 ケースが両コンパイラで成功
+  - `core_library` / `core_library_extended` conformance を追加し、
+    31 ケースが両コンパイラで成功
   - 次は mrblib のロードと `Enumerator`

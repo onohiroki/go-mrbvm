@@ -27,17 +27,18 @@ compiler and the reference implementation is always C mruby 4.0.0.
   and ensure unwinding for `return` / `break` / `next`
 - exception classes, `message`, and rescue by class
 - array/hash access and pattern helpers
-- core `Array`, `Hash`, `String`, `Integer`, `Range`, and `Object` methods,
-  including `Enumerable`-style `map` / `select` / `reject` / `find` /
-  `inject` / `min` / `max` / `sort`
+- core `Array`, `Hash`, `String`, `Integer`, `Float`, `Range`, and
+  `Object` methods, including `Enumerable`-style `map` / `select` /
+  `reject` / `find` / `inject` / `min` / `max` / `sort`, `group_by`,
+  `sort_by`, `each_with_object`, `zip`, and `flat_map`
 - `cmd/vmcompat` for differential runs against the reference mruby
 
-The following 30 shared conformance cases pass with bytecode from both
+The following 31 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
 `advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
 `blocks`, `case_and_logic`, `classes`, `collections`, `control_flow`,
-`core_library`, `destructuring`, `ensure_control`, `exceptions`, `for_blocks`,
+`core_library`, `core_library_extended`, `destructuring`, `ensure_control`, `exceptions`, `for_blocks`,
 `for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,
 `modern_syntax`, `multiple_assignment`, `operator_assignment`,
 `parameters`, `pattern_matching`, `patterns_extended`, `retry_redo`,
