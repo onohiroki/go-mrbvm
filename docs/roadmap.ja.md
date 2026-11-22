@@ -250,10 +250,10 @@
 | ファイル | OK / Total | 備考 |
 | --- | ---: | --- |
 | `hash.rb` | 51 / 57 | 残りは再入・カーソル系と GC ヘルパー |
-| `range.rb` | 23 / 26 | 残りは mruby GC テスト用ヘルパー |
+| `range.rb` | 24 / 26 | 残りは mruby GC テスト用ヘルパー |
 | `class.rb` | 49 / 49 | 全通過 |
-| `module.rb` | 80 / 86 | 残りは定数 cref・`defined?`・テスト間依存 |
-| `string.rb` | 66 / 80 | Unicode 変換・inspect・byte 単位 length が残る |
+| `module.rb` | 86 / 86 | 全通過 |
+| `string.rb` | 77 / 80 | 残りは Encoding の byte/char 差のみ |
 
 追加で以下を解決した。
 
@@ -276,6 +276,17 @@
   先勝ち、クラス変数の所属解決と frozen 検査
 - `class_eval` / lambda の可視性スコープ、`method_missing` の可視性無視、
   Proc#call へのブロック引き渡し
+- Unicode の完全な upper/lower/title 変換表（ß→SS、ﬁ→FI、ǳ→ǲ、İ→i̇、
+  ΐ→Ϊ́、Georgian Mkhedruli など）と不正 UTF-8 の ArgumentError
+- レキシカル cref に基づく定数探索（クラス本体・`class << self`・
+  `class_eval` ブロック・lambda）、クラス変数のレキシカル解決
+- `defined?` を VM の直前の定数/変数参照から判定し、未定義・private
+  定数でも評価せずに nil を返す
+- `String#[]` / `[]=` の String インデックス、`bytesplice` の全引数形、
+  Range#to_a の Float 上限（2^63 境界）
+- `extend` のクラス/特異クラス/モジュール解決、継承メソッドの可視性変更
+- 公式テスト実行用の C テスト gem 互換スタブ（`Mrbtest`・
+  `TestNotImplement`）を mrbtest の prelude に追加
 
 conformance は 51 ケースに拡大。除外している 3 系統（mruby GC 内部、
 Encoding の byte/char、Hash 再入カーソル）は引き続き対象外。

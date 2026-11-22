@@ -395,6 +395,11 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - Phase 3（可視性・呼び出し文脈）: class_eval の可視性リセット、
   lambda の可視性捕捉、private/protected クラスメソッド、
   method_missing、Proc#call のブロック束縛を実装
+- Phase 5（Unicode）: Unicode の完全な大小・タイトル変換表と不正 UTF-8
+  の扱いを実装（`string.rb` 77/80、残りは Encoding 差のみ）
+- Phase 6/7（cref / defined?）: メソッド・ブロックのレキシカル cref、
+  定数探索、`defined?` の非評価判定、クラス変数のレキシカル解決を実装
+  （`module.rb` 86/86、`range.rb` 24/26）
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態
