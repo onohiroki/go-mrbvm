@@ -78,12 +78,12 @@ func FloatValue(v float64) Value {
 
 // SymbolValue returns a symbol value.
 func SymbolValue(name string) Value {
-	return Value{kind: KindSymbol, obj: &Object{data: &stringData{value: name}}}
+	return Value{kind: KindSymbol, obj: &Object{data: &stringData{raw: name}}}
 }
 
 // StringValue returns a string value.
 func StringValue(v string) Value {
-	return Value{kind: KindString, obj: &Object{data: &stringData{value: v}}}
+	return Value{kind: KindString, obj: &Object{data: &stringData{raw: v}}}
 }
 
 // ObjectValue returns an object value.
@@ -139,7 +139,7 @@ func (v Value) ToS() string {
 func (v Value) String() string {
 	if (v.kind == KindString || v.kind == KindSymbol) && v.obj != nil {
 		if s, ok := v.obj.data.(*stringData); ok {
-			return s.value
+			return s.str()
 		}
 	}
 	return v.Inspect()

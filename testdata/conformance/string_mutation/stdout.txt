@@ -1,0 +1,13 @@
+"ab"
+"abc"
+"ab"
+"0123456789"
+10
+"3"
+true
+["hello", "world"]
+"HELLO WORLD"
+"HELLO WORLD"
+"HELLO WORLD"
+"xy"
+"abc"

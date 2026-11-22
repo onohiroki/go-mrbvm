@@ -6,7 +6,12 @@ import (
 )
 
 type stringData struct {
-	value string
+	// raw holds the value when no mutation buffer is active. buffer holds
+	// pending appends so repeated String#<< grows amortised instead of
+	// copying the whole string each time. Use str/set/appendString/len
+	// rather than touching raw directly.
+	raw    string
+	buffer []byte
 }
 
 type arrayData struct {
@@ -330,4 +335,42 @@ func (s *State) classOf(v Value) *Class {
 	default:
 		return s.ObjectClass
 	}
+}
+
+// str returns the string payload, materialising any pending append buffer.
+func (d *stringData) str() string {
+	if d.buffer != nil {
+		d.raw = string(d.buffer)
+		d.buffer = nil
+	}
+	return d.raw
+}
+
+// set replaces the string payload and drops any pending append buffer.
+func (d *stringData) set(value string) {
+	d.raw = value
+	d.buffer = nil
+}
+
+// appendString appends to the string, growing a byte buffer instead of
+// copying the whole payload on every call.
+func (d *stringData) appendString(value string) {
+	if value == "" {
+		return
+	}
+	if d.buffer == nil {
+		buffer := make([]byte, len(d.raw), len(d.raw)+len(value))
+		copy(buffer, d.raw)
+		d.raw = ""
+		d.buffer = buffer
+	}
+	d.buffer = append(d.buffer, value...)
+}
+
+// len returns the current byte length without materialising the buffer.
+func (d *stringData) len() int {
+	if d.buffer != nil {
+		return len(d.buffer)
+	}
+	return len(d.raw)
 }

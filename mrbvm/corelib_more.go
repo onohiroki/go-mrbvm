@@ -1183,11 +1183,12 @@ func (s *State) stringUpcaseBangMethod(ctx context.Context, self Value, args []V
 		return Nil, nil
 	}
 	if data, ok := self.obj.data.(*stringData); ok {
-		updated := strings.ToUpper(data.value)
-		if updated == data.value {
+		current := data.str()
+		updated := strings.ToUpper(current)
+		if updated == current {
 			return Nil, nil
 		}
-		data.value = updated
+		data.set(updated)
 		return self, nil
 	}
 	return Nil, nil
@@ -1198,11 +1199,12 @@ func (s *State) stringDowncaseBangMethod(ctx context.Context, self Value, args [
 		return Nil, nil
 	}
 	if data, ok := self.obj.data.(*stringData); ok {
-		updated := strings.ToLower(data.value)
-		if updated == data.value {
+		current := data.str()
+		updated := strings.ToLower(current)
+		if updated == current {
 			return Nil, nil
 		}
-		data.value = updated
+		data.set(updated)
 		return self, nil
 	}
 	return Nil, nil

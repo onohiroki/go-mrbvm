@@ -2119,7 +2119,7 @@ func valuesEqualSeen(left, right Value, seen map[objectPair]bool) bool {
 				valuesEqualSeen(ldata.low, rdata.low, seen) && valuesEqualSeen(ldata.high, rdata.high, seen)
 		case *stringData:
 			rdata, ok := right.obj.data.(*stringData)
-			return ok && ldata.value == rdata.value
+			return ok && ldata.str() == rdata.str()
 		default:
 			return left.obj == right.obj
 		}

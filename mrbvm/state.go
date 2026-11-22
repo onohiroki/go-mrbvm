@@ -933,7 +933,7 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 		if len(args) > 0 {
 			value = args[0].ToS()
 		}
-		instance = ObjectValue(&Object{class: class, data: &stringData{value: value}})
+		instance = ObjectValue(&Object{class: class, data: &stringData{raw: value}})
 	case s.classIsSubclass(class, s.ExceptionClass):
 		message := ""
 		if len(args) > 0 {
@@ -1121,13 +1121,13 @@ func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
 		case *stringData:
 			if index.Kind() == KindObject && index.obj != nil {
 				if rangeIndex, ok := index.obj.data.(*rangeData); ok {
-					return sliceString(data.value, rangeIndex), nil
+					return sliceString(data.str(), rangeIndex), nil
 				}
 			}
 			if index.Kind() != KindInt {
 				return Nil, fmt.Errorf("mrbvm: string index must be an integer")
 			}
-			runes := []rune(data.value)
+			runes := []rune(data.str())
 			pos := int(index.Int())
 			if pos < 0 {
 				pos += len(runes)
@@ -1832,6 +1832,12 @@ func (s *State) hashSetMethod(ctx context.Context, self Value, args []Value, kw 
 }
 
 func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.Kind() == KindString && self.obj != nil {
+		if data, ok := self.obj.data.(*stringData); ok {
+			return StringValue(data.str()), nil
+		}
+		return self, nil
+	}
 	if self.Kind() != KindObject || self.obj == nil {
 		return self, nil
 	}
@@ -1845,7 +1851,7 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 		copy(entries, data.entries)
 		return HashValue(entries), nil
 	case *stringData:
-		return StringValue(data.value), nil
+		return StringValue(data.str()), nil
 	case *exceptionData:
 		copyData := *data
 		copyData.backtrace = append([]string(nil), data.backtrace...)

@@ -1613,10 +1613,10 @@ func (s *State) stringConcatMethod(ctx context.Context, self Value, args []Value
 		if arg.Kind() == KindInt {
 			addition = string(rune(arg.Int()))
 		}
-		if err := s.checkStringSize(len(data.value) + len(addition)); err != nil {
+		if err := s.checkStringSize(data.len() + len(addition)); err != nil {
 			return Nil, err
 		}
-		data.value += addition
+		data.appendString(addition)
 	}
 	return self, nil
 }
@@ -1629,7 +1629,7 @@ func (s *State) stringReplaceMethod(ctx context.Context, self Value, args []Valu
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a string")
 	}
-	data.value = args[0].String()
+	data.set(args[0].String())
 	return self, nil
 }
 
@@ -2017,7 +2017,7 @@ func hashValue(v Value, seen map[*Object]bool) int64 {
 			}
 			return h
 		case *stringData:
-			return int64(fnvString(data.value, fnvOffset, fnvPrime))
+			return int64(fnvString(data.str(), fnvOffset, fnvPrime))
 		default:
 			return int64(fnvString(fmt.Sprintf("%p", v.obj), fnvOffset, fnvPrime))
 		}
