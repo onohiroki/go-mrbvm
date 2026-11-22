@@ -249,11 +249,23 @@
 
 | ファイル | OK / Total | 備考 |
 | --- | ---: | --- |
-| `hash.rb` | 35 / 57 | カスタムキー、default、merge まで対応 |
+| `hash.rb` | 39 / 57 | カスタムキー、frozen、default、merge まで対応 |
 | `range.rb` | 23 / 26 | 残りは mruby GC テスト用ヘルパー |
-| `class.rb` | 37 / 49 | 高度な可視性・定数が残る |
-| `module.rb` | 25 / 86 | prepend の super 連鎖などが残る |
-| `string.rb` | 56 / 80 | Unicode 変換・inspect が残る |
+| `class.rb` | 39 / 49 | 定数・特異メソッドの一部が残る |
+| `module.rb` | 36 / 86 | 祖先チェーンと可視性を実装、高度な定数探索が残る |
+| `string.rb` | 66 / 80 | Unicode 変換・inspect・byte 単位 length が残る |
+
+追加で以下を解決した。
+
+- メソッド探索を実際の祖先チェーン（prepend / self / include / superclass）
+  に変更し、`super` が定義元モジュールの次から探索するようにした
+- 可視性モードをクラス本体・`class_eval`・`Module.new` ブロックの
+  スコープに限定し、メソッド内や別クラスへの呼び出しへ漏れないようにした
+- private/protected クラスメソッド、`public_class_method`、
+  `extend_object` / `extended`、定数パス探索
+- Hash の frozen 検査と `reject!` / `select!` の nil 返却
+- String の `getbyte` / `byteslice`、補間での `to_s` 呼び出しと例外伝播、
+  `sub` / `gsub` の `\\`` / `\\'` と後方参照、空パターン
 
 conformance は 51 ケースに拡大。
 

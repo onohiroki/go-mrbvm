@@ -385,6 +385,8 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - Hash の `hash` / `eql?` キー、Range の汎用化、Module/Class の
   可視性・include/prepend、String の破壊的メソッド・`to_i`/`to_f`・
   `[]=` を追加
+- 祖先チェーンに基づくメソッド探索と `super`、スコープ付き可視性、
+  Hash の frozen 検査、String の byte API を追加
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態
