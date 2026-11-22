@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/onohiroki/go-mrbvm/sandbox"
 )
@@ -108,13 +109,15 @@ type State struct {
 	arrayIndexBuiltin *method
 	arraySetBuiltin   *method
 
-	frames    []callFrame
-	callDepth int
-	programs  map[*Irep]*irepProgram
-	regFree   [][]Value
-	argFree   [][]Value
-	envFree   []*environment
-	gcEnabled bool
+	frames            []callFrame
+	callDepth         int
+	programs          map[*Irep]*irepProgram
+	stringPlusBuiltin *method
+	objectEqBuiltin   *method
+	regFree           [][]Value
+	argFree           [][]Value
+	envFree           []*environment
+	gcEnabled         bool
 
 	policy             *sandbox.Policy
 	maxInstructions    uint64
@@ -726,6 +729,8 @@ func New(opts Options) *State {
 	s.installRegexpClass()
 	s.installMatchDataClass()
 	s.installFiberClass()
+	s.stringPlusBuiltin = s.StringClass.methods["+"]
+	s.objectEqBuiltin = s.ObjectClass.methods["=="]
 	for name, m := range s.ClassClass.methods {
 		if name == "new" {
 			continue
@@ -1716,7 +1721,17 @@ func (s *State) hashLengthMethod(ctx context.Context, self Value, args []Value, 
 }
 
 func (s *State) stringLengthMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	return IntValue(int64(len([]rune(self.String())))), nil
+	text := self.String()
+	count := 0
+	for len(text) > 0 {
+		_, size := utf8.DecodeRuneInString(text)
+		if size == 0 {
+			break
+		}
+		text = text[size:]
+		count++
+	}
+	return IntValue(int64(count)), nil
 }
 
 func hashHasKey(hash Value, name string) bool {

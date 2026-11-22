@@ -132,6 +132,359 @@ func (s *State) installAdvancedStringLibrary() {
 	class.define("squeeze", s.stringSqueezeMethod)
 	class.define("upcase!", s.stringUpcaseBangMethod)
 	class.define("downcase!", s.stringDowncaseBangMethod)
+	class.define("reverse!", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		data, ok := stringDataOf(self)
+		if !ok {
+			return self, nil
+		}
+		runes := []rune(data.str())
+		for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+			runes[i], runes[j] = runes[j], runes[i]
+		}
+		data.set(string(runes))
+		return self, nil
+	})
+	class.define("capitalize!", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		data, ok := stringDataOf(self)
+		if !ok {
+			return Nil, nil
+		}
+		current := data.str()
+		runes := []rune(strings.ToLower(current))
+		if len(runes) > 0 {
+			runes[0] = unicode.ToUpper(runes[0])
+		}
+		updated := string(runes)
+		if updated == current {
+			return Nil, nil
+		}
+		data.set(updated)
+		return self, nil
+	})
+	class.define("chop!", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		data, ok := stringDataOf(self)
+		if !ok || data.len() == 0 {
+			return Nil, nil
+		}
+		runes := []rune(data.str())
+		data.set(string(runes[:len(runes)-1]))
+		return self, nil
+	})
+	class.define("chomp!", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		data, ok := stringDataOf(self)
+		if !ok {
+			return Nil, nil
+		}
+		current := data.str()
+		suffix := "\n"
+		if len(args) > 0 {
+			suffix = args[0].String()
+		}
+		trimmed := current
+		switch {
+		case suffix == "\n" && strings.HasSuffix(current, "\r\n"):
+			trimmed = current[:len(current)-2]
+		case suffix != "" && strings.HasSuffix(current, suffix):
+			trimmed = current[:len(current)-len(suffix)]
+		}
+		if trimmed == current {
+			return Nil, nil
+		}
+		data.set(trimmed)
+		return self, nil
+	})
+	class.define("sub!", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		result, err := s.stringSubMethod(ctx, self, args, kw, block)
+		if err != nil {
+			return Nil, err
+		}
+		data, ok := stringDataOf(self)
+		if !ok {
+			return Nil, nil
+		}
+		if result.String() == data.str() {
+			return Nil, nil
+		}
+		data.set(result.String())
+		return self, nil
+	})
+	class.define("gsub!", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		result, err := s.stringGsubMethod(ctx, self, args, kw, block)
+		if err != nil {
+			return Nil, err
+		}
+		data, ok := stringDataOf(self)
+		if !ok {
+			return Nil, nil
+		}
+		if result.String() == data.str() {
+			return Nil, nil
+		}
+		data.set(result.String())
+		return self, nil
+	})
+	class.define("intern", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return SymbolValue(self.String()), nil
+	})
+	class.define("to_sym", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return SymbolValue(self.String()), nil
+	})
+	class.define("initialize", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		data, ok := stringDataOf(self)
+		if !ok || len(args) != 1 || args[0].Kind() != KindString {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "initialize expects a String")}
+		}
+		data.set(args[0].String())
+		return self, nil
+	})
+	class.define("initialize_copy", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := stringDataOf(self)
+		if !ok || len(args) != 1 {
+			return Nil, nil
+		}
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		data.set(args[0].String())
+		return self, nil
+	})
+	class.define("each_line", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if block.IsNil() {
+			return s.toEnum(self, "each_line", args), nil
+		}
+		separator := "\n"
+		if len(args) > 0 {
+			separator = args[0].String()
+		}
+		text := self.String()
+		if separator == "" {
+			if _, err := s.callBlock1(ctx, block, StringValue(text), Nil); err != nil {
+				return Nil, err
+			}
+			return self, nil
+		}
+		for len(text) > 0 {
+			index := strings.Index(text, separator)
+			var line string
+			if index < 0 {
+				line = text
+				text = ""
+			} else {
+				line = text[:index+len(separator)]
+				text = text[index+len(separator):]
+			}
+			if _, err := s.callBlock1(ctx, block, StringValue(line), Nil); err != nil {
+				return Nil, err
+			}
+		}
+		return self, nil
+	})
+	class.define("setbyte", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := stringDataOf(self)
+		if !ok || len(args) != 2 || args[0].Kind() != KindInt || args[1].Kind() != KindInt {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "setbyte expects two integers")}
+		}
+		bytes := []byte(data.str())
+		index := int(args[0].Int())
+		if index < 0 {
+			index += len(bytes)
+		}
+		if index < 0 || index >= len(bytes) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
+		}
+		bytes[index] = byte(args[1].Int())
+		data.set(string(bytes))
+		return args[1], nil
+	})
+	class.define("byterindex", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) < 1 {
+			return Nil, nil
+		}
+		text := self.String()
+		offset := len(text)
+		if len(args) > 1 && args[1].Kind() == KindInt {
+			offset = int(args[1].Int())
+			if offset < 0 {
+				offset += len(text)
+			}
+			if offset < 0 || offset > len(text) {
+				return Nil, nil
+			}
+			offset += len(args[0].String())
+		}
+		if offset > len(text) {
+			offset = len(text)
+		}
+		index := strings.LastIndex(text[:offset], args[0].String())
+		if index < 0 {
+			return Nil, nil
+		}
+		return IntValue(int64(index)), nil
+	})
+	class.define("[]=", s.stringSetIndexMethod)
+	class.define("bytesplice", s.stringBytespliceMethod)
+	class.define("+", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 || args[0].Kind() != KindString {
+			name := "nil"
+			if len(args) == 1 {
+				name = s.classOf(args[0]).name
+			}
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+				"no implicit conversion of "+name+" into String")}
+		}
+		return StringValue(self.String() + args[0].String()), nil
+	})
+}
+
+func stringDataOf(self Value) (*stringData, bool) {
+	if self.obj == nil {
+		return nil, false
+	}
+	data, ok := self.obj.data.(*stringData)
+	return data, ok
+}
+
+func (s *State) stringSetIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := stringDataOf(self)
+	if !ok || len(args) < 2 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	runes := []rune(data.str())
+	replacement := args[len(args)-1].String()
+	start, end := 0, 0
+	switch len(args) {
+	case 2:
+		if rangeIndex, ok := rangeDataOf(args[0]); ok {
+			start, end = rangeBounds(rangeIndex, len(runes))
+			end += start
+		} else {
+			index, err := s.indexInteger(args[0])
+			if err != nil {
+				return Nil, err
+			}
+			if index < 0 {
+				index += len(runes)
+			}
+			if index < 0 || index > len(runes) {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
+			}
+			start, end = index, index+1
+			if index == len(runes) {
+				end = index
+			}
+		}
+	case 3:
+		index, err := s.indexInteger(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		length, err := s.indexInteger(args[1])
+		if err != nil {
+			return Nil, err
+		}
+		if index < 0 {
+			index += len(runes)
+		}
+		if index < 0 || index > len(runes) || length < 0 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
+		}
+		start, end = index, index+length
+		if end > len(runes) {
+			end = len(runes)
+		}
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if end > len(runes) {
+		end = len(runes)
+	}
+	result := string(runes[:start]) + replacement + string(runes[end:])
+	data.set(result)
+	return StringValue(replacement), nil
+}
+
+func (s *State) stringBytespliceMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := stringDataOf(self)
+	if !ok || len(args) < 2 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	bytes := []byte(data.str())
+	replacement := args[len(args)-1].String()
+	start, end := 0, 0
+	if len(args) == 2 {
+		if rangeIndex, ok := rangeDataOf(args[0]); ok {
+			start, length := rangeBounds(rangeIndex, len(bytes))
+			end = start + length
+		} else {
+			index, err := s.indexInteger(args[0])
+			if err != nil {
+				return Nil, err
+			}
+			if index < 0 {
+				index += len(bytes)
+			}
+			if index < 0 || index > len(bytes) {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
+			}
+			start, end = index, index+1
+			if index == len(bytes) {
+				end = index
+			}
+		}
+	} else {
+		index, err := s.indexInteger(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		length, err := s.indexInteger(args[1])
+		if err != nil {
+			return Nil, err
+		}
+		if index < 0 {
+			index += len(bytes)
+		}
+		if index < 0 || index > len(bytes) || length < 0 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
+		}
+		start, end = index, index+length
+	}
+	if end > len(bytes) {
+		end = len(bytes)
+	}
+	result := string(bytes[:start]) + replacement + string(bytes[end:])
+	data.set(result)
+	return self, nil
 }
 
 func (s *State) installAdvancedIntegerLibrary() {
@@ -980,11 +1333,33 @@ func (s *State) stringCenterMethod(ctx context.Context, self Value, args []Value
 }
 
 func (s *State) stringRepeatMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	count := intArg(args, 0, 0)
+	if len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	var count int64
+	switch args[0].Kind() {
+	case KindInt:
+		count = args[0].Int()
+	case KindFloat:
+		value := args[0].Float()
+		if math.IsNaN(value) || math.IsInf(value, 0) || value > float64(1<<40) || value < -float64(1<<40) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "float domain error")}
+		}
+		count = int64(value)
+	default:
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+			"no implicit conversion of "+s.classOf(args[0]).name+" into Integer")}
+	}
 	if count < 0 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "negative argument")}
 	}
-	return StringValue(strings.Repeat(self.String(), count)), nil
+	if count > 1<<30 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "string size too big")}
+	}
+	if err := s.checkStringSize(len(self.String()) * int(count)); err != nil {
+		return Nil, err
+	}
+	return StringValue(strings.Repeat(self.String(), int(count))), nil
 }
 
 func (s *State) stringFormatMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {

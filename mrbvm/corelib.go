@@ -343,26 +343,20 @@ func (s *State) installStringLibrary() {
 	class.define("slice", s.stringSliceMethod)
 	class.define("[]", s.stringSliceMethod)
 	class.define("to_i", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		text := strings.TrimSpace(self.String())
-		if index := strings.IndexFunc(text, func(r rune) bool {
-			return !(r == '+' || r == '-' || (r >= '0' && r <= '9') || r == '_')
-		}); index >= 0 {
-			text = text[:index]
+		base := 10
+		if len(args) > 0 {
+			if args[0].Kind() != KindInt {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "base must be an integer")}
+			}
+			base = int(args[0].Int())
+			if base != 0 && (base < 2 || base > 36) {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "invalid radix")}
+			}
 		}
-		text = strings.ReplaceAll(text, "_", "")
-		value, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			return IntValue(0), nil
-		}
-		return IntValue(value), nil
+		return parseRubyInteger(self.String(), base), nil
 	})
 	class.define("to_f", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		text := strings.TrimSpace(self.String())
-		value, err := strconv.ParseFloat(text, 64)
-		if err != nil {
-			return FloatValue(0), nil
-		}
-		return FloatValue(value), nil
+		return FloatValue(parseRubyFloat(self.String())), nil
 	})
 	class.define("chars", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		runes := []rune(self.String())
@@ -1935,38 +1929,83 @@ func (s *State) stringEndWithMethod(ctx context.Context, self Value, args []Valu
 }
 
 func (s *State) stringIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) < 1 {
-		return Nil, nil
+	if len(args) < 1 || len(args) > 2 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	if args[0].Kind() != KindString {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+			"no implicit conversion of "+s.classOf(args[0]).name+" into String")}
 	}
 	text := self.String()
-	offset := 0
-	if len(args) > 1 && args[1].Kind() == KindInt {
-		offset = int(args[1].Int())
-	}
 	runes := []rune(text)
-	if offset < 0 {
-		offset += len(runes)
+	offset := 0
+	if len(args) > 1 {
+		if args[1].Kind() != KindInt {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "offset must be an integer")}
+		}
+		offset = int(args[1].Int())
+		if offset < 0 {
+			offset += len(runes)
+		}
 	}
 	if offset < 0 || offset > len(runes) {
 		return Nil, nil
 	}
-	index := strings.Index(string(runes[offset:]), args[0].String())
+	needle := args[0].String()
+	if needle == "" {
+		return IntValue(int64(offset)), nil
+	}
+	tail := string(runes[offset:])
+	index := strings.Index(tail, needle)
 	if index < 0 {
 		return Nil, nil
 	}
-	return IntValue(int64(offset + len([]rune(string(runes[offset:])[:index])))), nil
+	return IntValue(int64(offset + len([]rune(tail[:index])))), nil
 }
 
 func (s *State) stringRindexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) < 1 {
-		return Nil, nil
+	if len(args) < 1 || len(args) > 2 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	if args[0].Kind() != KindString {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+			"no implicit conversion of "+s.classOf(args[0]).name+" into String")}
 	}
 	text := self.String()
-	index := strings.LastIndex(text, args[0].String())
+	runes := []rune(text)
+	position := len(runes)
+	if len(args) > 1 {
+		if args[1].Kind() != KindInt {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "position must be an integer")}
+		}
+		position = int(args[1].Int())
+		if position < 0 {
+			position += len(runes)
+		}
+	}
+	if position < 0 {
+		return Nil, nil
+	}
+	if position > len(runes) {
+		position = len(runes)
+	}
+	needle := args[0].String()
+	if needle == "" {
+		return IntValue(int64(position)), nil
+	}
+	end := position + len([]rune(needle))
+	if end > len(text) {
+		end = len(text)
+	}
+	index := strings.LastIndex(text[:end], needle)
 	if index < 0 {
 		return Nil, nil
 	}
-	return IntValue(int64(len([]rune(text[:index])))), nil
+	start := len([]rune(text[:index]))
+	if start > position {
+		return Nil, nil
+	}
+	return IntValue(int64(start)), nil
 }
 
 func (s *State) stringSliceMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -2018,6 +2057,9 @@ func sliceString(text string, data *rangeData) Value {
 	}
 	if low < 0 {
 		low = 0
+	}
+	if low > len(runes) {
+		return Nil
 	}
 	if high >= len(runes) {
 		high = len(runes) - 1
@@ -2472,6 +2514,14 @@ func eqlValues(left, right Value) bool {
 }
 
 func eqlValuesSeen(left, right Value, seen map[eqlPair]bool) bool {
+	if leftString, leftOK := stringPayload(left); leftOK {
+		if rightString, rightOK := stringPayload(right); rightOK {
+			if (left.Kind() == KindSymbol) != (right.Kind() == KindSymbol) {
+				return false
+			}
+			return leftString == rightString
+		}
+	}
 	if left.Kind() != right.Kind() {
 		return false
 	}
@@ -2538,4 +2588,166 @@ func (s *State) rubyEqual(ctx context.Context, left, right Value) (bool, error) 
 func rubyReplacement(text string) string {
 	replacer := strings.NewReplacer(`\0`, `${0}`, `\1`, `${1}`, `\2`, `${2}`, `\3`, `${3}`, `\4`, `${4}`, `\5`, `${5}`, `\6`, `${6}`, `\7`, `${7}`, `\8`, `${8}`, `\9`, `${9}`)
 	return replacer.Replace(text)
+}
+
+func digitValue(r rune) int {
+	switch {
+	case r >= '0' && r <= '9':
+		return int(r - '0')
+	case r >= 'a' && r <= 'z':
+		return int(r-'a') + 10
+	case r >= 'A' && r <= 'Z':
+		return int(r-'A') + 10
+	}
+	return -1
+}
+
+func parseRubyInteger(text string, base int) Value {
+	runes := []rune(strings.TrimLeft(text, " \t\r\n\f\v"))
+	position := 0
+	negative := false
+	if position < len(runes) && (runes[position] == '+' || runes[position] == '-') {
+		negative = runes[position] == '-'
+		position++
+	}
+	detected := base
+	if detected == 0 {
+		detected = 10
+		if position+1 < len(runes) && runes[position] == '0' {
+			switch runes[position+1] {
+			case 'x', 'X':
+				detected = 16
+				position += 2
+			case 'b', 'B':
+				detected = 2
+				position += 2
+			case 'o', 'O':
+				detected = 8
+				position += 2
+			default:
+				detected = 8
+				position++
+			}
+		}
+	} else if position+1 < len(runes) && runes[position] == '0' {
+		switch {
+		case detected == 16 && (runes[position+1] == 'x' || runes[position+1] == 'X'):
+			position += 2
+		case detected == 2 && (runes[position+1] == 'b' || runes[position+1] == 'B'):
+			position += 2
+		case detected == 8 && (runes[position+1] == 'o' || runes[position+1] == 'O'):
+			position += 2
+		}
+	}
+	value := new(big.Int)
+	previousDigit := false
+	for position < len(runes) {
+		r := runes[position]
+		if r == '_' {
+			if !previousDigit {
+				break
+			}
+			if position+1 < len(runes) && runes[position+1] == '_' {
+				break
+			}
+			position++
+			continue
+		}
+		digit := digitValue(r)
+		if digit < 0 || digit >= detected {
+			break
+		}
+		value.Mul(value, big.NewInt(int64(detected)))
+		value.Add(value, big.NewInt(int64(digit)))
+		previousDigit = true
+		position++
+	}
+	if negative {
+		value.Neg(value)
+	}
+	return normalizedBigInt(value)
+}
+
+func parseRubyFloat(text string) float64 {
+	runes := []rune(strings.TrimLeft(text, " \t\r\n\f\v"))
+	position := 0
+	var builder strings.Builder
+	if position < len(runes) && (runes[position] == '+' || runes[position] == '-') {
+		builder.WriteRune(runes[position])
+		position++
+	}
+	previousDigit := false
+	for position < len(runes) {
+		r := runes[position]
+		if r == '_' {
+			if !previousDigit {
+				break
+			}
+			if position+1 < len(runes) && runes[position+1] == '_' {
+				break
+			}
+			position++
+			continue
+		}
+		if r < '0' || r > '9' {
+			break
+		}
+		builder.WriteRune(r)
+		previousDigit = true
+		position++
+	}
+	if position < len(runes) && runes[position] == '.' &&
+		position+1 < len(runes) && runes[position+1] >= '0' && runes[position+1] <= '9' {
+		builder.WriteByte('.')
+		position++
+		previousDigit = false
+		for position < len(runes) {
+			r := runes[position]
+			if r == '_' {
+				if !previousDigit {
+					break
+				}
+				if position+1 < len(runes) && runes[position+1] == '_' {
+					break
+				}
+				position++
+				continue
+			}
+			if r < '0' || r > '9' {
+				break
+			}
+			builder.WriteRune(r)
+			previousDigit = true
+			position++
+		}
+	}
+	if position < len(runes) && (runes[position] == 'e' || runes[position] == 'E') {
+		next := position + 1
+		if next < len(runes) && (runes[next] == '+' || runes[next] == '-') {
+			next++
+		}
+		if next < len(runes) && runes[next] >= '0' && runes[next] <= '9' {
+			builder.WriteByte('e')
+			position++
+			if runes[position] == '+' || runes[position] == '-' {
+				builder.WriteRune(runes[position])
+				position++
+			}
+			for position < len(runes) && runes[position] >= '0' && runes[position] <= '9' {
+				builder.WriteRune(runes[position])
+				position++
+			}
+		}
+	}
+	if builder.Len() == 0 || builder.String() == "+" || builder.String() == "-" {
+		return 0
+	}
+	value, err := strconv.ParseFloat(builder.String(), 64)
+	if err != nil {
+		if value != 0 || strings.Contains(err.Error(), "range") {
+			return value
+		}
+		return 0
+	}
+	return value
 }

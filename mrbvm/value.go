@@ -201,13 +201,18 @@ func (v Value) ToS() string {
 	case KindString:
 		return v.String()
 	default:
+		if v.obj != nil {
+			if data, ok := v.obj.data.(*stringData); ok {
+				return data.str()
+			}
+		}
 		return v.Inspect()
 	}
 }
 
 // String returns the string or symbol payload.
 func (v Value) String() string {
-	if (v.kind == KindString || v.kind == KindSymbol) && v.obj != nil {
+	if v.obj != nil {
 		if s, ok := v.obj.data.(*stringData); ok {
 			return s.str()
 		}
@@ -247,6 +252,8 @@ func inspectValue(v Value, seen map[*Object]bool) string {
 				return c.name
 			}
 			switch data := v.obj.data.(type) {
+			case *stringData:
+				return strconv.Quote(data.str())
 			case *arrayData:
 				if seen[v.obj] {
 					return "[...]"

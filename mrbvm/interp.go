@@ -1275,6 +1275,34 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			a := int(in.Operands[0])
 			left := regs[a]
 			right := regs[a+1]
+			needDispatch := false
+			if _, isString := stringPayload(left); isString {
+				if in.Op == bytecode.OpADD {
+					if m, ok := s.classOf(left).lookup("+"); !ok || m != s.stringPlusBuiltin {
+						needDispatch = true
+					}
+				} else if in.Op == bytecode.OpEQ {
+					if m, ok := s.classOf(left).lookup("=="); ok && m != s.objectEqBuiltin {
+						needDispatch = true
+					}
+				}
+			}
+			if needDispatch {
+				result, err := s.call(ctx, left, bytecodeArithName(in.Op), []Value{right}, Nil, Nil)
+				if err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				regs[a] = result
+				continue
+			}
 			if left.Kind() == KindInt && right.Kind() == KindInt {
 				l, r := left.Int(), right.Int()
 				switch in.Op {
@@ -1939,8 +1967,23 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 		}
 		return BoolValue(valuesEqual(recv, args[0])), nil
 	}
-	if result, ok := binaryCall(recv, name, args); ok {
-		return result, nil
+	skipBinary := false
+	if _, isString := stringPayload(recv); isString {
+		switch name {
+		case "+":
+			if m, ok := s.classOf(recv).lookup("+"); !ok || m != s.stringPlusBuiltin {
+				skipBinary = true
+			}
+		case "==":
+			if m, ok := s.classOf(recv).lookup("=="); ok && m != s.objectEqBuiltin {
+				skipBinary = true
+			}
+		}
+	}
+	if !skipBinary {
+		if result, ok := binaryCall(recv, name, args); ok {
+			return result, nil
+		}
 	}
 	if len(args) == 1 && (recv.Kind() == KindInt || recv.Kind() == KindFloat || recv.Kind() == KindBigInt) {
 		switch name {
@@ -2457,7 +2500,28 @@ func valuesEqual(left, right Value) bool {
 	return valuesEqualSeen(left, right, make(map[objectPair]bool))
 }
 
+func stringPayload(v Value) (string, bool) {
+	if v.obj == nil {
+		return "", false
+	}
+	switch v.Kind() {
+	case KindString, KindSymbol, KindObject:
+		if data, ok := v.obj.data.(*stringData); ok {
+			return data.str(), true
+		}
+	}
+	return "", false
+}
+
 func valuesEqualSeen(left, right Value, seen map[objectPair]bool) bool {
+	if leftString, leftOK := stringPayload(left); leftOK {
+		if rightString, rightOK := stringPayload(right); rightOK {
+			if (left.Kind() == KindSymbol) != (right.Kind() == KindSymbol) {
+				return false
+			}
+			return leftString == rightString
+		}
+	}
 	if left.Kind() != right.Kind() {
 		if li, ri, ok := bothBigInts(left, right); ok {
 			return li.Cmp(ri) == 0
