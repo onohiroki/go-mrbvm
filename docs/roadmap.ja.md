@@ -179,11 +179,13 @@
   - C mruby との比較（目安: 約 5x）
   - irep デコード結果の State キャッシュ
   - Hash のプリミティブキー索引（書き込み 148ms → 1.9ms / 5,000 件）
-  - ブロック非生成フレームの register プール
+  - ブロック非生成フレームの register / 引数 / 環境プール
+  - native 呼び出しの引数コピー削減とブロック引数のスタック渡し
+  - `return` の `unwindSignal` 割り当て削減
   - GC shim（`GC.stat` / `count` / `enable?` / `start`）
-  - C mruby 比 約 3.7x
+  - MethodCall の割り当て 41,403 → 1,404 / 回、C mruby 比 約 3.4〜3.7x
 - 次
-  - 引数スライス割り当ての削減
+  - 例外・バックトレースの割り当て削減
   - `Value` のボクシング削減
   - メソッド探索キャッシュ
   - GC shim / `ObjectSpace`

@@ -372,6 +372,8 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - Go マイクロベンチマークと `cmd/vmbench` を追加
 - C mruby 比較スクリプト `benchmark/mixed.rb`
 - irep デコードキャッシュと Hash キー索引を実装
+- register・引数・フレーム環境を自由リストで再利用
+- native 呼び出しの引数コピーと `return` の signal 割り当てを削減
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態
