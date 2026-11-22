@@ -165,7 +165,6 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	var exceptionScopes []exceptionScope
 	s.frames = append(s.frames, frame)
 	defer leaveFrame(s, entryException, regs, frameEnv, pooled)
-	lastLine := 0
 
 	// caught holds the signal that transferred control into an ensure or
 	// rescue handler. OP_EXCEPT turns it back into a register value.
@@ -297,6 +296,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			return sig.jumpTarget, Nil, false, nil
 		case unwindException:
+			if pc, ok := pcByOffset[offset]; ok {
+				if line := lineAt[pc]; line != 0 {
+					s.frames[len(s.frames)-1].line = int(line)
+				}
+			}
 			s.ensureBacktrace(sig.value)
 			if handler := handlerAt(offset); handler != nil {
 				target, err := targetPC(handler)
@@ -364,10 +368,6 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			s.currentException = scope.prev
 		}
 		in := instructions[pc]
-		if line := int(lineAt[pc]); line != 0 && line != lastLine {
-			lastLine = line
-			s.frames[len(s.frames)-1].line = line
-		}
 		switch in.Op {
 		case bytecode.OpNOP:
 			// no-op
@@ -839,6 +839,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			n := int(in.Operands[1])
 			args := s.acquireValues(n)
 			copy(args, regs[a+1:a+1+n])
+			if line := lineAt[pc]; line != 0 {
+				s.frames[len(s.frames)-1].line = int(line)
+			}
 			result, err := s.callBlock(ctx, regs[a], args, Nil)
 			s.releaseValues(args)
 			if err != nil {
@@ -998,6 +1001,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					continue
 				}
 			}
+			if line := lineAt[pc]; line != 0 {
+				s.frames[len(s.frames)-1].line = int(line)
+			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			s.releaseValues(args)
 			if err != nil {
@@ -1097,6 +1103,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if err != nil {
 				return Nil, err
 			}
+			if line := lineAt[pc]; line != 0 {
+				s.frames[len(s.frames)-1].line = int(line)
+			}
 			result, err := s.invoke(ctx, m, self, args, kw, block)
 			s.releaseValues(args)
 			if err != nil {
@@ -1129,6 +1138,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					pc = np - 1
 					continue
 				}
+			}
+			if line := lineAt[pc]; line != 0 {
+				s.frames[len(s.frames)-1].line = int(line)
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], nil, Nil, Nil)
 			if err != nil {
@@ -1195,6 +1207,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					pc = np - 1
 					continue
 				}
+			}
+			if line := lineAt[pc]; line != 0 {
+				s.frames[len(s.frames)-1].line = int(line)
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			s.releaseValues(args)

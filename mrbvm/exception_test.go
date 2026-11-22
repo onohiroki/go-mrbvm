@@ -84,3 +84,44 @@ explode
 		t.Fatalf("error does not include file:line backtrace: %s", text)
 	}
 }
+
+func TestBacktraceLineNumbers(t *testing.T) {
+	ctx := context.Background()
+	source := `def inner
+  raise "boom"
+end
+
+def outer
+  inner
+end
+
+begin
+  outer
+rescue => e
+  puts e.backtrace[0].split(":")[-1]
+  puts e.backtrace[1].split(":")[-1]
+  puts e.backtrace[2].split(":")[-1]
+end
+
+def divide
+  value = 10 / 0
+  value
+end
+
+begin
+  divide
+rescue => e
+  puts e.backtrace[0].split(":")[-1]
+end
+`
+	data := compileSource(t, "backtrace_lines.rb", source)
+	var out bytes.Buffer
+	state := mrbvm.New(mrbvm.Options{Stdout: &out})
+	if _, err := state.Run(ctx, data); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	want := "2\n6\n10\n18\n"
+	if got := out.String(); got != want {
+		t.Fatalf("line numbers mismatch:\n got %q\nwant %q", got, want)
+	}
+}
