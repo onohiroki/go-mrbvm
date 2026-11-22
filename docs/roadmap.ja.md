@@ -185,11 +185,12 @@
   - Hash 索引の開放アドレス化（`Hash#delete` 後の重複 entry も修正）
   - 文字列 `<<` の追記バッファと `String#dup` 修正
   - バックトレース整形のフレームキャッシュ
+  - `Object` とペイロード（String/Array/Hash/Block/Exception）の同一アロケーション
   - GC shim（`GC.stat` / `count` / `enable?` / `start`）
-  - MethodCall の割り当て 41,403 → 1,404 / 回、C mruby 比 約 3.4〜3.6x
+  - MethodCall の割り当て 41,403 → 1,400 / 回、C mruby 比 約 3.5x
 - 次
-  - 例外オブジェクト・文字列リテラルの二重割り当て削減
   - `Value` のボクシング削減
+  - `State` 初期化コスト
   - メソッド探索キャッシュ
   - GC shim / `ObjectSpace`
   - 継続的なベンチマーク CI
