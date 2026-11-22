@@ -69,23 +69,29 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 	return program, nil
 }
 
-func decrementDepth(s *State) {
-	s.callDepth--
-}
-
-func popFrame(s *State, entryException Value) {
+// leaveFrame undoes executeFrame's bookkeeping in one deferred call. Using a
+// single defer keeps the per-frame defer overhead low.
+func leaveFrame(s *State, entryException Value, regs []Value, env *environment, pooled bool) {
 	s.frames = s.frames[:len(s.frames)-1]
 	s.currentException = entryException
+	if pooled {
+		if env != nil {
+			s.releaseEnvironment(env)
+		}
+		s.releaseSlice(&s.regFree, regs)
+	}
+	s.callDepth--
 }
 
 func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, strict bool) (Value, error) {
 	s.callDepth++
-	defer decrementDepth(s)
 	if s.maxDepth > 0 && s.callDepth > s.maxDepth {
+		s.callDepth--
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.SystemStackErrorClass, "stack level too deep")}
 	}
 	program, err := s.program(irep)
 	if err != nil {
+		s.callDepth--
 		return Nil, err
 	}
 	instructions := program.instructions
@@ -99,10 +105,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	// Some mruby compiler outputs use a register just past nregs for
 	// method/class definition results. Keep a small guard area.
 	nregs += 2
+	pooled := !program.hasBlocks
 	var regs []Value
-	if !program.hasBlocks {
+	if pooled {
 		regs = s.acquireSlice(&s.regFree, nregs)
-		defer s.releaseSlice(&s.regFree, regs)
 	} else {
 		regs = make([]Value, nregs)
 	}
@@ -111,13 +117,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	frameKw := kw
 	frameBlock := block
 	var frameEnv *environment
-	if !program.hasBlocks {
+	if pooled {
 		frameEnv = s.acquireEnvironment()
 		frameEnv.parent = capturedEnv
 		frameEnv.regs = regs
 		frameEnv.block = block
 		frameEnv.methodFrame = mid != ""
-		defer s.releaseEnvironment(frameEnv)
 	} else {
 		frameEnv = &environment{parent: capturedEnv, regs: regs, block: block, methodFrame: mid != ""}
 	}
@@ -130,7 +135,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope
 	s.frames = append(s.frames, frame)
-	defer popFrame(s, entryException)
+	defer leaveFrame(s, entryException, regs, frameEnv, pooled)
 	lastLine := 0
 
 	// caught holds the signal that transferred control into an ensure or
