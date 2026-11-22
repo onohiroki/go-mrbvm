@@ -93,6 +93,12 @@ func runFile(ctx context.Context, path, assertSource string, verbose, stress boo
 	program.WriteString("  def self.heap_empty?(ary); ary.empty?; end\n")
 	program.WriteString("  def self.copy_ptr_null?(ary); false; end\n")
 	program.WriteString("end\n")
+	// The official runner links the mruby-test C gem, which provides these
+	// test-support constants. Per-file runs need the same names to exist.
+	program.WriteString("module Mrbtest\n")
+	program.WriteString("  def self.nofree_cstr?; true; end\n")
+	program.WriteString("end\n")
+	program.WriteString("class TestNotImplement; end\n")
 	if verbose {
 		program.WriteString("$mrbtest_verbose = true\n")
 	}

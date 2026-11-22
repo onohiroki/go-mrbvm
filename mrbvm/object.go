@@ -76,6 +76,7 @@ func (o *Object) setIvar(name string, value Value) {
 type Class struct {
 	name                  string
 	super                 *Class
+	lexicalOuter          *Class
 	methods               map[string]*method
 	classMethods          map[string]*method
 	constants             map[string]Value
@@ -101,6 +102,7 @@ type Class struct {
 
 type method struct {
 	owner  *Class
+	cref   *Class
 	name   string
 	native NativeFunc
 	irep   *Irep
@@ -128,6 +130,7 @@ type blockData struct {
 	mid         string
 	owner       *Class
 	visibility  string
+	cref        *Class
 }
 
 // exceptionData is the payload of a Ruby exception object.

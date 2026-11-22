@@ -11,7 +11,7 @@ import (
 )
 
 func (s *State) executeIrep(ctx context.Context, irep *Irep, self Value) (Value, error) {
-	return s.executeFrame(ctx, irep, self, s.ObjectClass, nil, Nil, Nil, nil, "", nil, false)
+	return s.executeFrame(ctx, irep, self, s.ObjectClass, nil, Nil, Nil, nil, "", nil, s.ObjectClass, false)
 }
 
 type irepProgram struct {
@@ -110,7 +110,7 @@ func leaveFrame(s *State, entryException Value, regs []Value, env *environment, 
 	s.callDepth--
 }
 
-func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, strict bool) (Value, error) {
+func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, cref *Class, strict bool) (Value, error) {
 	s.callDepth++
 	if s.maxDepth > 0 && s.callDepth > s.maxDepth {
 		s.callDepth--
@@ -542,6 +542,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					class.singleton = newClass(class.name, nil)
 					class.singleton.singletonOf = class
 					class.singleton.isSingleton = true
+					class.singleton.lexicalOuter = class
 					s.ensureClassObject(class.singleton)
 				}
 				regs[a] = s.classValue(class.singleton)
@@ -615,6 +616,14 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				targetClass.moduleFunction = false
 			}
 			targetClass.defineIrep(name, irep.Reps[childIndex])
+			methodCref := cref
+			if targetClass.singletonOf != nil {
+				if m, ok := targetClass.singletonOf.classMethods[name]; ok {
+					m.cref = targetClass
+				}
+			} else if m, ok := targetClass.methods[name]; ok {
+				m.cref = methodCref
+			}
 			targetClass.moduleFunction = savedModuleFunction
 			regs[a] = SymbolValue(name)
 
@@ -680,6 +689,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			} else {
 				regs[in.Operands[0]] = s.globals[name]
 			}
+			s.definedKind = "global-variable"
+			s.definedSet = true
+			s.definedNil = regs[in.Operands[0]].IsNil()
 		case bytecode.OpSETGV:
 			name := irep.Syms[in.Operands[1]]
 			if name == "$!" {
@@ -689,14 +701,28 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 		case bytecode.OpGETIV:
 			regs[in.Operands[0]] = self.obj.ivar(irep.Syms[in.Operands[1]])
+			s.definedKind = "instance-variable"
+			s.definedSet = true
+			s.definedNil = regs[in.Operands[0]].IsNil()
 		case bytecode.OpSETIV:
 			self.obj.setIvar(irep.Syms[in.Operands[1]], regs[in.Operands[0]])
 		case bytecode.OpOCLASS:
 			regs[in.Operands[0]] = s.classValue(s.ObjectClass)
 		case bytecode.OpGETCV:
-			regs[in.Operands[0]] = lookupClassVar(classVarTarget(targetClass), irep.Syms[in.Operands[1]])
+			varClass := cref
+			if varClass == nil {
+				varClass = targetClass
+			}
+			regs[in.Operands[0]] = lookupClassVar(classVarTarget(varClass), irep.Syms[in.Operands[1]])
+			s.definedKind = "class variable"
+			s.definedSet = true
+			s.definedNil = regs[in.Operands[0]].IsNil()
 		case bytecode.OpSETCV:
-			if err := s.setClassVar(classVarTarget(targetClass), irep.Syms[in.Operands[1]], regs[in.Operands[0]]); err != nil {
+			varClass := cref
+			if varClass == nil {
+				varClass = targetClass
+			}
+			if err := s.setClassVar(classVarTarget(varClass), irep.Syms[in.Operands[1]], regs[in.Operands[0]]); err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
 					return Nil, fatal
@@ -709,17 +735,36 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 		case bytecode.OpGETCONST:
 			name := irep.Syms[in.Operands[1]]
-			if value, ok := s.constants[name]; ok {
+			value, found := lookupLexicalConstant(cref, name)
+			if !found && cref != nil && cref.singletonOf != nil && !strict {
+				for _, current := range classAncestors(cref.singletonOf) {
+					if candidate, ok := current.constants[name]; ok {
+						value, found = candidate, true
+						break
+					}
+				}
+			}
+			if !found {
+				if candidate, ok := s.ObjectClass.constants[name]; ok {
+					value, found = candidate, true
+				}
+			}
+			if !found {
+				if builtin, ok := s.constants[name]; ok {
+					value, found = builtin, true
+				}
+			}
+			if found {
 				regs[in.Operands[0]] = value
-			} else if value, ok := s.ObjectClass.constants[name]; ok {
-				regs[in.Operands[0]] = value
-			} else if targetClass != nil {
-				if value, ok := targetClass.constants[name]; ok {
-					regs[in.Operands[0]] = value
-				} else if constAssignedSoon(instructions, pc, in.Operands[1]) {
-					regs[in.Operands[0]] = Nil
-				} else if hook, found := targetClass.lookupClassMethod("const_missing"); found {
-					missing, err := s.invoke(ctx, hook, s.classValue(targetClass), []Value{SymbolValue(name)}, Nil, Nil)
+				s.definedKind, s.definedSet, s.definedNil = "constant", true, false
+			} else if definedNext(instructions, pc, irep.Syms) {
+				regs[in.Operands[0]] = Nil
+				s.definedKind, s.definedSet, s.definedNil = "constant", true, true
+			} else if constAssignedSoon(instructions, pc, in.Operands[1]) {
+				regs[in.Operands[0]] = Nil
+			} else if cref != nil {
+				if hook, ok := cref.lookupClassMethod("const_missing"); ok {
+					missing, err := s.invoke(ctx, hook, s.classValue(cref), []Value{SymbolValue(name)}, Nil, Nil)
 					if err != nil {
 						np, rv, done, fatal := dispatch(err, in.Offset)
 						if fatal != nil {
@@ -733,7 +778,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					}
 					regs[in.Operands[0]] = missing
 				} else {
-					sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(targetClass))}
+					sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(cref))}
 					np, rv, done, fatal := handle(sig, in.Offset)
 					if fatal != nil {
 						return Nil, fatal
@@ -744,8 +789,6 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					pc = np - 1
 					continue
 				}
-			} else if constAssignedSoon(instructions, pc, in.Operands[1]) {
-				regs[in.Operands[0]] = Nil
 			} else {
 				sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(s.ObjectClass))}
 				np, rv, done, fatal := handle(sig, in.Offset)
@@ -758,17 +801,21 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				pc = np - 1
 				continue
 			}
+
 		case bytecode.OpSETCONST:
 			name := irep.Syms[in.Operands[1]]
-			outer := targetClass
-			if outer == nil {
-				outer = s.ObjectClass
+			constTarget := cref
+			if constTarget == nil {
+				constTarget = targetClass
 			}
-			s.nameClassConstant(regs[in.Operands[0]], outer, name)
-			s.constants[name] = regs[in.Operands[0]]
-			if targetClass != nil {
-				targetClass.constants[name] = regs[in.Operands[0]]
+			if constTarget == nil {
+				constTarget = s.ObjectClass
 			}
+			s.nameClassConstant(regs[in.Operands[0]], constTarget, name)
+			if constTarget == s.ObjectClass {
+				s.constants[name] = regs[in.Operands[0]]
+			}
+			constTarget.constants[name] = regs[in.Operands[0]]
 		case bytecode.OpGETMCNST:
 			a := int(in.Operands[0])
 			class, ok := s.asClass(regs[a])
@@ -777,6 +824,27 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			name := irep.Syms[in.Operands[1]]
 			if owner := constantOwner(class, name); owner != nil && owner.privateConstants[name] {
+				if definedNext(instructions, pc, irep.Syms) {
+					regs[a] = Nil
+					s.definedKind, s.definedSet, s.definedNil = "constant", true, true
+					continue
+				}
+				if hook, found := class.lookupClassMethod("const_missing"); found {
+					missing, err := s.invoke(ctx, hook, s.classValue(class), []Value{SymbolValue(name)}, Nil, Nil)
+					if err != nil {
+						np, rv, done, fatal := dispatch(err, in.Offset)
+						if fatal != nil {
+							return Nil, fatal
+						}
+						if done {
+							return rv, nil
+						}
+						pc = np - 1
+						continue
+					}
+					regs[a] = missing
+					continue
+				}
 				sig := &unwindSignal{kind: unwindException, value: s.newPrivateConstError(name, s.classValue(owner))}
 				np, rv, done, fatal := handle(sig, in.Offset)
 				if fatal != nil {
@@ -790,6 +858,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			value := s.lookupConstant(class, name)
 			if value.IsNil() {
+				if definedNext(instructions, pc, irep.Syms) {
+					regs[a] = Nil
+					s.definedKind, s.definedSet, s.definedNil = "constant", true, true
+					continue
+				}
 				sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(class))}
 				np, rv, done, fatal := handle(sig, in.Offset)
 				if fatal != nil {
@@ -802,6 +875,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				continue
 			}
 			regs[a] = value
+			s.definedKind, s.definedSet, s.definedNil = "constant", true, false
 		case bytecode.OpSETMCNST:
 			a := int(in.Operands[0])
 			class, ok := s.asClass(regs[a+1])
@@ -819,9 +893,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				super = regs[a+1]
 			}
 			outer := regs[a]
-			if outer.IsNil() && targetClass != nil {
-				outer = s.classValue(targetClass)
+			if outer.IsNil() {
+				if targetClass != nil && targetClass.singletonOf != nil {
+					outer = s.classValue(targetClass)
+				} else if cref != nil {
+					outer = s.classValue(cref)
+				} else if targetClass != nil {
+					outer = s.classValue(targetClass)
+				}
 			}
+			outerWasNil := regs[a].IsNil()
 			value, err := s.classOp(ctx, outer, super, irep.Syms[in.Operands[1]], in.Op == bytecode.OpCLASS)
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
@@ -833,6 +914,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				}
 				pc = np - 1
 				continue
+			}
+			if outerWasNil && owner != nil {
+				if created, ok := s.asClass(value); ok {
+					outerCref := cref
+					if outerCref != nil && outerCref.singletonOf != nil {
+						outerCref = outerCref.singletonOf
+					}
+					created.lexicalOuter = outerCref
+				}
 			}
 			regs[a] = value
 
@@ -847,7 +937,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				return Nil, fmt.Errorf("mrbvm: EXEC target is not a class")
 			}
 			savedVisibility := class.defaultVisibility
-			result, err := s.executeFrame(ctx, irep.Reps[childIndex], regs[a], class, nil, Nil, Nil, nil, "", class, false)
+			result, err := s.executeFrame(ctx, irep.Reps[childIndex], regs[a], class, nil, Nil, Nil, nil, "", class, class, false)
 			class.defaultVisibility = savedVisibility
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
@@ -871,6 +961,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			if class, ok := s.asClass(regs[a]); ok {
 				class.defineClassIrep(name, irep.Reps[childIndex])
+				if m, ok := class.classMethods[name]; ok {
+					m.cref = cref
+				}
 			} else if regs[a].obj != nil {
 				obj := regs[a].obj
 				if obj.singleton == nil {
@@ -937,6 +1030,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				mid:         mid,
 				owner:       owner,
 				visibility:  visibility,
+				cref:        cref,
 			})
 		case bytecode.OpBLKPUSH:
 			a := int(in.Operands[0])
@@ -1971,6 +2065,20 @@ func (s *State) setClassVar(class *Class, name string, value Value) error {
 	return nil
 }
 
+func lookupLexicalConstant(cref *Class, name string) (Value, bool) {
+	for current := cref; current != nil; current = current.lexicalOuter {
+		if value, ok := current.constants[name]; ok {
+			return value, true
+		}
+	}
+	for _, current := range classAncestors(cref) {
+		if value, ok := current.constants[name]; ok {
+			return value, true
+		}
+	}
+	return Nil, false
+}
+
 func (s *State) lookupConstant(class *Class, name string) Value {
 	for _, current := range classAncestors(class) {
 		if value, ok := current.constants[name]; ok {
@@ -2186,7 +2294,11 @@ func (s *State) invoke(ctx context.Context, m *method, recv Value, args []Value,
 		// kernelP and DefineFunction.
 		return m.native(ctx, recv, args, kw, block)
 	}
-	return s.executeFrame(ctx, m.irep, recv, m.owner, args, kw, block, nil, m.name, m.owner, true)
+	methodCref := m.cref
+	if methodCref == nil {
+		methodCref = m.owner
+	}
+	return s.executeFrame(ctx, m.irep, recv, m.owner, args, kw, block, nil, m.name, m.owner, methodCref, true)
 }
 
 type binaryOp uint8
@@ -2793,6 +2905,19 @@ func constAssignedSoon(instructions []bytecode.Instruction, pc int, symbol uint3
 		if instructions[i].Op == bytecode.OpSETCONST && instructions[i].Operands[1] == symbol {
 			return true
 		}
+	}
+	return false
+}
+
+func definedNext(instructions []bytecode.Instruction, pc int, syms []string) bool {
+	if pc+1 >= len(instructions) {
+		return false
+	}
+	next := instructions[pc+1]
+	switch next.Op {
+	case bytecode.OpSEND, bytecode.OpSSEND, bytecode.OpSEND0, bytecode.OpSSEND0:
+		index := int(next.Operands[1])
+		return index >= 0 && index < len(syms) && syms[index] == "defined?"
 	}
 	return false
 }

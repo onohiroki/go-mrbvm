@@ -94,11 +94,11 @@ func (s *State) installAdvancedStringLibrary() {
 	class.define("chomp", s.stringChompMethod)
 	class.define("chop", s.stringChopMethod)
 	class.define("capitalize", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		runes := []rune(strings.ToLower(self.String()))
-		if len(runes) > 0 {
-			runes[0] = unicode.ToUpper(runes[0])
+		converted, err := convertCase(self.String(), unicodeLower, true)
+		if err != nil {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, err.Error())}
 		}
-		return StringValue(string(runes)), nil
+		return StringValue(converted), nil
 	})
 	class.define("swapcase", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(strings.Map(func(r rune) rune {
@@ -156,11 +156,10 @@ func (s *State) installAdvancedStringLibrary() {
 			return Nil, nil
 		}
 		current := data.str()
-		runes := []rune(strings.ToLower(current))
-		if len(runes) > 0 {
-			runes[0] = unicode.ToUpper(runes[0])
+		updated, err := convertCase(current, unicodeLower, true)
+		if err != nil {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, err.Error())}
 		}
-		updated := string(runes)
 		if updated == current {
 			return Nil, nil
 		}
@@ -448,12 +447,28 @@ func (s *State) stringSetIndexMethod(ctx context.Context, self Value, args []Val
 		return Nil, err
 	}
 	runes := []rune(data.str())
+	if args[len(args)-1].Kind() != KindString {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion into String")}
+	}
 	replacement := args[len(args)-1].String()
+	if len(args) == 2 && args[0].Kind() == KindString {
+		text := data.str()
+		pattern := args[0].String()
+		index := strings.Index(text, pattern)
+		if index < 0 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "string not matched")}
+		}
+		data.set(text[:index] + replacement + text[index+len(pattern):])
+		return args[len(args)-1], nil
+	}
 	start, end := 0, 0
 	switch len(args) {
 	case 2:
 		if rangeIndex, ok := rangeDataOf(args[0]); ok {
 			start, end = rangeBounds(rangeIndex, len(runes))
+			if start > len(runes) {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
+			}
 			end += start
 		} else {
 			index, err := s.indexInteger(args[0])
@@ -487,12 +502,15 @@ func (s *State) stringSetIndexMethod(ctx context.Context, self Value, args []Val
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
 		}
 		start, end = index, index+length
-		if end > len(runes) {
+		if length > len(runes)-index || end < start {
 			end = len(runes)
 		}
 	}
 	if start < 0 {
 		start = 0
+	}
+	if start > len(runes) {
+		start = len(runes)
 	}
 	if end < start {
 		end = start
@@ -513,12 +531,16 @@ func (s *State) stringBytespliceMethod(ctx context.Context, self Value, args []V
 	if err := s.ensureMutable(self); err != nil {
 		return Nil, err
 	}
-	bytes := []byte(data.str())
-	replacement := args[len(args)-1].String()
+	original := data.str()
+	bytes := []byte(original)
 	start, end := 0, 0
-	if len(args) == 2 {
+	replacementArg := 1
+	var sourceStart, sourceEnd = 0, -1
+	switch {
+	case len(args) == 2:
 		if rangeIndex, ok := rangeDataOf(args[0]); ok {
-			start, length := rangeBounds(rangeIndex, len(bytes))
+			var length int
+			start, length = rangeBounds(rangeIndex, len(bytes))
 			end = start + length
 		} else {
 			index, err := s.indexInteger(args[0])
@@ -532,11 +554,17 @@ func (s *State) stringBytespliceMethod(ctx context.Context, self Value, args []V
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
 			}
 			start, end = index, index+1
-			if index == len(bytes) {
-				end = index
-			}
 		}
-	} else {
+	case len(args) == 3 && isRangeValue(args[0]):
+		rangeIndex, _ := rangeDataOf(args[0])
+		var length int
+		start, length = rangeBounds(rangeIndex, len(bytes))
+		end = start + length
+		replacementArg = 1
+		sourceRange, _ := rangeDataOf(args[2])
+		sourceStart, sourceEnd = rangeBounds(sourceRange, len(bytes))
+		sourceEnd += sourceStart
+	case len(args) >= 3:
 		index, err := s.indexInteger(args[0])
 		if err != nil {
 			return Nil, err
@@ -552,13 +580,65 @@ func (s *State) stringBytespliceMethod(ctx context.Context, self Value, args []V
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
 		}
 		start, end = index, index+length
+		if length > len(bytes)-index || end < start {
+			end = len(bytes)
+		}
+		replacementArg = 2
+		if len(args) == 5 {
+			srcIndex, err := s.indexInteger(args[3])
+			if err != nil {
+				return Nil, err
+			}
+			srcLength, err := s.indexInteger(args[4])
+			if err != nil {
+				return Nil, err
+			}
+			if srcIndex < 0 {
+				srcIndex += len(bytes)
+			}
+			sourceStart, sourceEnd = srcIndex, srcIndex+srcLength
+		}
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > len(bytes) {
+		start = len(bytes)
+	}
+	if end < start {
+		end = start
 	}
 	if end > len(bytes) {
 		end = len(bytes)
 	}
-	result := string(bytes[:start]) + replacement + string(bytes[end:])
+	source := args[replacementArg]
+	if source.Kind() != KindString {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion into String")}
+	}
+	sourceBytes := []byte(source.String())
+	if sourceEnd >= 0 {
+		if sourceStart < 0 {
+			sourceStart = 0
+		}
+		if sourceEnd > len(sourceBytes) {
+			sourceEnd = len(sourceBytes)
+		}
+		if sourceStart > len(sourceBytes) {
+			sourceStart = len(sourceBytes)
+		}
+		if sourceEnd < sourceStart {
+			sourceEnd = sourceStart
+		}
+		sourceBytes = sourceBytes[sourceStart:sourceEnd]
+	}
+	result := string(bytes[:start]) + string(sourceBytes) + string(bytes[end:])
 	data.set(result)
 	return self, nil
+}
+
+func isRangeValue(value Value) bool {
+	_, ok := rangeDataOf(value)
+	return ok
 }
 
 func (s *State) installAdvancedIntegerLibrary() {
@@ -1963,7 +2043,10 @@ func (s *State) stringUpcaseBangMethod(ctx context.Context, self Value, args []V
 	}
 	if data, ok := self.obj.data.(*stringData); ok {
 		current := data.str()
-		updated := strings.ToUpper(current)
+		updated, err := convertCase(current, unicodeUpper, false)
+		if err != nil {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, err.Error())}
+		}
 		if updated == current {
 			return Nil, nil
 		}
@@ -1982,7 +2065,10 @@ func (s *State) stringDowncaseBangMethod(ctx context.Context, self Value, args [
 	}
 	if data, ok := self.obj.data.(*stringData); ok {
 		current := data.str()
-		updated := strings.ToLower(current)
+		updated, err := convertCase(current, unicodeLower, false)
+		if err != nil {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, err.Error())}
+		}
 		if updated == current {
 			return Nil, nil
 		}

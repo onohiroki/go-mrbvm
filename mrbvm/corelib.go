@@ -682,6 +682,25 @@ func (s *State) installIntegerLibrary() {
 
 func (s *State) installObjectLibrary() {
 	class := s.ObjectClass
+	class.define("defined?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if s.definedSet {
+			kind := s.definedKind
+			isNil := s.definedNil
+			s.definedSet = false
+			s.definedKind = ""
+			s.definedNil = false
+			if isNil {
+				return Nil, nil
+			}
+			if kind != "" {
+				return StringValue(kind), nil
+			}
+		}
+		if len(args) == 0 || args[0].IsNil() {
+			return Nil, nil
+		}
+		return StringValue("expression"), nil
+	})
 	class.define("is_a?", s.objectIsAMethod)
 	class.define("kind_of?", s.objectIsAMethod)
 	class.define("instance_of?", s.objectInstanceOfMethod)
@@ -2147,6 +2166,14 @@ func (s *State) stringSliceMethod(ctx context.Context, self Value, args []Value,
 			if data, ok := args[0].obj.data.(*rangeData); ok {
 				return sliceString(self.String(), data), nil
 			}
+		}
+		if args[0].Kind() == KindString {
+			text := self.String()
+			pattern := args[0].String()
+			if strings.Contains(text, pattern) {
+				return StringValue(pattern), nil
+			}
+			return Nil, nil
 		}
 		return s.index(ctx, self, args[0])
 	}

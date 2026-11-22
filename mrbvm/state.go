@@ -133,6 +133,9 @@ type State struct {
 	protectedCount     int
 	classPrivateCount  int
 	strictDepth        int
+	definedKind        string
+	definedSet         bool
+	definedNil         bool
 	maxArraySize       int
 	maxHashSize        int
 	maxStringSize      int
@@ -315,6 +318,7 @@ func New(opts Options) *State {
 					}
 					continue
 				}
+				s.copyInheritedMethod(class, name)
 				if !class.privateMethods[name] {
 					class.privateMethods[name] = true
 					s.privateMethodCount++
@@ -350,6 +354,7 @@ func New(opts Options) *State {
 					delete(class.singletonOf.privateClassMethods, name)
 					continue
 				}
+				s.copyInheritedMethod(class, name)
 				if !class.protectedMethods[name] {
 					class.protectedMethods[name] = true
 					s.protectedCount++
@@ -390,6 +395,7 @@ func New(opts Options) *State {
 					delete(class.singletonOf.protectedClassMethods, name)
 					continue
 				}
+				s.copyInheritedMethod(class, name)
 				if class.privateMethods[name] {
 					delete(class.privateMethods, name)
 					if s.privateMethodCount > 0 || s.protectedCount > 0 || s.classPrivateCount > 0 {
@@ -450,6 +456,8 @@ func New(opts Options) *State {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "constant "+name+" not defined")}
 		}
 		delete(class.constants, name)
+		delete(class.privateConstants, name)
+		delete(class.deprecatedConstants, name)
 		delete(s.constants, name)
 		return value, nil
 	})
@@ -625,16 +633,42 @@ func New(opts Options) *State {
 			return args[0], nil
 		}
 		target := args[0]
-		if target.obj.singleton == nil {
-			original := s.classOf(target)
-			target.obj.singleton = newClass("#<Class:"+original.name+">", original)
-			target.obj.singleton.isSingleton = true
-			s.ensureClassObject(target.obj.singleton)
+		var methodMap map[string]*method
+		var constantScope *Class
+		if class, ok := s.asClass(target); ok {
+			if class.singleton == nil {
+				class.singleton = newClass("#<Class:"+class.name+">", nil)
+				class.singleton.singletonOf = class
+				class.singleton.isSingleton = true
+				class.singleton.lexicalOuter = class
+				s.ensureClassObject(class.singleton)
+			}
+			methodMap = class.classMethods
+			constantScope = class.singleton
+		} else {
+			if target.obj.singleton == nil {
+				original := s.classOf(target)
+				target.obj.singleton = newClass("#<Class:"+original.name+">", original)
+				target.obj.singleton.isSingleton = true
+				s.ensureClassObject(target.obj.singleton)
+			}
+			methodMap = target.obj.singleton.methods
+			constantScope = target.obj.singleton
 		}
 		for name, m := range module.methods {
-			if _, exists := target.obj.singleton.methods[name]; !exists {
-				target.obj.singleton.methods[name] = m
+			if _, exists := methodMap[name]; !exists {
+				methodMap[name] = m
 			}
+		}
+		found := false
+		for _, included := range constantScope.included {
+			if included == module {
+				found = true
+				break
+			}
+		}
+		if !found {
+			constantScope.included = append(constantScope.included, module)
 		}
 		return target, nil
 	})
@@ -666,6 +700,7 @@ func New(opts Options) *State {
 			if class.singleton == nil {
 				class.singleton = newClass("#<Class:"+class.name+">", nil)
 				class.singleton.singletonOf = class
+				class.singleton.lexicalOuter = class
 				s.ensureClassObject(class.singleton)
 			}
 			return s.classValue(class.singleton), nil
@@ -1184,10 +1219,24 @@ func includeModule(class, module *Class) {
 	}
 }
 
+func (s *State) copyInheritedMethod(class *Class, name string) {
+	if _, own := class.methods[name]; own {
+		return
+	}
+	if m, found := class.lookup(name); found {
+		copied := *m
+		copied.owner = class
+		class.methods[name] = &copied
+	}
+}
+
 func (s *State) classMethodDefinedMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
-	if !ok || len(args) < 1 || len(args) > 2 {
+	if !ok || len(args) < 1 {
 		return False, nil
+	}
+	if len(args) > 2 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
 	}
 	if class.singletonOf != nil {
 		if args[0].Kind() != KindString && args[0].Kind() != KindSymbol {
@@ -1864,9 +1913,14 @@ func (s *State) classOp(ctx context.Context, outerValue, superValue Value, name 
 		}
 		class = newClass(className, super)
 		class.isModule = !isClass
+		if outer != s.ObjectClass {
+			class.lexicalOuter = outer
+		}
 		s.ensureClassObject(class)
 		outer.constants[name] = s.classValue(class)
-		s.constants[name] = s.classValue(class)
+		if outer == s.ObjectClass {
+			s.constants[name] = s.classValue(class)
+		}
 		if isClass && super != nil {
 			if _, err := s.call(ctx, s.classValue(super), "inherited", []Value{s.classValue(class)}, Nil, Nil); err != nil {
 				return Nil, err
@@ -2388,11 +2442,19 @@ func (s *State) rangeCaseEqMethod(ctx context.Context, self Value, args []Value,
 }
 
 func (s *State) stringUpcaseMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	return StringValue(strings.ToUpper(self.String())), nil
+	converted, err := convertCase(self.String(), unicodeUpper, false)
+	if err != nil {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, err.Error())}
+	}
+	return StringValue(converted), nil
 }
 
 func (s *State) stringDowncaseMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	return StringValue(strings.ToLower(self.String())), nil
+	converted, err := convertCase(self.String(), unicodeLower, false)
+	if err != nil {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, err.Error())}
+	}
+	return StringValue(converted), nil
 }
 
 func (s *State) rangeToAMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -2456,7 +2518,7 @@ func (s *State) rangeToAMethod(ctx context.Context, self Value, args []Value, kw
 		if math.IsInf(upper, -1) || math.IsNaN(upper) {
 			return ArrayValue(values), nil
 		}
-		if upper >= 9223372036854775808.0 || upper < -9223372036854775808.0 {
+		if upper < -9223372036854775808.0 {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "float domain error")}
 		}
 		if data.exclusive && upper <= -9223372036854775808.0 {
@@ -2464,8 +2526,18 @@ func (s *State) rangeToAMethod(ctx context.Context, self Value, args []Value, kw
 		}
 		var maxInt int64
 		if data.exclusive {
-			maxInt = int64(math.Ceil(upper)) - 1
+			if upper == 9223372036854775808.0 {
+				maxInt = math.MaxInt64
+			} else {
+				if upper > 9223372036854775808.0 {
+					return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "float domain error")}
+				}
+				maxInt = int64(math.Ceil(upper)) - 1
+			}
 		} else {
+			if upper >= 9223372036854775808.0 {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "float domain error")}
+			}
 			maxInt = int64(math.Floor(upper))
 		}
 		for i := start; i <= maxInt; i++ {
@@ -2511,7 +2583,7 @@ func (s *State) Execute(ctx context.Context, irep *Irep) (Value, error) {
 	if irep == nil {
 		return Nil, fmt.Errorf("mrbvm: nil irep")
 	}
-	return s.executeFrame(ctx, irep, s.TopSelf, s.ObjectClass, nil, Nil, Nil, nil, "", nil, false)
+	return s.executeFrame(ctx, irep, s.TopSelf, s.ObjectClass, nil, Nil, Nil, nil, "", nil, s.ObjectClass, false)
 }
 
 const (
@@ -3135,6 +3207,7 @@ func (s *State) duplicateClass(source *Class) *Class {
 	duplicate.undefMethods = copyBoolMap(source.undefMethods)
 	duplicate.privateConstants = copyBoolMap(source.privateConstants)
 	duplicate.deprecatedConstants = copyBoolMap(source.deprecatedConstants)
+	duplicate.lexicalOuter = source.lexicalOuter
 	duplicate.included = append([]*Class(nil), source.included...)
 	duplicate.prepended = append([]*Class(nil), source.prepended...)
 	s.ensureClassObject(duplicate)
@@ -3728,7 +3801,7 @@ func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw
 				data.targetClass.defaultVisibility = data.visibility
 				defer func() { data.targetClass.defaultVisibility = saved }()
 			}
-			return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, block, data.env, data.mid, data.owner, data.strict)
+			return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, block, data.env, data.mid, data.owner, data.cref, data.strict)
 		}
 	}
 	return s.callBlock(ctx, self, args, kw)
@@ -3749,7 +3822,7 @@ func (s *State) callBlockWithSelf(ctx context.Context, block Value, self Value, 
 				}
 				copyData.targetClass = self.obj.singleton
 			}
-			return s.executeFrame(ctx, copyData.irep, self, copyData.targetClass, args, kw, Nil, copyData.env, copyData.mid, copyData.owner, copyData.strict)
+			return s.executeFrame(ctx, copyData.irep, self, copyData.targetClass, args, kw, Nil, copyData.env, copyData.mid, copyData.owner, copyData.cref, copyData.strict)
 		}
 	}
 	return s.callBlock(ctx, block, args, kw)
@@ -3800,7 +3873,7 @@ func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Val
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: value is not a block")
 	}
-	return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, Nil, data.env, data.mid, data.owner, data.strict)
+	return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, Nil, data.env, data.mid, data.owner, data.cref, data.strict)
 }
 
 func (s *State) kernelPrint(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
