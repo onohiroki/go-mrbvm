@@ -1415,6 +1415,17 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[a] = ArrayValue(values)
 		case bytecode.OpRANGE_INC, bytecode.OpRANGE_EXC:
 			a := int(in.Operands[0])
+			if err := s.validateRangeBound(regs[a], regs[a+1]); err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
+			}
 			regs[a] = RangeValue(regs[a], regs[a+1], in.Op == bytecode.OpRANGE_EXC)
 		case bytecode.OpHASH:
 			a := int(in.Operands[0])
@@ -2139,6 +2150,12 @@ func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
 		}
 		return Nil, false
 	case binLt, binLe, binGt, binGe:
+		if left.Kind() == KindFloat && math.IsNaN(left.Float()) {
+			return False, true
+		}
+		if right.Kind() == KindFloat && math.IsNaN(right.Float()) {
+			return False, true
+		}
 		var cmp int
 		if li, ri, ok := bothBigInts(left, right); ok {
 			cmp = li.Cmp(ri)

@@ -720,25 +720,57 @@ func (s *State) installRangeLibrary() {
 		return IntValue(size), nil
 	})
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return StringValue(self.Inspect()), nil
+		return StringValue(formatRange(self, false)), nil
 	})
 	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 {
 			return False, nil
 		}
-		equal, err := s.hashCompare(ctx, self, args[0], true)
-		if err != nil {
-			return Nil, err
+		left, ok := rangeDataOf(self)
+		right, ok2 := rangeDataOf(args[0])
+		if !ok || !ok2 || left.exclusive != right.exclusive {
+			return False, nil
 		}
-		return BoolValue(equal), nil
+		return BoolValue(eqlValues(left.low, right.low) && eqlValues(left.high, right.high)), nil
 	})
 	class.define("hash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(hashValue(self, map[*Object]bool{})), nil
 	})
 	class.define("<=>", s.arrayCompareMethod)
 	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return StringValue(self.Inspect()), nil
+		return StringValue(formatRange(self, true)), nil
 	})
+	class.define("initialize", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "'initialize' called twice")}
+	})
+}
+
+func formatRange(self Value, inspect bool) string {
+	data, ok := rangeDataOf(self)
+	if !ok {
+		return "#<Range>"
+	}
+	op := ".."
+	if data.exclusive {
+		op = "..."
+	}
+	low := ""
+	if !data.low.IsNil() {
+		if inspect {
+			low = data.low.Inspect()
+		} else {
+			low = data.low.ToS()
+		}
+	}
+	high := ""
+	if !data.high.IsNil() {
+		if inspect {
+			high = data.high.Inspect()
+		} else {
+			high = data.high.ToS()
+		}
+	}
+	return low + op + high
 }
 
 func (s *State) rangeTake(data *rangeData, n int, fromEnd bool) (Value, error) {

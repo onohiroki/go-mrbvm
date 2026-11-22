@@ -481,6 +481,7 @@ func New(opts Options) *State {
 	s.RangeClass.define("to_a", s.rangeToAMethod)
 	s.RangeClass.define("===", s.rangeCaseEqMethod)
 	s.RangeClass.define("include?", s.rangeCaseEqMethod)
+	s.RangeClass.define("member?", s.rangeCaseEqMethod)
 	s.RangeClass.define("each", s.rangeEachMethod)
 	s.StringClass.define("length", s.stringLengthMethod)
 	s.StringClass.define("size", s.stringLengthMethod)
@@ -922,6 +923,17 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 			}
 		}
 		return createdValue, nil
+	}
+
+	if class == s.RangeClass {
+		if len(args) < 2 || len(args) > 3 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+		}
+		exclusive := len(args) == 3 && args[2].IsTruthy()
+		if err := s.validateRangeBound(args[0], args[1]); err != nil {
+			return Nil, err
+		}
+		return RangeValue(args[0], args[1], exclusive), nil
 	}
 
 	var instance Value
@@ -1541,16 +1553,79 @@ func (s *State) rangeToAMethod(ctx context.Context, self Value, args []Value, kw
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a range")
 	}
-	low, high := data.low, data.high
-	if low.Kind() != KindInt || high.Kind() != KindInt {
-		return Nil, fmt.Errorf("mrbvm: only integer ranges are supported")
+	if data.high.IsNil() {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "cannot convert endless range to an array")}
 	}
-	var values []Value
-	for i := low.Int(); i <= high.Int(); i++ {
-		if data.exclusive && i == high.Int() {
-			break
+	if data.low.IsNil() {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't iterate")}
+	}
+	values := make([]Value, 0)
+	if data.low.Kind() != KindInt {
+		current := data.low
+		for {
+			cmp, err := s.compareValues(ctx, current, data.high, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			if cmp > 0 || (data.exclusive && cmp == 0) {
+				break
+			}
+			values = append(values, current)
+			next, err := s.call(ctx, current, "succ", nil, Nil, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			if valuesEqual(next, current) {
+				break
+			}
+			current = next
 		}
-		values = append(values, IntValue(i))
+		return ArrayValue(values), nil
+	}
+	start := data.low.Int()
+	switch data.high.Kind() {
+	case KindInt:
+		high := data.high.Int()
+		for i := start; ; i++ {
+			if data.exclusive && i >= high {
+				break
+			}
+			if !data.exclusive && i > high {
+				break
+			}
+			values = append(values, IntValue(i))
+			if i == math.MaxInt64 {
+				break
+			}
+		}
+	case KindFloat:
+		upper := data.high.Float()
+		if math.IsInf(upper, 1) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "cannot convert endless range to an array")}
+		}
+		if math.IsInf(upper, -1) || math.IsNaN(upper) {
+			return ArrayValue(values), nil
+		}
+		if upper >= 9223372036854775808.0 || upper < -9223372036854775808.0 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "float domain error")}
+		}
+		if data.exclusive && upper <= -9223372036854775808.0 {
+			return ArrayValue(values), nil
+		}
+		var maxInt int64
+		if data.exclusive {
+			maxInt = int64(math.Ceil(upper)) - 1
+		} else {
+			maxInt = int64(math.Floor(upper))
+		}
+		for i := start; i <= maxInt; i++ {
+			values = append(values, IntValue(i))
+			if i == math.MaxInt64 {
+				break
+			}
+		}
+	default:
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't iterate")}
 	}
 	return ArrayValue(values), nil
 }
@@ -1901,6 +1976,17 @@ func (s *State) kernelP(ctx context.Context, self Value, args []Value, kw Value,
 	}
 }
 
+func (s *State) validateRangeBound(low, high Value) error {
+	if low.IsNil() || high.IsNil() {
+		return nil
+	}
+	if (low.Kind() == KindFloat && math.IsNaN(low.Float())) ||
+		(high.Kind() == KindFloat && math.IsNaN(high.Float())) {
+		return &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "bad value for range")}
+	}
+	return nil
+}
+
 func (s *State) rangeEachMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
 		return s.toEnum(self, "each", nil), nil
@@ -1912,19 +1998,71 @@ func (s *State) rangeEachMethod(ctx context.Context, self Value, args []Value, k
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a range")
 	}
-	if data.low.Kind() != KindInt || data.high.Kind() != KindInt {
-		return Nil, fmt.Errorf("mrbvm: only integer ranges are supported")
+	if data.low.IsNil() {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't iterate")}
 	}
-	for i := data.low.Int(); i <= data.high.Int(); i++ {
-		if data.exclusive && i == data.high.Int() {
-			break
-		}
-		if _, err := s.callBlock1(ctx, block, IntValue(i), Nil); err != nil {
+	yield := func(value Value) (bool, error) {
+		if _, err := s.callBlock1(ctx, block, value, Nil); err != nil {
 			if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
-				return br.value, nil
+				return false, nil
 			}
+			return false, err
+		}
+		return true, nil
+	}
+	if data.low.Kind() == KindInt && (data.high.IsNil() || data.high.Kind() == KindInt) {
+		high := int64(0)
+		if !data.high.IsNil() {
+			high = data.high.Int()
+		}
+		for i := data.low.Int(); ; i++ {
+			if !data.high.IsNil() {
+				if data.exclusive && i >= high {
+					break
+				}
+				if !data.exclusive && i > high {
+					break
+				}
+			}
+			more, err := yield(IntValue(i))
+			if err != nil {
+				return Nil, err
+			}
+			if !more {
+				break
+			}
+			if i == math.MaxInt64 {
+				break
+			}
+		}
+		return self, nil
+	}
+	current := data.low
+	for {
+		if !data.high.IsNil() {
+			cmp, err := s.compareValues(ctx, current, data.high, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			if cmp > 0 || (data.exclusive && cmp == 0) {
+				break
+			}
+		}
+		more, err := yield(current)
+		if err != nil {
 			return Nil, err
 		}
+		if !more {
+			break
+		}
+		next, err := s.call(ctx, current, "succ", nil, Nil, Nil)
+		if err != nil {
+			return Nil, err
+		}
+		if valuesEqual(next, current) {
+			break
+		}
+		current = next
 	}
 	return self, nil
 }
