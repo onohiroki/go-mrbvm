@@ -409,6 +409,41 @@ func (s *State) installIntegerLibrary() {
 		}
 		return IntValue(a), nil
 	})
+	class.define("lcm", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 || args[0].Kind() != KindInt {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "lcm expects an integer")}
+		}
+		a, b := self.Int(), args[0].Int()
+		if a == 0 || b == 0 {
+			return IntValue(0), nil
+		}
+		absA := new(big.Int).Abs(big.NewInt(a))
+		absB := new(big.Int).Abs(big.NewInt(b))
+		gcd := new(big.Int).GCD(nil, nil, absA, absB)
+		quotient := new(big.Int).Quo(big.NewInt(a), gcd)
+		lcm := new(big.Int).Abs(new(big.Int).Mul(quotient, big.NewInt(b)))
+		if !lcm.IsInt64() {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "integer overflow in lcm")}
+		}
+		return IntValue(lcm.Int64()), nil
+	})
+	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) == 0 {
+			return StringValue(self.ToS()), nil
+		}
+		if len(args) != 1 || args[0].Kind() != KindInt {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "base must be an integer")}
+		}
+		base := int(args[0].Int())
+		if base < 2 || base > 36 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, fmt.Sprintf("invalid radix %d", base))}
+		}
+		if self.Kind() == KindBigInt {
+			value, _ := self.BigInt()
+			return StringValue(value.Text(base)), nil
+		}
+		return StringValue(strconv.FormatInt(self.Int(), base)), nil
+	})
 	class.define("to_i", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return self, nil
 	})

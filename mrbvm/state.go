@@ -85,6 +85,7 @@ type State struct {
 	KeyErrorClass               *Class
 	NotImplementedErrorClass    *Class
 	RangeErrorClass             *Class
+	FloatDomainErrorClass       *Class
 	FrozenErrorClass            *Class
 	SecurityErrorClass          *Class
 	IOErrorClass                *Class
@@ -213,6 +214,7 @@ func New(opts Options) *State {
 	s.KeyErrorClass = newClass("KeyError", s.IndexErrorClass)
 	s.NotImplementedErrorClass = newClass("NotImplementedError", s.StandardErrorClass)
 	s.RangeErrorClass = newClass("RangeError", s.StandardErrorClass)
+	s.FloatDomainErrorClass = newClass("FloatDomainError", s.RangeErrorClass)
 	s.FrozenErrorClass = newClass("FrozenError", s.RuntimeErrorClass)
 	s.RegexpErrorClass = newClass("RegexpError", s.StandardErrorClass)
 	s.SecurityErrorClass = newClass("SecurityError", s.StandardErrorClass)
@@ -235,7 +237,8 @@ func New(opts Options) *State {
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
 		s.NoMatchingPatternErrorClass,
 		s.IndexErrorClass, s.StopIterationClass, s.KeyErrorClass,
-		s.NotImplementedErrorClass, s.RangeErrorClass, s.FrozenErrorClass,
+		s.NotImplementedErrorClass, s.RangeErrorClass, s.FloatDomainErrorClass,
+		s.FrozenErrorClass,
 		s.SecurityErrorClass, s.IOErrorClass, s.FiberErrorClass,
 		s.RegexpErrorClass, s.ScriptErrorClass, s.SyntaxErrorClass,
 		s.SystemStackErrorClass,

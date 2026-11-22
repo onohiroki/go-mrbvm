@@ -1898,6 +1898,14 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 			case KindFloat:
 				return FloatValue(-recv.Float()), nil
 			}
+		case "~":
+			switch recv.Kind() {
+			case KindInt:
+				return IntValue(^recv.Int()), nil
+			case KindBigInt:
+				value, _ := recv.BigInt()
+				return normalizedBigInt(new(big.Int).Not(value)), nil
+			}
 		}
 	}
 	if class, ok := s.asClass(recv); ok {
@@ -1967,6 +1975,9 @@ const (
 	binPow
 	binShl
 	binShr
+	binAnd
+	binOr
+	binXor
 )
 
 var binaryOpsByName = map[string]binaryOp{
@@ -1983,6 +1994,9 @@ var binaryOpsByName = map[string]binaryOp{
 	"**": binPow,
 	"<<": binShl,
 	">>": binShr,
+	"&":  binAnd,
+	"|":  binOr,
+	"^":  binXor,
 }
 
 func binaryOpForName(name string) binaryOp {
@@ -2239,6 +2253,27 @@ func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
 				rem += rf
 			}
 			return FloatValue(rem), true
+		}
+	case binAnd:
+		if li, ri, ok := bothBigInts(left, right); ok {
+			return normalizedBigInt(new(big.Int).And(li, ri)), true
+		}
+		if li, ri, ok := bothInts(left, right); ok {
+			return IntValue(li & ri), true
+		}
+	case binOr:
+		if li, ri, ok := bothBigInts(left, right); ok {
+			return normalizedBigInt(new(big.Int).Or(li, ri)), true
+		}
+		if li, ri, ok := bothInts(left, right); ok {
+			return IntValue(li | ri), true
+		}
+	case binXor:
+		if li, ri, ok := bothBigInts(left, right); ok {
+			return normalizedBigInt(new(big.Int).Xor(li, ri)), true
+		}
+		if li, ri, ok := bothInts(left, right); ok {
+			return IntValue(li ^ ri), true
 		}
 	case binShl:
 		if li, ok := integerBig(left); ok {

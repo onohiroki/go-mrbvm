@@ -201,14 +201,43 @@ func (s *State) installFloatLibrary() {
 	class.define("abs", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return FloatValue(math.Abs(self.Float())), nil
 	})
+	class.define("divmod", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "divmod expects one argument")}
+		}
+		_, divisor, ok := numeric(args[0])
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a number")}
+		}
+		if divisor == 0 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ZeroDivisionErrorClass, "divided by 0")}
+		}
+		dividend := self.Float()
+		quotient := math.Floor(dividend / divisor)
+		remainder := math.Mod(dividend, divisor)
+		if remainder != 0 && (remainder < 0) != (divisor < 0) {
+			remainder += divisor
+		}
+		return ArrayValue([]Value{IntValue(int64(quotient)), FloatValue(remainder)}), nil
+	})
+	class.define("fdiv", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "fdiv expects one argument")}
+		}
+		_, divisor, ok := numeric(args[0])
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a number")}
+		}
+		return FloatValue(self.Float() / divisor), nil
+	})
 	class.define("floor", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return IntValue(int64(math.Floor(self.Float()))), nil
+		return s.floatRoundingMethod(ctx, self, args, floatFloorMode)
 	})
 	class.define("ceil", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return IntValue(int64(math.Ceil(self.Float()))), nil
+		return s.floatRoundingMethod(ctx, self, args, floatCeilMode)
 	})
 	class.define("round", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return IntValue(int64(math.Round(self.Float()))), nil
+		return s.floatRoundingMethod(ctx, self, args, floatRoundMode)
 	})
 	class.define("truncate", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(int64(self.Float())), nil
@@ -1316,6 +1345,9 @@ func (s *State) numericClampMethod(ctx context.Context, self Value, args []Value
 	if len(args) != 2 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "clamp expects a range or two bounds")}
 	}
+	if order, err := s.compareValues(ctx, args[0], args[1], Nil); err == nil && order > 0 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "min argument must be smaller than max argument")}
+	}
 	lower, err := s.compareValues(ctx, self, args[0], Nil)
 	if err != nil {
 		return Nil, err
@@ -1331,6 +1363,90 @@ func (s *State) numericClampMethod(ctx context.Context, self Value, args []Value
 		return args[1], nil
 	}
 	return self, nil
+}
+
+const (
+	floatRoundMode = iota
+	floatFloorMode
+	floatCeilMode
+)
+
+func floatModeValue(value float64, mode int) float64 {
+	switch mode {
+	case floatFloorMode:
+		return math.Floor(value)
+	case floatCeilMode:
+		return math.Ceil(value)
+	default:
+		// Round half away from zero, as mruby does.
+		if value > 0 {
+			floor := math.Floor(value)
+			if value-floor >= 0.5 {
+				return floor + 1
+			}
+			return floor
+		}
+		if value < 0 {
+			ceil := math.Ceil(value)
+			if ceil-value >= 0.5 {
+				return ceil - 1
+			}
+			return ceil
+		}
+		return value
+	}
+}
+
+func (s *State) floatRoundingMethod(ctx context.Context, self Value, args []Value, mode int) (Value, error) {
+	ndigits := 0
+	if len(args) > 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	if len(args) == 1 {
+		if args[0].Kind() != KindInt {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "ndigits must be an integer")}
+		}
+		ndigits = int(args[0].Int())
+	}
+	value := self.Float()
+	if math.IsInf(value, 0) || math.IsNaN(value) {
+		if mode == floatRoundMode && ndigits > 0 {
+			return FloatValue(value), nil
+		}
+		message := "Infinity"
+		switch {
+		case math.IsNaN(value):
+			message = "NaN"
+		case value < 0:
+			message = "-Infinity"
+		}
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.FloatDomainErrorClass, message)}
+	}
+	if ndigits > 0 {
+		if ndigits > 15 {
+			return FloatValue(value), nil
+		}
+		scale := math.Pow(10, float64(ndigits))
+		return FloatValue(floatModeValue(value*scale, mode) / scale), nil
+	}
+	if ndigits < -309 {
+		return IntValue(0), nil
+	}
+	var rounded float64
+	if ndigits == 0 {
+		rounded = floatModeValue(value, mode)
+	} else {
+		scale := math.Pow(10, float64(-ndigits))
+		rounded = floatModeValue(value/scale, mode) * scale
+	}
+	if math.IsInf(rounded, 0) || math.IsNaN(rounded) {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.FloatDomainErrorClass, "Infinity")}
+	}
+	if rounded >= 9223372036854775808.0 || rounded < -9223372036854775808.0 {
+		integer, _ := new(big.Float).SetFloat64(rounded).Int(nil)
+		return normalizedBigInt(integer), nil
+	}
+	return IntValue(int64(rounded)), nil
 }
 
 func intArg(args []Value, index int, fallback int) int {
