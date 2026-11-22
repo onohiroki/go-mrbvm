@@ -19,12 +19,12 @@ go test ./mrbvm -run '^$' -bench . -benchtime=300ms -count=1
 
 | ベンチマーク | 内容 | ns/op | B/op | allocs/op |
 | --- | --- | ---: | ---: | ---: |
-| `BenchmarkArithmeticLoop` | 10,000 回の加算ループ | 2,261,257 | 121,632 | 1,381 |
-| `BenchmarkMethodCall` | 5,000 回のメソッド呼び出し | 1,713,307 | 123,465 | 1,404 |
-| `BenchmarkArrayMap` | 100 要素の `map` × 100 回 | 1,327,416 | 420,252 | 1,913 |
-| `BenchmarkHashWrite` | 5,000 回の Hash 書き込み | 1,819,371 | 2,120,267 | 1,448 |
-| `BenchmarkStringAppend` | 2,000 回の文字列追加 | 708,151 | 2,377,431 | 7,380 |
-| `BenchmarkRescue` | 2,000 回の raise/rescue | 1,004,059 | 826,615 | 17,387 |
+| `BenchmarkArithmeticLoop` | 10,000 回の加算ループ | 2,246,708 | 121,744 | 1,381 |
+| `BenchmarkMethodCall` | 5,000 回のメソッド呼び出し | 1,698,154 | 123,656 | 1,404 |
+| `BenchmarkArrayMap` | 100 要素の `map` × 100 回 | 1,305,805 | 420,410 | 1,913 |
+| `BenchmarkHashWrite` | 5,000 回の Hash 書き込み | 1,494,907 | 1,464,593 | 1,423 |
+| `BenchmarkStringAppend` | 2,000 回の文字列追加 | 528,217 | 319,201 | 5,392 |
+| `BenchmarkRescue` | 2,000 回の raise/rescue | 840,099 | 826,338 | 13,387 |
 
 `ns/op` はマシン負荷で大きく変動するため参考値。`B/op` と `allocs/op` は
 ほぼ安定しており、最適化の効果はこちらで判断しやすい。
@@ -59,15 +59,34 @@ Go の map で引き、それ以外は従来どおり線形比較にフォール
 
 | ベンチマーク | 変更前 allocs/op | 変更後 allocs/op | 変更前 B/op | 変更後 B/op |
 | --- | ---: | ---: | ---: | ---: |
-| `BenchmarkArithmeticLoop` | 31,383 | 1,381 | 843,317 | 121,632 |
-| `BenchmarkMethodCall` | 41,403 | 1,404 | 1,645,429 | 123,465 |
-| `BenchmarkArrayMap` | 62,114 | 1,913 | 2,747,425 | 420,252 |
-| `BenchmarkHashWrite` | 16,450 | 1,448 | 2,602,342 | 2,120,267 |
-| `BenchmarkStringAppend` | 13,383 | 7,380 | 2,523,895 | 2,377,431 |
-| `BenchmarkRescue` | 23,390 | 17,387 | 972,453 | 826,615 |
+| `BenchmarkArithmeticLoop` | 31,383 | 1,381 | 843,317 | 121,744 |
+| `BenchmarkMethodCall` | 41,403 | 1,404 | 1,645,429 | 123,656 |
+| `BenchmarkArrayMap` | 62,114 | 1,913 | 2,747,425 | 420,410 |
+| `BenchmarkHashWrite` | 16,450 | 1,423 | 2,602,342 | 1,464,593 |
+| `BenchmarkStringAppend` | 13,383 | 5,392 | 2,523,895 | 319,201 |
+| `BenchmarkRescue` | 23,390 | 13,387 | 972,453 | 826,338 |
 
 メソッド呼び出しの割り当ては約 29 分の 1、メモリ使用量は約 13 分の 1。
-残る割り当ての大半は例外・バックトレースと `State` の初期化。
+残る割り当ての大半は例外オブジェクト、文字列リテラル、`State` の初期化。
+
+### 改善実績: Hash 索引の開放アドレス化
+
+プリミティブキーの索引を `map[hashKey]int`（キー 40 バイト）から
+2 の冪サイズの `[]int` と線形探索へ変更。索引が対象とする entry 数を
+記録し、長さが変わったら再構築する。これにより `Hash#delete` 後の
+再代入で重複 entry ができる既存バグも解消した。
+
+### 改善実績: 文字列の追記バッファ
+
+`String#<<` は毎回 Go 文字列を連結しており、n バイトの文字列を作ると
+O(n²) バイトを割り当てていた。追記用の `[]byte` バッファに貯め、
+読み出し時にだけ文字列化する。フィールド名を `raw` に変えて直接参照を
+コンパイルエラーにし、`str` / `set` / `appendString` 経由に統一した。
+
+### 改善実績: バックトレース整形のキャッシュ
+
+同じ行から繰り返し raise される場合に備え、フレームごとに整形済みの
+`file:line` を保持する。`BenchmarkRescue` は 17,387 → 13,387 allocs/op。
 
 ## C mruby との比較
 
@@ -86,9 +105,9 @@ go run ./cmd/vmbench -n 5 -compare benchmark/mixed.rb
 結果例:
 
 ```
-go-mrbvm  5 iterations  457.934625ms  10.92 ops/s
-mruby     5 iterations  135.288667ms  36.96 ops/s
-ratio     go-mrbvm/mruby = 3.38x
+go-mrbvm  10 iterations  1.030637833s  9.70 ops/s
+mruby     10 iterations  306.453208ms  32.63 ops/s
+ratio     go-mrbvm/mruby = 3.36x
 ```
 
 C mruby の計測にはプロセス起動時間が含まれるため、比率は目安。
@@ -96,8 +115,8 @@ C mruby の計測にはプロセス起動時間が含まれるため、比率は
 今後の最適化対象:
 
 - `Value` のボクシングとインターフェース割り当て
-- 例外・バックトレースの割り当て（`BenchmarkRescue`）
-- 文字列連結・`Hash` のバッファ成長
+- 例外オブジェクト（`Object` と `exceptionData` の二重割り当て）
+- 文字列リテラル読み込み（`StringValue` の二重割り当て）
 - メソッド探索のインラインキャッシュ
 - `State` 初期化コスト
 

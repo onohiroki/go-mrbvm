@@ -374,6 +374,8 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - irep デコードキャッシュと Hash キー索引を実装
 - register・引数・フレーム環境を自由リストで再利用
 - native 呼び出しの引数コピーと `return` の signal 割り当てを削減
+- Hash 索引を開放アドレス法へ、文字列 `<<` を追記バッファへ変更
+- バックトレース整形をフレーム単位でキャッシュ
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態

@@ -182,10 +182,13 @@
   - ブロック非生成フレームの register / 引数 / 環境プール
   - native 呼び出しの引数コピー削減とブロック引数のスタック渡し
   - `return` の `unwindSignal` 割り当て削減
+  - Hash 索引の開放アドレス化（`Hash#delete` 後の重複 entry も修正）
+  - 文字列 `<<` の追記バッファと `String#dup` 修正
+  - バックトレース整形のフレームキャッシュ
   - GC shim（`GC.stat` / `count` / `enable?` / `start`）
-  - MethodCall の割り当て 41,403 → 1,404 / 回、C mruby 比 約 3.4〜3.7x
+  - MethodCall の割り当て 41,403 → 1,404 / 回、C mruby 比 約 3.4〜3.6x
 - 次
-  - 例外・バックトレースの割り当て削減
+  - 例外オブジェクト・文字列リテラルの二重割り当て削減
   - `Value` のボクシング削減
   - メソッド探索キャッシュ
   - GC shim / `ObjectSpace`
