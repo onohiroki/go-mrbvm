@@ -21,7 +21,7 @@
     両方で成功（`go-mrbc/conformance` パッケージを共有）
   - `Integer` / `Float` の演算子メソッド層、`send` / alias /
     リフレクション、再定義時の opcode フォールバック
-  - 公式テスト **20 ファイル**が成功（`testdata/official.txt`）
+  - 公式テスト **31 ファイル**が成功（`testdata/official.txt`）
   - `Options.LoadMrblib` で 7 ファイルの mrblib subset を opt-in ロード
   - ホスト API（`DefineFunction` / `DefineClass` / `DefineModule` /
     `DefineConst` / `Send` / `Raise`）
@@ -146,7 +146,7 @@
 ### 4.8 VM-4b / VM-4c / VM-5 完了（2026-11-22）
 
 - **VM-4b**
-  - 公式テスト 20 ファイルを manifest 化
+  - 公式テスト 20 ファイルを manifest 化（現在 31）
   - mrblib subset を 7 ファイルへ拡張
 - **VM-4c**
   - backtrace（file:line）、full_message、cause、`$!`、FrozenError
@@ -319,6 +319,31 @@
   残る失敗は Float 比較の精度、整数の丸め、`__ensure` など
   演算子 opcode とは独立した互換ギャップ。
 
+### 4.14 コア言語ギャップの解消（2026-11-22）
+
+公式テストを 22 ファイルから 31 ファイルへ拡大した。追加で通したもの:
+
+`argumenterror` / `basicobject` / `bs_block` / `ensure` / `enumerable` /
+`integer` / `float` / `methods` / `proc` / `shareable_constant` / `symbol`
+
+- `Proc#[]` / `arity` / `==` / `hash`、`&obj` の `to_proc` 変換
+- `Symbol#to_sym`、`BasicObject#defined?`
+- `Enumerable#grep`、`detect`/`find` の ifnone、`include?` の同一性比較
+- `method_added` / `singleton_method_added`、存在しない `undef` の NameError
+- lambda / method を跨ぐ `return` と ensure、nested block の post 引数
+- `defined?` がメソッド呼び出し・`yield`・`super` を評価しないこと
+- 定数代入後の `defined?` が `"assignment"` を返すこと
+- Int/Float の厳密比較、Integer の丸め、Float の `to_i`/`round` 境界
+- 実行時 NaN に一意の payload を与え、`equal?` / `object_id` を区別
+
+残る失敗は次のカテゴリに限定している:
+
+- `autoload`（`require` 連携）と `numeric#step`
+- `string` の Encoding byte/char 差
+- Hash の再入・カーソル、GC 内部
+- `env` / `gc` / `range` の GC テスト、`sysfail` / `vformat` の C gem ヘルパ
+- `codegen` / `syntax` の 4.0.0 以降の構文
+
 conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケージで共有）。除外している 3 系統（mruby GC 内部、
 Encoding の byte/char、Hash 再入カーソル）は引き続き対象外。
 
@@ -355,7 +380,7 @@ go run ./cmd/mrbtest <成功している公式テスト>
 ## 7. マイルストーン目安
 
 - **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
-- **VM-4b**: 公式テスト 20 ファイル（達成）
+- **VM-4b**: 公式テスト 31 ファイル（達成）
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
 - **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 完了、デバッガが残り

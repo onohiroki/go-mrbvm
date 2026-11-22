@@ -134,7 +134,7 @@ go run ./cmd/vmcompat -corpus
 go run ./cmd/mrbtest -manifest testdata/official.txt
 ```
 
-The manifest currently covers **20** official test files, including
+The manifest currently covers **31** official test files, including
 `array`, `object`, `superclass`, `version`, `platform`, the exception-class
 tests, `nameerror`, and `nomethoderror`.
 
