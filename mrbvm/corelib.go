@@ -332,6 +332,9 @@ func (s *State) installIntegerLibrary() {
 			return normalizedBigInt(new(big.Int).Abs(value)), nil
 		}
 		value := self.Int()
+		if value == math.MinInt64 {
+			return normalizedBigInt(new(big.Int).Neg(big.NewInt(value))), nil
+		}
 		if value < 0 {
 			value = -value
 		}
@@ -361,13 +364,34 @@ func (s *State) installIntegerLibrary() {
 		return BoolValue(self.Kind() == KindInt && self.Int() < 0), nil
 	})
 	class.define("succ", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return IntValue(self.Int() + 1), nil
+		if self.Kind() == KindBigInt {
+			value, _ := self.BigInt()
+			return normalizedBigInt(new(big.Int).Add(value, big.NewInt(1))), nil
+		}
+		if value, ok := addInt64(self.Int(), 1); ok {
+			return IntValue(value), nil
+		}
+		return normalizedBigInt(new(big.Int).Add(big.NewInt(self.Int()), big.NewInt(1))), nil
 	})
 	class.define("next", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return IntValue(self.Int() + 1), nil
+		if self.Kind() == KindBigInt {
+			value, _ := self.BigInt()
+			return normalizedBigInt(new(big.Int).Add(value, big.NewInt(1))), nil
+		}
+		if value, ok := addInt64(self.Int(), 1); ok {
+			return IntValue(value), nil
+		}
+		return normalizedBigInt(new(big.Int).Add(big.NewInt(self.Int()), big.NewInt(1))), nil
 	})
 	class.define("pred", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return IntValue(self.Int() - 1), nil
+		if self.Kind() == KindBigInt {
+			value, _ := self.BigInt()
+			return normalizedBigInt(new(big.Int).Sub(value, big.NewInt(1))), nil
+		}
+		if value, ok := subInt64(self.Int(), 1); ok {
+			return IntValue(value), nil
+		}
+		return normalizedBigInt(new(big.Int).Sub(big.NewInt(self.Int()), big.NewInt(1))), nil
 	})
 	class.define("gcd", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 || args[0].Kind() != KindInt {

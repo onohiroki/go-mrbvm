@@ -1279,16 +1279,22 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				l, r := left.Int(), right.Int()
 				switch in.Op {
 				case bytecode.OpADD:
-					regs[a] = IntValue(l + r)
-					continue
+					if sum, ok := addInt64(l, r); ok {
+						regs[a] = IntValue(sum)
+						continue
+					}
 				case bytecode.OpSUB:
-					regs[a] = IntValue(l - r)
-					continue
+					if diff, ok := subInt64(l, r); ok {
+						regs[a] = IntValue(diff)
+						continue
+					}
 				case bytecode.OpMUL:
-					regs[a] = IntValue(l * r)
-					continue
+					if product, ok := mulInt64(l, r); ok {
+						regs[a] = IntValue(product)
+						continue
+					}
 				case bytecode.OpDIV:
-					if r != 0 {
+					if r != 0 && !(l == math.MinInt64 && r == -1) {
 						regs[a] = IntValue(floorDiv(l, r))
 						continue
 					}
@@ -1331,11 +1337,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if left := regs[a]; left.Kind() == KindInt {
 				immediate := int64(in.Operands[1])
 				if in.Op == bytecode.OpADDI {
-					regs[a] = IntValue(left.Int() + immediate)
+					if sum, ok := addInt64(left.Int(), immediate); ok {
+						regs[a] = IntValue(sum)
+						continue
+					}
 				} else {
-					regs[a] = IntValue(left.Int() - immediate)
+					if diff, ok := subInt64(left.Int(), immediate); ok {
+						regs[a] = IntValue(diff)
+						continue
+					}
 				}
-				continue
 			}
 			name := "+"
 			if in.Op == bytecode.OpSUBI {
@@ -1364,11 +1375,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if left := regs[a]; left.Kind() == KindInt {
 				immediate := int64(in.Operands[2])
 				if in.Op == bytecode.OpADDILV {
-					regs[a] = IntValue(left.Int() + immediate)
+					if sum, ok := addInt64(left.Int(), immediate); ok {
+						regs[a] = IntValue(sum)
+						continue
+					}
 				} else {
-					regs[a] = IntValue(left.Int() - immediate)
+					if diff, ok := subInt64(left.Int(), immediate); ok {
+						regs[a] = IntValue(diff)
+						continue
+					}
 				}
-				continue
 			}
 			name := "+"
 			if in.Op == bytecode.OpSUBILV {
@@ -1871,7 +1887,11 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 		case "-@":
 			switch recv.Kind() {
 			case KindInt:
-				return IntValue(-recv.Int()), nil
+				value := recv.Int()
+				if value == math.MinInt64 {
+					return normalizedBigInt(new(big.Int).Neg(big.NewInt(value))), nil
+				}
+				return IntValue(-value), nil
 			case KindBigInt:
 				value, _ := recv.BigInt()
 				return normalizedBigInt(new(big.Int).Neg(value)), nil
@@ -1976,19 +1996,58 @@ func binaryCall(recv Value, name string, args []Value) (Value, bool) {
 	return binaryValue(recv, name, args[0])
 }
 
+func addInt64(a, b int64) (int64, bool) {
+	sum := a + b
+	if (b > 0 && sum < a) || (b < 0 && sum > a) {
+		return 0, false
+	}
+	return sum, true
+}
+
+func subInt64(a, b int64) (int64, bool) {
+	diff := a - b
+	if (b < 0 && diff < a) || (b > 0 && diff > a) {
+		return 0, false
+	}
+	return diff, true
+}
+
+func mulInt64(a, b int64) (int64, bool) {
+	if a == 0 || b == 0 {
+		return 0, true
+	}
+	if (a == math.MinInt64 && b == -1) || (b == math.MinInt64 && a == -1) {
+		return 0, false
+	}
+	product := a * b
+	if product/b != a {
+		return 0, false
+	}
+	return product, true
+}
+
 // intBinaryOp evaluates the common integer/integer operators directly.
 // Unsigned shifts and exponentiation fall back to the general path because
 // they can produce big integers.
 func intBinaryOp(left, right int64, op binaryOp) (Value, bool) {
 	switch op {
 	case binAdd:
-		return IntValue(left + right), true
+		if sum, ok := addInt64(left, right); ok {
+			return IntValue(sum), true
+		}
+		return Nil, false
 	case binSub:
-		return IntValue(left - right), true
+		if diff, ok := subInt64(left, right); ok {
+			return IntValue(diff), true
+		}
+		return Nil, false
 	case binMul:
-		return IntValue(left * right), true
+		if product, ok := mulInt64(left, right); ok {
+			return IntValue(product), true
+		}
+		return Nil, false
 	case binDiv:
-		if right == 0 {
+		if right == 0 || (left == math.MinInt64 && right == -1) {
 			return Nil, false
 		}
 		return IntValue(floorDiv(left, right)), true
@@ -2116,7 +2175,10 @@ func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
 			return normalizedBigInt(new(big.Int).Add(li, ri)), true
 		}
 		if li, ri, ok := bothInts(left, right); ok {
-			return IntValue(li + ri), true
+			if sum, ok := addInt64(li, ri); ok {
+				return IntValue(sum), true
+			}
+			return normalizedBigInt(new(big.Int).Add(big.NewInt(li), big.NewInt(ri))), true
 		}
 		if lf, rf, ok := bothFloats(left, right); ok {
 			return FloatValue(lf + rf), true
@@ -2126,7 +2188,10 @@ func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
 			return normalizedBigInt(new(big.Int).Sub(li, ri)), true
 		}
 		if li, ri, ok := bothInts(left, right); ok {
-			return IntValue(li - ri), true
+			if diff, ok := subInt64(li, ri); ok {
+				return IntValue(diff), true
+			}
+			return normalizedBigInt(new(big.Int).Sub(big.NewInt(li), big.NewInt(ri))), true
 		}
 		if lf, rf, ok := bothFloats(left, right); ok {
 			return FloatValue(lf - rf), true
@@ -2136,7 +2201,10 @@ func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
 			return normalizedBigInt(new(big.Int).Mul(li, ri)), true
 		}
 		if li, ri, ok := bothInts(left, right); ok {
-			return IntValue(li * ri), true
+			if product, ok := mulInt64(li, ri); ok {
+				return IntValue(product), true
+			}
+			return normalizedBigInt(new(big.Int).Mul(big.NewInt(li), big.NewInt(ri))), true
 		}
 		if lf, rf, ok := bothFloats(left, right); ok {
 			return FloatValue(lf * rf), true
@@ -2210,6 +2278,9 @@ func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
 		if li, ri, ok := bothInts(left, right); ok {
 			if ri == 0 {
 				return Nil, false
+			}
+			if li == math.MinInt64 && ri == -1 {
+				return normalizedBigInt(new(big.Int).Quo(big.NewInt(li), big.NewInt(ri))), true
 			}
 			return IntValue(floorDiv(li, ri)), true
 		}
