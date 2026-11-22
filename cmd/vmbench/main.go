@@ -17,11 +17,35 @@ import (
 	"github.com/onohiroki/go-mrbvm/mrbvm"
 )
 
+// compile produces RITE bytecode with go-mrbc or the reference mrbc.
+func compile(ctx context.Context, path string, official bool) ([]byte, error) {
+	if !official {
+		return mrbc.CompileFile(ctx, path, mrbc.Options{})
+	}
+	mrbcPath, err := localtoolchain.Find("mrbc")
+	if err != nil {
+		return nil, fmt.Errorf("vmbench: reference mrbc not found: %w", err)
+	}
+	file, err := os.CreateTemp("", "vmbench-*.mrb")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(file.Name())
+	file.Close()
+	command := exec.Command(mrbcPath, "-o", file.Name(), path)
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(file.Name())
+}
+
 func main() {
 	iterations := flag.Int("n", 5, "number of iterations")
 	compare := flag.Bool("compare", false, "compare with the reference mruby")
 	cpuProfile := flag.String("cpuprofile", "", "write a CPU profile to this file")
 	memProfile := flag.String("memprofile", "", "write a heap profile to this file")
+	useMrbc := flag.Bool("mrbc", false, "compile with the reference mrbc instead of go-mrbc")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: vmbench [-n N] [-compare] file.rb")
 		flag.PrintDefaults()
@@ -33,7 +57,7 @@ func main() {
 	}
 	path := flag.Arg(0)
 	ctx := context.Background()
-	data, err := mrbc.CompileFile(ctx, path, mrbc.Options{})
+	data, err := compile(ctx, path, *useMrbc)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
