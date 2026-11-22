@@ -22,9 +22,11 @@ type irepProgram struct {
 }
 
 type callFrame struct {
-	file   string
-	line   int
-	method string
+	file        string
+	line        int
+	method      string
+	lineText    string
+	lineTextFor int
 }
 
 type exceptionScope struct {

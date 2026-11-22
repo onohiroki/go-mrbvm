@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2003,16 +2004,18 @@ func (s *State) captureBacktrace() []string {
 	}
 	lines := make([]string, 0, len(s.frames))
 	for i := len(s.frames) - 1; i >= 0; i-- {
-		frame := s.frames[i]
-		file := frame.file
-		if file == "" {
-			file = "unknown"
+		// Frames usually raise from the same line repeatedly, so cache the
+		// formatted file:line instead of building it on every exception.
+		frame := &s.frames[i]
+		if frame.lineText == "" || frame.lineTextFor != frame.line {
+			file := frame.file
+			if file == "" {
+				file = "unknown"
+			}
+			frame.lineText = file + ":" + strconv.Itoa(frame.line)
+			frame.lineTextFor = frame.line
 		}
-		method := frame.method
-		if method == "" {
-			method = "<main>"
-		}
-		lines = append(lines, fmt.Sprintf("%s:%d", file, frame.line))
+		lines = append(lines, frame.lineText)
 	}
 	return lines
 }
