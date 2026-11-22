@@ -336,7 +336,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 ### VM-4b / VM-4c / VM-5（2026-11-22 完了）
 
 - **VM-4b**
-  - 公式テスト 32 ファイルを `testdata/official.txt` に固定
+  - 公式テスト 33 ファイルを `testdata/official.txt` に固定
   - mrblib subset を `10error` / `compar` / `enum` / `array` / `hash` /
     `string` / `range` に拡張
 - **VM-4c**
@@ -407,8 +407,8 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   し、再定義時は opcode と `SEND` 高速パスを `s.call` にフォールバック。
   `TestOperatorRedefinition` で CRuby / 開発ツリーの挙動を固定
 - Phase 10（コア言語）: Proc/Enumerable/BasicObject/defined?/メソッドフック/
-  block 引数/ensure/Int・Float の厳密比較を実装し、公式テストを 32 ファイルへ
-  拡大。残りは Encoding、GC/REnv/C gem ヘルパ、autoload、Numeric#step、
+  block 引数/ensure/Int・Float の厳密比較/Numeric#step/autoload を実装し、
+  公式テストを 33 ファイルへ拡大。残りは Encoding、GC/REnv/C gem ヘルパ、
   4.0.0 以降の構文
 - `Float::NAN == Float::NAN` は 4.0.0 の `OP_EQ` が `true`、開発ツリーと
   CRuby が `false`。共有コーパスはこの参照バグを表明せず、VM は CRuby に従う

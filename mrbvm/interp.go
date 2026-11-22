@@ -780,6 +780,27 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				}
 			}
 			if !found {
+				if owner, path, pending := findAutoloadLexical(cref, name); pending {
+					if definedNext(instructions, pc, irep.Syms) {
+						regs[in.Operands[0]] = Nil
+						s.definedKind, s.definedSet, s.definedNil = "constant", true, false
+						continue
+					}
+					if err := s.resolveAutoload(ctx, owner, name, path); err != nil {
+						np, rv, done, fatal := dispatch(err, in.Offset)
+						if fatal != nil {
+							return Nil, fatal
+						}
+						if done {
+							return rv, nil
+						}
+						pc = np - 1
+						continue
+					}
+					value, found = lookupLexicalConstant(cref, name)
+				}
+			}
+			if !found {
 				if candidate, ok := s.ObjectClass.constants[name]; ok {
 					value, found = candidate, true
 				}
@@ -851,6 +872,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				s.constants[name] = regs[in.Operands[0]]
 			}
 			constTarget.constants[name] = regs[in.Operands[0]]
+			delete(constTarget.autoloads, name)
 			s.definedKind, s.definedSet, s.definedNil = "assignment", true, false
 		case bytecode.OpGETMCNST:
 			a := int(in.Operands[0])
@@ -892,8 +914,29 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				pc = np - 1
 				continue
 			}
-			value := s.lookupConstant(class, name)
-			if value.IsNil() {
+			value, found := findConstantValue(class, name, true)
+			if !found {
+				if owner, path, pending := findAutoload(class, name, true); pending {
+					if definedNext(instructions, pc, irep.Syms) {
+						regs[a] = Nil
+						s.definedKind, s.definedSet, s.definedNil = "constant", true, false
+						continue
+					}
+					if err := s.resolveAutoload(ctx, owner, name, path); err != nil {
+						np, rv, done, fatal := dispatch(err, in.Offset)
+						if fatal != nil {
+							return Nil, fatal
+						}
+						if done {
+							return rv, nil
+						}
+						pc = np - 1
+						continue
+					}
+					value, found = findConstantValue(class, name, true)
+				}
+			}
+			if !found {
 				if definedNext(instructions, pc, irep.Syms) {
 					regs[a] = Nil
 					s.definedKind, s.definedSet, s.definedNil = "constant", true, true
@@ -921,6 +964,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			name := irep.Syms[in.Operands[1]]
 			s.nameClassConstant(regs[a], class, name)
 			class.constants[name] = regs[a]
+			delete(class.autoloads, name)
 			s.definedKind, s.definedSet, s.definedNil = "assignment", true, false
 
 		case bytecode.OpMODULE, bytecode.OpCLASS:
@@ -2233,6 +2277,22 @@ func lookupLexicalConstant(cref *Class, name string) (Value, bool) {
 		}
 	}
 	return Nil, false
+}
+
+func findAutoloadLexical(cref *Class, name string) (*Class, string, bool) {
+	for current := cref; current != nil; current = current.lexicalOuter {
+		if path, ok := current.autoloads[name]; ok {
+			return current, path, true
+		}
+	}
+	if cref != nil {
+		for _, current := range classAncestors(cref) {
+			if path, ok := current.autoloads[name]; ok {
+				return current, path, true
+			}
+		}
+	}
+	return nil, "", false
 }
 
 func (s *State) lookupConstant(class *Class, name string) Value {

@@ -32,3 +32,4 @@ proc.rb
 shareable_constant.rb
 symbol.rb
 numeric.rb
+autoload.rb

@@ -293,6 +293,8 @@ func New(opts Options) *State {
 		}
 		return StringValue(classDisplayName(class)), nil
 	})
+	s.ModuleClass.define("autoload", s.moduleAutoloadMethod)
+	s.ModuleClass.define("autoload?", s.moduleAutoloadQueryMethod)
 	s.ClassClass.define("include", s.classIncludeMethod)
 	s.ClassClass.define("include?", s.classIncludePredicateMethod)
 	s.ClassClass.define("class_eval", s.classEvalMethod)
@@ -458,6 +460,10 @@ func New(opts Options) *State {
 		}
 		value, found := class.constants[name]
 		if !found {
+			if _, pending := class.autoloads[name]; pending {
+				delete(class.autoloads, name)
+				return Nil, nil
+			}
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "constant "+name+" not defined")}
 		}
 		delete(class.constants, name)
@@ -1050,7 +1056,7 @@ func validConstSegment(name string) bool {
 	return true
 }
 
-func (s *State) constLookupPath(ctx context.Context, root *Class, path string, inherit bool) (Value, bool, error) {
+func (s *State) constLookupPath(ctx context.Context, root *Class, path string, inherit, loadAutoload bool) (Value, bool, error) {
 	if strings.HasPrefix(path, "::") {
 		root = s.ObjectClass
 		path = strings.TrimPrefix(path, "::")
@@ -1063,20 +1069,24 @@ func (s *State) constLookupPath(ctx context.Context, root *Class, path string, i
 	}
 	current := root
 	for index, segment := range segments {
-		var value Value
-		found := false
 		searchInherit := inherit || index > 0
-		if searchInherit {
-			for _, ancestor := range classAncestors(current) {
-				if candidate, ok := ancestor.constants[segment]; ok {
-					value = candidate
-					found = true
-					break
+		value, found := findConstantValue(current, segment, searchInherit)
+		if !found {
+			owner, autoloadPath, pending := findAutoload(current, segment, searchInherit)
+			if pending {
+				if !loadAutoload {
+					// const_defined? answers true for a pending autoload even
+					// though nothing has been loaded yet.
+					if index == len(segments)-1 {
+						return Nil, true, nil
+					}
+					return Nil, true, nil
 				}
+				if err := s.resolveAutoload(ctx, owner, segment, autoloadPath); err != nil {
+					return Nil, false, err
+				}
+				value, found = findConstantValue(current, segment, searchInherit)
 			}
-		} else if candidate, ok := current.constants[segment]; ok {
-			value = candidate
-			found = true
 		}
 		if !found {
 			return Nil, false, nil
@@ -1091,6 +1101,123 @@ func (s *State) constLookupPath(ctx context.Context, root *Class, path string, i
 		current = next
 	}
 	return Nil, false, nil
+}
+
+func findConstantValue(class *Class, name string, inherit bool) (Value, bool) {
+	if class == nil {
+		return Nil, false
+	}
+	if inherit {
+		for _, current := range classAncestors(class) {
+			if value, ok := current.constants[name]; ok {
+				return value, true
+			}
+		}
+		return Nil, false
+	}
+	value, ok := class.constants[name]
+	return value, ok
+}
+
+func findAutoload(class *Class, name string, inherit bool) (*Class, string, bool) {
+	if class == nil {
+		return nil, "", false
+	}
+	if inherit {
+		for _, current := range classAncestors(class) {
+			if path, ok := current.autoloads[name]; ok {
+				return current, path, true
+			}
+		}
+		return nil, "", false
+	}
+	if path, ok := class.autoloads[name]; ok {
+		return class, path, true
+	}
+	return nil, "", false
+}
+
+func (s *State) moduleAutoloadMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok || len(args) != 2 {
+		return Nil, argumentCountError(s, len(args), "2")
+	}
+	if args[0].Kind() != KindString && args[0].Kind() != KindSymbol {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "constant name must be a Symbol or String")}
+	}
+	name := args[0].String()
+	if !validConstSegment(name) {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "wrong constant name "+name)}
+	}
+	if args[1].Kind() != KindString {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "autoload path must be a String")}
+	}
+	path := args[1].String()
+	if path == "" {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "empty file name")}
+	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	if _, found := findConstantValue(class, name, true); found {
+		return Nil, nil
+	}
+	class.autoloads[name] = path
+	return Nil, nil
+}
+
+func (s *State) moduleAutoloadQueryMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok || len(args) != 1 {
+		return Nil, argumentCountError(s, len(args), "1")
+	}
+	if args[0].Kind() != KindString && args[0].Kind() != KindSymbol {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "constant name must be a Symbol or String")}
+	}
+	name := args[0].String()
+	if owner, path, found := findAutoload(class, name, true); found && owner != nil {
+		return StringValue(path), nil
+	}
+	return Nil, nil
+}
+
+func constantPath(class *Class, name string) string {
+	if class == nil {
+		return name
+	}
+	prefix := classDisplayName(class)
+	if prefix == "" || prefix == "#<Class>" || prefix == "#<Module>" {
+		return name
+	}
+	return prefix + "::" + name
+}
+
+// resolveAutoload loads a pending autoload. The entry is removed before
+// require runs, so the constant is visibly absent while its file loads, and
+// restored if the file raises. A successful load that does not define the
+// name leaves no entry behind.
+func (s *State) resolveAutoload(ctx context.Context, owner *Class, name, path string) error {
+	delete(owner.autoloads, name)
+	if _, found := s.classOf(s.TopSelf).lookup("require"); !found {
+		owner.autoloads[name] = path
+		return &unwindSignal{
+			kind:  unwindException,
+			value: newException(s.NotImplementedErrorClass, "no Kernel#require to load "+constantPath(owner, name)),
+		}
+	}
+	if _, err := s.call(ctx, s.TopSelf, "require", []Value{StringValue(path)}, Nil, Nil); err != nil {
+		owner.autoloads[name] = path
+		return err
+	}
+	if _, found := findConstantValue(owner, name, true); !found {
+		if _, _, pending := findAutoload(owner, name, true); pending {
+			// The file only registered another autoload. Leave it pending and
+			// do not follow it in this lookup.
+			return &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(owner))}
+		}
+		return &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(owner))}
+	}
+	return nil
 }
 
 func (s *State) classConstDefinedMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1108,13 +1235,13 @@ func (s *State) classConstDefinedMethod(ctx context.Context, self Value, args []
 	if len(args) == 2 {
 		inherit = args[1].IsTruthy()
 	}
-	_, found, err := s.constLookupPath(ctx, class, args[0].String(), inherit)
+	_, found, err := s.constLookupPath(ctx, class, args[0].String(), inherit, false)
 	if err != nil {
 		return Nil, err
 	}
 	if !found && inherit && !strings.Contains(args[0].String(), "::") &&
 		(class.isModule || class.singletonOf != nil || s.classIsSubclass(class, s.ObjectClass)) {
-		_, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), true)
+		_, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), true, false)
 		if err != nil {
 			return Nil, err
 		}
@@ -1482,12 +1609,12 @@ func (s *State) classConstGetMethod(ctx context.Context, self Value, args []Valu
 	if len(args) > 2 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
 	}
-	value, found, err := s.constLookupPath(ctx, class, args[0].String(), inherit)
+	value, found, err := s.constLookupPath(ctx, class, args[0].String(), inherit, true)
 	if err != nil {
 		return Nil, err
 	}
 	if !found && inherit && (class.isModule || class.singletonOf != nil || s.classIsSubclass(class, s.ObjectClass)) {
-		value, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), true)
+		value, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), true, true)
 		if err != nil {
 			return Nil, err
 		}
@@ -1506,7 +1633,7 @@ func (s *State) classConstGetMethod(ctx context.Context, self Value, args []Valu
 				if !ok {
 					return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, missing.Inspect()+" is not a class/module")}
 				}
-				value, found, err = s.constLookupPath(ctx, next, rest, true)
+				value, found, err = s.constLookupPath(ctx, next, rest, true, true)
 				if err != nil {
 					return Nil, err
 				}
@@ -1951,8 +2078,13 @@ func (s *State) classOp(ctx context.Context, outerValue, superValue Value, name 
 		}
 		super = class
 	}
+	if owner, path, pending := findAutoload(outer, name, true); pending {
+		if err := s.resolveAutoload(ctx, owner, name, path); err != nil {
+			return Nil, err
+		}
+	}
 	var class *Class
-	if existing := s.lookupConstant(outer, name); !existing.IsNil() {
+	if existing, found := findConstantValue(outer, name, true); found {
 		c, ok := s.asClass(existing)
 		if !ok {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,

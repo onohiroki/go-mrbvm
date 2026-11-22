@@ -80,6 +80,7 @@ type Class struct {
 	methods               map[string]*method
 	classMethods          map[string]*method
 	constants             map[string]Value
+	autoloads             map[string]string
 	classVars             map[string]Value
 	object                *Object
 	singletonOf           *Class
@@ -251,6 +252,7 @@ func newClass(name string, super *Class) *Class {
 		methods:               make(map[string]*method),
 		classMethods:          make(map[string]*method),
 		constants:             make(map[string]Value),
+		autoloads:             make(map[string]string),
 		classVars:             make(map[string]Value),
 		privateMethods:        make(map[string]bool),
 		protectedMethods:      make(map[string]bool),
