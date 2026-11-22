@@ -697,23 +697,98 @@ func (s *State) installAdvancedIntegerLibrary() {
 	class.define("between?", s.numericBetweenMethod)
 	class.define("clamp", s.numericClampMethod)
 	class.define("floor", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return self, nil
+		return s.integerRoundingMethod(self, args, integerFloorMode)
 	})
 	class.define("ceil", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return self, nil
+		return s.integerRoundingMethod(self, args, integerCeilMode)
 	})
 	class.define("round", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return self, nil
+		return s.integerRoundingMethod(self, args, integerRoundMode)
 	})
 	class.define("truncate", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return self, nil
+		return s.integerRoundingMethod(self, args, integerTruncateMode)
 	})
+}
+
+const (
+	integerRoundMode = iota
+	integerFloorMode
+	integerCeilMode
+	integerTruncateMode
+)
+
+// integerRoundingMethod implements Integer#ceil/floor/round/truncate with the
+// optional ndigits argument. Negative ndigits round to a power of ten, which
+// may exceed mrb_int; big.Int keeps the intermediate math exact.
+func (s *State) integerRoundingMethod(self Value, args []Value, mode int) (Value, error) {
+	if len(args) > 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	if len(args) == 0 {
+		return self, nil
+	}
+	var ndigits int64
+	switch args[0].Kind() {
+	case KindInt:
+		ndigits = args[0].Int()
+	case KindBigInt:
+		value, _ := args[0].BigInt()
+		if value.Sign() >= 0 {
+			return self, nil
+		}
+		if !value.IsInt64() {
+			ndigits = math.MinInt64
+		} else {
+			ndigits = value.Int64()
+		}
+	default:
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "ndigits must be an integer")}
+	}
+	if ndigits >= 0 {
+		return self, nil
+	}
+	places := -ndigits
+	if places > 10000 {
+		return IntValue(0), nil
+	}
+
+	var number *big.Int
+	if self.Kind() == KindBigInt {
+		number, _ = self.BigInt()
+	} else {
+		number = big.NewInt(self.Int())
+	}
+	sign := number.Sign()
+	abs := new(big.Int).Abs(number)
+	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(places), nil)
+	quotient := new(big.Int)
+	remainder := new(big.Int)
+	quotient.QuoRem(abs, factor, remainder)
+
+	increment := false
+	switch mode {
+	case integerCeilMode:
+		increment = sign > 0 && remainder.Sign() > 0
+	case integerFloorMode:
+		increment = sign < 0 && remainder.Sign() > 0
+	case integerRoundMode:
+		twice := new(big.Int).Lsh(remainder, 1)
+		increment = twice.Cmp(factor) >= 0
+	}
+	if increment {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	quotient.Mul(quotient, factor)
+	if sign < 0 {
+		quotient.Neg(quotient)
+	}
+	return normalizedBigInt(quotient), nil
 }
 
 func (s *State) installFloatLibrary() {
 	class := s.FloatClass
 	class.define("to_i", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return IntValue(int64(self.Float())), nil
+		return s.floatRoundingMethod(ctx, self, nil, floatTruncateMode)
 	})
 	class.define("to_f", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return self, nil
@@ -760,7 +835,7 @@ func (s *State) installFloatLibrary() {
 		return s.floatRoundingMethod(ctx, self, args, floatRoundMode)
 	})
 	class.define("truncate", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return IntValue(int64(self.Float())), nil
+		return s.floatRoundingMethod(ctx, self, args, floatTruncateMode)
 	})
 	class.define("finite?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		value := self.Float()
@@ -2222,6 +2297,7 @@ const (
 	floatRoundMode = iota
 	floatFloorMode
 	floatCeilMode
+	floatTruncateMode
 )
 
 func floatModeValue(value float64, mode int) float64 {
@@ -2230,6 +2306,8 @@ func floatModeValue(value float64, mode int) float64 {
 		return math.Floor(value)
 	case floatCeilMode:
 		return math.Ceil(value)
+	case floatTruncateMode:
+		return math.Trunc(value)
 	default:
 		// Round half away from zero, as mruby does.
 		if value > 0 {
@@ -2276,7 +2354,9 @@ func (s *State) floatRoundingMethod(ctx context.Context, self Value, args []Valu
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.FloatDomainErrorClass, message)}
 	}
 	if ndigits > 0 {
-		if ndigits > 15 {
+		// Values at or above 1e15 have no fractional bits left to round,
+		// and multiplying them by the scale would overflow to Infinity.
+		if ndigits > 15 || math.Abs(value) >= 1e15 {
 			return FloatValue(value), nil
 		}
 		scale := math.Pow(10, float64(ndigits))

@@ -656,10 +656,28 @@ func (s *State) installIntegerLibrary() {
 		if len(args) == 0 {
 			return StringValue(self.ToS()), nil
 		}
-		if len(args) != 1 || args[0].Kind() != KindInt {
-			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "base must be an integer")}
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "base must be an integer")}
 		}
-		base := int(args[0].Int())
+		var base int
+		switch args[0].Kind() {
+		case KindInt:
+			base = int(args[0].Int())
+		case KindBigInt:
+			value, _ := args[0].BigInt()
+			if !value.IsInt64() {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "invalid radix")}
+			}
+			base = int(value.Int64())
+		case KindFloat:
+			value := args[0].Float()
+			if math.IsNaN(value) || math.IsInf(value, 0) || value < math.MinInt32 || value > math.MaxInt32 {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "base must be an integer")}
+			}
+			base = int(value)
+		default:
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "base must be an integer")}
+		}
 		if base < 2 || base > 36 {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, fmt.Sprintf("invalid radix %d", base))}
 		}
@@ -678,6 +696,32 @@ func (s *State) installIntegerLibrary() {
 	class.define("chr", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(string(rune(self.Int()))), nil
 	})
+	class.classMethods["__ensure"] = &method{owner: class, name: "__ensure", native: s.integerEnsureMethod}
+}
+
+// integerEnsureMethod implements Integer.__ensure, the non-dispatching
+// conversion used by mrblib. It must not call to_int or __to_int.
+func (s *State) integerEnsureMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	value := args[0]
+	switch value.Kind() {
+	case KindInt, KindBigInt:
+		return value, nil
+	case KindFloat:
+		f := value.Float()
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.FloatDomainErrorClass, "Infinity")}
+		}
+		integer, _ := new(big.Float).SetFloat64(f).Int(nil)
+		return normalizedBigInt(integer), nil
+	}
+	name := "Object"
+	if class := s.classOf(value); class != nil && class.name != "" {
+		name = class.name
+	}
+	return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't convert "+name+" into Integer")}
 }
 
 func (s *State) installObjectLibrary() {
@@ -708,10 +752,7 @@ func (s *State) installObjectLibrary() {
 		if len(args) != 1 {
 			return False, nil
 		}
-		if self.obj != nil && args[0].obj != nil {
-			return BoolValue(self.obj == args[0].obj), nil
-		}
-		return BoolValue(valuesEqual(self, args[0])), nil
+		return BoolValue(identicalValue(self, args[0])), nil
 	})
 	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return BoolValue(len(args) == 1 && eqlValues(self, args[0])), nil
@@ -2814,7 +2855,7 @@ func (s *State) rubyEql(ctx context.Context, left, right Value) (bool, error) {
 }
 
 func (s *State) rubyEqual(ctx context.Context, left, right Value) (bool, error) {
-	if left.obj != nil && right.obj != nil && left.obj == right.obj {
+	if identicalValue(left, right) {
 		return true, nil
 	}
 	result, err := s.call(ctx, left, "==", []Value{right}, Nil, Nil)

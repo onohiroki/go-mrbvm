@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 // Kind identifies the runtime type of a Value.
@@ -71,8 +72,18 @@ func (v Value) BigInt() (*big.Int, bool) {
 	return nil, false
 }
 
+// Each NaN created at run time gets a distinct payload. mruby treats a NaN as
+// an object with identity: two NaNs made apart are not `equal?`, while copies
+// of one NaN keep the same `object_id`. IEEE 754 permits any non-zero
+// significand, so the payload doubles as the identity without boxing.
+var nanSequence uint64
+
 // FloatValue returns a floating-point value.
 func FloatValue(v float64) Value {
+	if math.IsNaN(v) {
+		id := atomic.AddUint64(&nanSequence, 1) & 0x0007ffffffffffff
+		return Value{kind: KindFloat, bits: 0x7ff8000000000000 | id}
+	}
 	return Value{kind: KindFloat, bits: math.Float64bits(v)}
 }
 

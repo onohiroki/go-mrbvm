@@ -2742,6 +2742,13 @@ func hashPrimitiveEqual(left, right Value) bool {
 	if left.Kind() != right.Kind() {
 		return false
 	}
+	if left.Kind() == KindFloat {
+		lf, rf := left.Float(), right.Float()
+		if math.IsNaN(lf) || math.IsNaN(rf) {
+			return math.IsNaN(lf) && math.IsNaN(rf) && left.bits == right.bits
+		}
+		return lf == rf
+	}
 	return valuesEqual(left, right)
 }
 
@@ -2755,7 +2762,7 @@ func identityEqual(left, right Value) bool {
 	case KindSymbol:
 		return left.String() == right.String()
 	default:
-		return valuesEqual(left, right)
+		return identicalValue(left, right)
 	}
 }
 

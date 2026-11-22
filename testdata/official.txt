@@ -20,3 +20,5 @@ superclass.rb
 nameerror.rb
 nomethoderror.rb
 exception.rb
+integer.rb
+float.rb

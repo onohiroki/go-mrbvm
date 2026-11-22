@@ -2542,6 +2542,9 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
 	switch op {
 	case binEq:
+		if cmp, ok := numericCompare(left, right); ok {
+			return BoolValue(cmp == 0), true
+		}
 		if builtinComparable(left) && builtinComparable(right) {
 			return BoolValue(valuesEqual(left, right)), true
 		}
@@ -2554,22 +2557,8 @@ func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
 			return False, true
 		}
 		var cmp int
-		if li, ri, ok := bothBigInts(left, right); ok {
-			cmp = li.Cmp(ri)
-		} else if li, ri, ok := bothInts(left, right); ok {
-			switch {
-			case li < ri:
-				cmp = -1
-			case li > ri:
-				cmp = 1
-			}
-		} else if lf, rf, ok := bothFloats(left, right); ok {
-			switch {
-			case lf < rf:
-				cmp = -1
-			case lf > rf:
-				cmp = 1
-			}
+		if numeric, ok := numericCompare(left, right); ok {
+			cmp = numeric
 		} else if (left.Kind() == KindString || left.Kind() == KindSymbol) &&
 			(right.Kind() == KindString || right.Kind() == KindSymbol) {
 			cmp = strings.Compare(left.String(), right.String())
@@ -2775,36 +2764,113 @@ func normalizedBigInt(value *big.Int) Value {
 }
 
 func compareNative(left, right Value) (int, bool) {
-	if li, ri, ok := bothBigInts(left, right); ok {
-		return li.Cmp(ri), true
-	}
-	if li, ri, ok := bothInts(left, right); ok {
-		switch {
-		case li < ri:
-			return -1, true
-		case li > ri:
-			return 1, true
-		default:
-			return 0, true
-		}
-	}
-	if lf, rf, ok := bothFloats(left, right); ok {
-		if math.IsNaN(lf) || math.IsNaN(rf) {
-			return 0, false
-		}
-		switch {
-		case lf < rf:
-			return -1, true
-		case lf > rf:
-			return 1, true
-		default:
-			return 0, true
-		}
+	if cmp, ok := numericCompare(left, right); ok {
+		return cmp, true
 	}
 	if (left.Kind() == KindString || left.Kind() == KindSymbol) && (right.Kind() == KindString || right.Kind() == KindSymbol) {
 		return strings.Compare(left.String(), right.String()), true
 	}
 	return 0, false
+}
+
+// numericCompare compares integers, big integers, and floats exactly. A float
+// carries fewer significant bits than an int64, so converting both to float64
+// would report an integer equal to a Float that stands for a different number.
+func numericCompare(left, right Value) (int, bool) {
+	switch left.Kind() {
+	case KindFloat:
+		switch right.Kind() {
+		case KindFloat:
+			lf, rf := left.Float(), right.Float()
+			if math.IsNaN(lf) || math.IsNaN(rf) {
+				return 0, false
+			}
+			switch {
+			case lf < rf:
+				return -1, true
+			case lf > rf:
+				return 1, true
+			default:
+				return 0, true
+			}
+		case KindInt:
+			cmp, ok := intFloatCompare(right.Int(), left.Float())
+			return -cmp, ok
+		case KindBigInt:
+			value, _ := right.BigInt()
+			cmp, ok := bigIntFloatCompare(value, left.Float())
+			return -cmp, ok
+		}
+	case KindInt:
+		switch right.Kind() {
+		case KindFloat:
+			return intFloatCompare(left.Int(), right.Float())
+		case KindInt:
+			switch {
+			case left.Int() < right.Int():
+				return -1, true
+			case left.Int() > right.Int():
+				return 1, true
+			default:
+				return 0, true
+			}
+		}
+	case KindBigInt:
+		switch right.Kind() {
+		case KindFloat:
+			value, _ := left.BigInt()
+			return bigIntFloatCompare(value, right.Float())
+		}
+	}
+	if li, ri, ok := bothBigInts(left, right); ok {
+		return li.Cmp(ri), true
+	}
+	return 0, false
+}
+
+func intFloatCompare(x int64, y float64) (int, bool) {
+	if math.IsNaN(y) {
+		return 0, false
+	}
+	if y < float64(math.MinInt64) {
+		return 1, true
+	}
+	// The least int64 is exact as a Float; its negation is 2^63, which no
+	// int64 reaches, so every y at or above it is greater than x.
+	if y >= 9223372036854775808.0 {
+		return -1, true
+	}
+	yi := int64(y)
+	switch {
+	case x > yi:
+		return 1, true
+	case x < yi:
+		return -1, true
+	}
+	fy := float64(yi)
+	switch {
+	case y > fy:
+		return -1, true
+	case y < fy:
+		return 1, true
+	default:
+		return 0, true
+	}
+}
+
+func bigIntFloatCompare(x *big.Int, y float64) (int, bool) {
+	if math.IsNaN(y) {
+		return 0, false
+	}
+	if math.IsInf(y, 1) {
+		return -1, true
+	}
+	if math.IsInf(y, -1) {
+		return 1, true
+	}
+	xf := new(big.Float).SetInt(x)
+	yf := new(big.Float).SetFloat64(y)
+	return xf.Cmp(yf), true
 }
 
 func bothInts(left, right Value) (int64, int64, bool) {
@@ -2845,6 +2911,29 @@ func valuesEqual(left, right Value) bool {
 	return valuesEqualSeen(left, right, make(map[objectPair]bool))
 }
 
+// identicalValue implements `equal?`: it compares the representation rather
+// than dispatching `==`. Floats compare bit for bit, so 0.0 and -0.0 are two
+// objects and two NaNs made apart stay distinct, while a copied NaN keeps its
+// payload and its identity.
+func identicalValue(left, right Value) bool {
+	if left.Kind() != right.Kind() {
+		return false
+	}
+	switch left.Kind() {
+	case KindFloat:
+		return left.bits == right.bits
+	case KindSymbol:
+		return left.String() == right.String()
+	case KindObject, KindString, KindBigInt:
+		return left.obj == right.obj
+	case KindNil, KindTrue, KindFalse:
+		return true
+	case KindInt:
+		return left.Int() == right.Int()
+	}
+	return left.bits == right.bits && left.obj == right.obj
+}
+
 func stringPayload(v Value) (string, bool) {
 	if v.obj == nil {
 		return "", false
@@ -2867,17 +2956,10 @@ func valuesEqualSeen(left, right Value, seen map[objectPair]bool) bool {
 			return leftString == rightString
 		}
 	}
+	if cmp, ok := numericCompare(left, right); ok {
+		return cmp == 0
+	}
 	if left.Kind() != right.Kind() {
-		if li, ri, ok := bothBigInts(left, right); ok {
-			return li.Cmp(ri) == 0
-		}
-		if li, lf, ok := numeric(left); ok {
-			if ri, rf, ok := numeric(right); ok {
-				_ = li
-				_ = ri
-				return lf == rf
-			}
-		}
 		return false
 	}
 	switch left.Kind() {
