@@ -52,7 +52,7 @@
 | **VM-4c** 例外・リフレクション（完了） | 実用的なエラー情報とメタプログラミング | `backtrace`（file:line）、`full_message`、`cause`、`$!`、`FrozenError`、`instance_variables`、`instance_variable_get/set`、`const_get/set`、`ancestors`、`methods` | `t/exception.rb` などが成功、backtrace が表示できる |
 | **VM-5** ホスト API / サンドボックス（完了） | Go から mruby を安全に使う | `DefineFunction` / `DefineClass` / `DefineConst`、`Send`、値変換、Go error → Ruby 例外、命令数・時間・深さ・サイズ制限、capability | Go テストから Ruby 関数を呼び、Ruby から Go 関数を呼べる |
 | **VM-6** `gomirb` / オプション機能（コア完了） | 対話環境と実用ライブラリ | REPL、複数行入力、履歴、JSON、IO、Time、Regexp（Go regexp 近似）、Fiber | `gomirb` で式評価、JSON/IO の基本動作 |
-| **VM-7** 性能・GC | C mruby と比較可能な性能 | dispatch 最適化、値表現、アロケーション削減、ベンチマーク、GC shim、`ObjectSpace` | ベンチマーク結果を公開、主要操作で許容範囲 |
+| **VM-7** 性能・GC（進行中） | C mruby と比較可能な性能 | dispatch 最適化、値表現、アロケーション削減、ベンチマーク、GC shim、`ObjectSpace` | ベンチマーク結果を公開、主要操作で許容範囲 |
 
 ## 4. 直近スプリント（2026-11-22 完了）
 
@@ -171,6 +171,23 @@
   - デバッガ連携
   - Regexp / Fiber / IO の gem 公式テスト拡大
 
+### 4.10 VM-7 初期計測（2026-11-22）
+
+- 完了
+  - `mrbvm` の Go マイクロベンチマーク
+  - `cmd/vmbench` と `benchmark/mixed.rb`
+  - C mruby との比較（目安: 約 5x）
+  - irep デコード結果の State キャッシュ
+  - Hash のプリミティブキー索引（書き込み 148ms → 2.3ms / 5,000 件）
+- 次
+  - メソッド呼び出し・フレーム割り当ての削減
+  - `Value` のボクシング削減
+  - メソッド探索キャッシュ
+  - GC shim / `ObjectSpace`
+  - 継続的なベンチマーク CI
+
+詳細は [benchmarks.ja.md](benchmarks.ja.md) を参照。
+
 ## 5. 品質ゲート
 
 各コミットで必ず実行する。
@@ -208,7 +225,7 @@ go run ./cmd/mrbtest <成功している公式テスト>
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
 - **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 完了、デバッガが残り
-- **VM-7**: ベンチマーク公開
+- **VM-7**: ベンチマーク基盤と初期最適化（進行中）
 
 ## 8. 関連ドキュメント
 

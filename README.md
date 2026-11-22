@@ -9,7 +9,7 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-**VM-4b, VM-4c, VM-5, and the VM-6 core are implemented.** The VM loads RITE 04.00 through
+**VM-4b, VM-4c, VM-5, and the VM-6 core are implemented; VM-7 has started.** The VM loads RITE 04.00 through
 `go-mrbc/bytecode` and supports:
 
 - values, objects, classes, methods, blocks, closures, and upvars
@@ -91,6 +91,7 @@ Design and plan:
 - [docs/architecture.md](docs/architecture.md) — architecture and design
 - [docs/implementation-plan.ja.md](docs/implementation-plan.ja.md) — implementation plan (Japanese)
 - [docs/roadmap.ja.md](docs/roadmap.ja.md) — phases, sprint plan, and quality gates (Japanese)
+- [docs/benchmarks.ja.md](docs/benchmarks.ja.md) — microbenchmarks and C mruby comparison (Japanese)
 - [docs/bytecode-format.md](docs/bytecode-format.md) — RITE 04.00 format
 
 ## Relationship to go-mrbc
@@ -118,7 +119,7 @@ go-mrbvm/
 ├── mrbvm/                 public embedding API
 ├── internal/              interpreter, objects, GC, core library
 ├── sandbox/               resource limits and capability policy
-├── cmd/                   gomruby, gomirb, vmcompat, mrbtest
+├── cmd/                   gomruby, gomirb, vmcompat, mrbtest, vmbench
 ├── docs/                  plan and bytecode format
 ├── examples/              sample macro scripts
 └── testdata/conformance/  shared behaviour corpus
@@ -182,6 +183,7 @@ It will later move to an importable shared package.
 - `vmcompat` — compare go-mrbc/mrbc bytecode against the reference `mruby`
 - `mrbtest` — run official mruby test files with `assert.rb`
 - `gomirb` — persistent-State REPL
+- `vmbench` — measure a script and optionally compare with reference `mruby`
 
 ## License
 

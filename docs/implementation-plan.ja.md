@@ -367,6 +367,13 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   2. Regexp / Fiber / IO の gem 公式テスト拡大
   3. VM-7 のベンチマーク
 
+### VM-7 初期計測（2026-11-22）
+
+- Go マイクロベンチマークと `cmd/vmbench` を追加
+- C mruby 比較スクリプト `benchmark/mixed.rb`
+- irep デコードキャッシュと Hash キー索引を実装
+- 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
+
 ## 16. 現在の状態
 
 - リポジトリのスキャフォールド済み
@@ -460,4 +467,5 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - VM-4b / VM-4c / VM-5 まで完了
   - VM-6 の `gomirb` / Time / JSON / IO / File / Regexp / Fiber /
     履歴・補完まで実装済み
-  - 次はデバッガ連携と VM-7 の性能計測
+  - VM-7 のベンチマーク基盤と初期最適化まで実装済み
+  - 次は VM-7 の呼び出し・割り当て最適化と GC shim
