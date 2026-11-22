@@ -51,7 +51,7 @@
 | **VM-4b** 公式テスト拡大（完了） | コア subset を一気に増やす | `integer.rb` / `float.rb` / `string.rb` / `hash.rb` / `range.rb` / `symbol.rb` / `exception.rb` を順に駆動 | 公式テスト 15 ファイル以上が成功 |
 | **VM-4c** 例外・リフレクション（完了） | 実用的なエラー情報とメタプログラミング | `backtrace`（file:line）、`full_message`、`cause`、`$!`、`FrozenError`、`instance_variables`、`instance_variable_get/set`、`const_get/set`、`ancestors`、`methods` | `t/exception.rb` などが成功、backtrace が表示できる |
 | **VM-5** ホスト API / サンドボックス（完了） | Go から mruby を安全に使う | `DefineFunction` / `DefineClass` / `DefineConst`、`Send`、値変換、Go error → Ruby 例外、命令数・時間・深さ・サイズ制限、capability | Go テストから Ruby 関数を呼び、Ruby から Go 関数を呼べる |
-| **VM-6** `gomirb` / オプション機能 | 対話環境と実用ライブラリ | REPL、複数行入力、履歴、JSON、IO、Time、Regexp（Go regexp 近似）、Fiber | `gomirb` で式評価、JSON/IO の基本動作 |
+| **VM-6** `gomirb` / オプション機能（進行中） | 対話環境と実用ライブラリ | REPL、複数行入力、履歴、JSON、IO、Time、Regexp（Go regexp 近似）、Fiber | `gomirb` で式評価、JSON/IO の基本動作 |
 | **VM-7** 性能・GC | C mruby と比較可能な性能 | dispatch 最適化、値表現、アロケーション削減、ベンチマーク、GC shim、`ObjectSpace` | ベンチマーク結果を公開、主要操作で許容範囲 |
 
 ## 4. 直近スプリント（2026-11-22 完了）
@@ -157,6 +157,17 @@
 公式 `t/exception.rb` も 50/50 で成功し、`$!` と cause 連鎖の
 スコープ復元を確認済み。
 
+### 4.9 VM-6 進行中（2026-11-22）
+
+- 完了
+  - `gomirb`（永続 State、複数行継続、`-r` / `-q`、非対話 stdin）
+  - `Time`（`now` / `at` / 成分 / `strftime` / 加減算・比較）
+  - `JSON`（`parse` / `generate` / `dump` / `pretty_generate`）
+- 次
+  - `IO` / `File` と capability 連携
+  - Regexp（Go regexp 近似）と Fiber の opt-in
+  - `gomirb` の履歴・補完
+
 ## 5. 品質ゲート
 
 各コミットで必ず実行する。
@@ -193,7 +204,7 @@ go run ./cmd/mrbtest <成功している公式テスト>
 - **VM-4b**: 公式テスト 20 ファイル（達成）
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
-- **VM-6**: `gomirb` + JSON/IO
+- **VM-6**: `gomirb` / Time / JSON 完了、IO・Regexp・Fiber が残り
 - **VM-7**: ベンチマーク公開
 
 ## 8. 関連ドキュメント

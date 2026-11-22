@@ -352,12 +352,17 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - 命令数・時間・深さ・出力・配列/ハッシュ/文字列サイズ制限
   - `sandbox.Policy` capability とテスト
 
-### 次の作業（VM-6）
+### VM-6 進行中（2026-11-22）
 
-1. `gomirb`（REPL、複数行入力、履歴）
-2. JSON / IO / Time の基本実装
-3. Regexp / Fiber の opt-in 対応
-4. `gomirb` の複数行入力・履歴
+- 完了
+  - `gomirb`（永続 State、複数行継続、`-r` / `-q`）
+  - `Time`（`now` / `at` / 成分 / `strftime` / 演算）
+  - `JSON`（`parse` / `generate` / `dump` / `pretty_generate`）
+- 次の作業
+  1. `IO` / `File` と capability 連携
+  2. Regexp（Go regexp 近似）
+  3. Fiber の opt-in 対応
+  4. `gomirb` の履歴・補完
 
 ## 16. 現在の状態
 
@@ -450,4 +455,5 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - `t/array.rb` 完走、公式テストマニフェスト、例外 backtrace、
     リフレクション、mrblib opt-in、ホスト API の初期実装まで完了
   - VM-4b / VM-4c / VM-5 まで完了
-  - 次は VM-6（`gomirb`、JSON / IO / Time）
+  - VM-6 の `gomirb` / Time / JSON まで実装済み
+  - 次は VM-6 の IO / File / Regexp / Fiber

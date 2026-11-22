@@ -9,7 +9,7 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-**VM-4b, VM-4c, and VM-5 are implemented.** The VM loads RITE 04.00 through
+**VM-4b, VM-4c, and VM-5 are implemented; VM-6 has started.** The VM loads RITE 04.00 through
 `go-mrbc/bytecode` and supports:
 
 - values, objects, classes, methods, blocks, closures, and upvars
@@ -54,6 +54,9 @@ compiler and the reference implementation is always C mruby 4.0.0.
   array/hash/string sizes
 - a capability policy package (`sandbox.Policy`) for IO, files, network,
   process, OS, eval, load, and require
+- `Time` (`now`, `at`, components, `strftime`, arithmetic)
+- `JSON` (`parse`, `generate`, `dump`, `pretty_generate`)
+- `gomirb`, a persistent-State REPL with multi-line continuation
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
 
@@ -108,7 +111,7 @@ go-mrbvm/
 ├── mrbvm/                 public embedding API
 ├── internal/              interpreter, objects, GC, core library
 ├── sandbox/               resource limits and capability policy
-├── cmd/                   gomruby, gomirb
+├── cmd/                   gomruby, gomirb, vmcompat, mrbtest
 ├── docs/                  plan and bytecode format
 ├── examples/              sample macro scripts
 └── testdata/conformance/  shared behaviour corpus
@@ -171,7 +174,7 @@ It will later move to an importable shared package.
 - `gomruby` — run `.mrb` bytecode, or compile `.rb` with `go-mrbc`
 - `vmcompat` — compare go-mrbc/mrbc bytecode against the reference `mruby`
 - `mrbtest` — run official mruby test files with `assert.rb`
-- `gomirb` — planned interactive shell
+- `gomirb` — persistent-State REPL
 
 ## License
 
