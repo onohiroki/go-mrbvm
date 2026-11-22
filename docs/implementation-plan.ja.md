@@ -380,6 +380,8 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - 命令ディスパッチを最適化（行番号配列、制限チェック、演算子 ID、整数高速パス）
 - `vmbench -mrbc` で公式バイトコードの比較に対応
 - バックトレース行を呼び出し時・例外時のみ計算
+- 数値・文字列の意味論を拡充（整数 overflow、Float 表記、sprintf、
+  `each_char`、`split` limit、文字集合の否定など）
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態

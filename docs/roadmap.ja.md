@@ -204,6 +204,21 @@
 
 詳細は [benchmarks.ja.md](benchmarks.ja.md) を参照。
 
+### 4.11 数値・文字列の意味論強化（2026-11-22）
+
+- 整数演算のオーバーフローを bigint に昇格（`+ - * /`、単項 `-`、`succ` など）
+- Float の `to_s` / `inspect` を mruby と同じ 15 桁・`0.0` 表記・`Infinity` に統一
+- Hash の `0.0` / `-0.0` を同一キーとして扱う
+- `Integer#to_s(base)` / `lcm`、`Float#divmod` / `fdiv`、
+  `Float#round/floor/ceil(ndigits)`、`clamp` の引数検査を追加
+- 整数のビット演算 `&` / `|` / `^` / `~` を追加
+- `String#each_char` / `each_byte` / `casecmp` / `casecmp?`、
+  `split` の limit、文字集合の `^` 否定を追加
+- `sprintf` / `%` を書き直し（整数精度・符号・幅・`0` 埋め、基数変換、
+  Float の丸め、`Inf`/`NaN`、名前付き参照）
+- conformance を 45 ケースに拡大（`integer_overflow` / `float_format` /
+  `numeric_edges` / `format_string` / `string_extra`）
+
 ## 5. 品質ゲート
 
 各コミットで必ず実行する。
