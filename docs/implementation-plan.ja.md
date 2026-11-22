@@ -378,6 +378,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - バックトレース整形をフレーム単位でキャッシュ
 - `Object` とペイロードを同一アロケーションに統合
 - 命令ディスパッチを最適化（行番号配列、制限チェック、演算子 ID、整数高速パス）
+- `vmbench -mrbc` で公式バイトコードの比較に対応
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態

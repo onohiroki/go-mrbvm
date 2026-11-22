@@ -189,8 +189,11 @@
   - 行番号テーブル・制限チェック・private 検査・defer のホットループ最適化
   - 1 引数 SEND の演算子 ID 事前計算と整数専用高速パス
   - ジャンプ先の事前解決と行番号更新の抑制
+  - 公式 `mrbc` の `OP_ADD` 系命令を整数専用に高速化
+  - `vmbench -mrbc` で公式バイトコードとの比較が可能に
   - GC shim（`GC.stat` / `count` / `enable?` / `start`）
-  - MethodCall の割り当て 41,403 → 1,399 / 回、C mruby 比 約 1.4x
+  - MethodCall の割り当て 41,403 → 1,399 / 回
+  - C mruby 比 約 1.2x（公式 mrbc）/ 約 1.45x（go-mrbc）
 - 次
   - `Value` のボクシング削減
   - `State` 初期化コスト

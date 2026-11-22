@@ -19,12 +19,12 @@ go test ./mrbvm -run '^$' -bench . -benchtime=300ms -count=1
 
 | ベンチマーク | 内容 | ns/op | B/op | allocs/op |
 | --- | --- | ---: | ---: | ---: |
-| `BenchmarkArithmeticLoop` | 10,000 回の加算ループ | 701,732 | 121,824 | 1,377 |
-| `BenchmarkMethodCall` | 5,000 回のメソッド呼び出し | 789,357 | 123,584 | 1,399 |
-| `BenchmarkArrayMap` | 100 要素の `map` × 100 回 | 723,888 | 421,267 | 1,708 |
-| `BenchmarkHashWrite` | 5,000 回の Hash 書き込み | 869,083 | 1,464,699 | 1,419 |
-| `BenchmarkStringAppend` | 2,000 回の文字列追加 | 283,459 | 319,328 | 3,389 |
-| `BenchmarkRescue` | 2,000 回の raise/rescue | 517,303 | 826,498 | 9,385 |
+| `BenchmarkArithmeticLoop` | 10,000 回の加算ループ | 688,369 | 121,824 | 1,377 |
+| `BenchmarkMethodCall` | 5,000 回のメソッド呼び出し | 782,562 | 123,584 | 1,399 |
+| `BenchmarkArrayMap` | 100 要素の `map` × 100 回 | 727,023 | 421,267 | 1,708 |
+| `BenchmarkHashWrite` | 5,000 回の Hash 書き込み | 809,633 | 1,109,481 | 1,414 |
+| `BenchmarkStringAppend` | 2,000 回の文字列追加 | 276,966 | 319,328 | 3,389 |
+| `BenchmarkRescue` | 2,000 回の raise/rescue | 518,116 | 826,496 | 9,385 |
 
 `ns/op` はマシン負荷で大きく変動するため参考値。`B/op` と `allocs/op` は
 ほぼ安定しており、最適化の効果はこちらで判断しやすい。
@@ -62,9 +62,9 @@ Go の map で引き、それ以外は従来どおり線形比較にフォール
 | `BenchmarkArithmeticLoop` | 31,383 | 1,377 | 843,317 | 121,824 |
 | `BenchmarkMethodCall` | 41,403 | 1,399 | 1,645,429 | 123,584 |
 | `BenchmarkArrayMap` | 62,114 | 1,708 | 2,747,425 | 421,267 |
-| `BenchmarkHashWrite` | 16,450 | 1,419 | 2,602,342 | 1,464,699 |
+| `BenchmarkHashWrite` | 16,450 | 1,414 | 2,602,342 | 1,109,481 |
 | `BenchmarkStringAppend` | 13,383 | 3,389 | 2,523,895 | 319,328 |
-| `BenchmarkRescue` | 23,390 | 9,385 | 972,453 | 826,498 |
+| `BenchmarkRescue` | 23,390 | 9,385 | 972,453 | 826,496 |
 
 メソッド呼び出しの割り当ては約 30 分の 1、メモリ使用量は約 13 分の 1。
 残る割り当ての大半は `State` の初期化（1 回あたり約 1,380）で、
@@ -102,7 +102,10 @@ O(n²) バイトを割り当てていた。追記用の `[]byte` バッファに
 - 整数同士の四則演算・比較（`int64` 専用の高速パス）
 - ジャンプ先の命令インデックスをデコード時に解決
 - `OP_ADD`〜`OP_GE` の命令ごとの map リテラルを switch に置換
+- `OP_ADD` / `OP_SUB` / `OP_LT` などと `OP_ADDI` / `OP_ADDILV` の
+  整数演算を命令内で直接処理
 - 行番号の書き込みを実際に変化したときだけに限定
+- Hash entry を 2 倍ずつ伸長し、索引表を `int32` に縮小
 
 `BenchmarkArithmeticLoop` は 2.47ms → 0.70ms、`BenchmarkMethodCall` は
 1.89ms → 0.79ms に短縮した。
@@ -137,12 +140,19 @@ go run ./cmd/vmbench -n 5 -compare benchmark/mixed.rb
 結果例:
 
 ```
-go-mrbvm  20 iterations  767.448709ms  26.06 ops/s
-mruby     20 iterations  534.357333ms  37.43 ops/s
-ratio     go-mrbvm/mruby = 1.44x
+go-mrbvm  20 iterations  624.198542ms  32.04 ops/s   (公式 mrbc のバイトコード)
+mruby     20 iterations  530.686542ms  37.69 ops/s
+ratio     go-mrbvm/mruby = 1.18x
+
+go-mrbvm  20 iterations  769.785125ms  25.98 ops/s   (go-mrbc のバイトコード)
+mruby     20 iterations  531.370500ms  37.64 ops/s
+ratio     go-mrbvm/mruby = 1.45x
 ```
 
-C mruby の計測にはプロセス起動時間が含まれるため、比率は目安。
+公式 `mrbc` は `OP_ADD` / `OP_ADDILV` / `OP_LT` などの専用命令を出力する
+一方、go-mrbc は算術を `SEND` で出力する。`vmbench -mrbc` を使うと
+C mruby と同じバイトコードで比較できる。C mruby の計測にはプロセス起動
+時間が含まれるため、比率は目安。
 今後の最適化対象:
 
 - `Value` のボクシングとインターフェース割り当て
@@ -159,5 +169,6 @@ C mruby の計測にはプロセス起動時間が含まれるため、比率は
 
 ```sh
 go test ./mrbvm -run '^$' -bench . -benchtime=300ms -count=1
-go run ./cmd/vmbench -n 5 -compare benchmark/mixed.rb
+go run ./cmd/vmbench -n 20 -compare benchmark/mixed.rb
+go run ./cmd/vmbench -n 20 -mrbc -compare benchmark/mixed.rb
 ```
