@@ -18,6 +18,7 @@ type irepProgram struct {
 	instructions []bytecode.Instruction
 	pcByOffset   map[int]int
 	lineByOffset map[int]int
+	hasBlocks    bool
 }
 
 type callFrame struct {
@@ -48,7 +49,14 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 	for _, line := range irep.Lines {
 		lineByOffset[int(line.Offset)] = int(line.Line)
 	}
-	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineByOffset: lineByOffset}
+	hasBlocks := false
+	for _, in := range instructions {
+		if in.Op == bytecode.OpBLOCK || in.Op == bytecode.OpLAMBDA {
+			hasBlocks = true
+			break
+		}
+	}
+	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineByOffset: lineByOffset, hasBlocks: hasBlocks}
 	s.programs[irep] = program
 	return program, nil
 }
@@ -74,7 +82,23 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	// Some mruby compiler outputs use a register just past nregs for
 	// method/class definition results. Keep a small guard area.
 	nregs += 2
-	regs := make([]Value, nregs)
+	var regs []Value
+	if !program.hasBlocks {
+		if pooled := s.regPool.Get(); pooled != nil {
+			regs = pooled.([]Value)
+			if cap(regs) < nregs {
+				regs = make([]Value, nregs)
+			} else {
+				regs = regs[:nregs]
+				clear(regs)
+			}
+		} else {
+			regs = make([]Value, nregs)
+		}
+		defer func() { s.regPool.Put(regs[:0]) }()
+	} else {
+		regs = make([]Value, nregs)
+	}
 	regs[0] = self
 	frameArgs := args
 	frameKw := kw

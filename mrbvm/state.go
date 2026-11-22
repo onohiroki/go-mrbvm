@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/onohiroki/go-mrbvm/sandbox"
@@ -109,6 +110,7 @@ type State struct {
 	frames    []*callFrame
 	callDepth int
 	programs  map[*Irep]*irepProgram
+	regPool   sync.Pool
 
 	policy           *sandbox.Policy
 	maxInstructions  uint64
