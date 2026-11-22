@@ -973,18 +973,50 @@ func (s *State) stringFormatMethod(ctx context.Context, self Value, args []Value
 func formatString(format string, args []Value) (string, error) {
 	var builder strings.Builder
 	argIndex := 0
-	for i := 0; i < len(format); i++ {
+	for i := 0; i < len(format); {
 		if format[i] != '%' {
 			builder.WriteByte(format[i])
+			i++
 			continue
 		}
 		if i+1 < len(format) && format[i+1] == '%' {
 			builder.WriteByte('%')
-			i++
+			i += 2
 			continue
 		}
-		start := i
+		if i+1 < len(format) && format[i+1] == '{' {
+			close := strings.IndexByte(format[i+2:], '}')
+			if close < 0 {
+				return "", fmt.Errorf("malformed format string")
+			}
+			name := format[i+2 : i+2+close]
+			value, ok := formatNamedValue(args, name)
+			if !ok {
+				return "", fmt.Errorf("no such name %s", name)
+			}
+			builder.WriteString(value.ToS())
+			i += 2 + close + 1
+			continue
+		}
+
 		i++
+		var named Value
+		hasNamed := false
+		if i < len(format) && format[i] == '<' {
+			close := strings.IndexByte(format[i+1:], '>')
+			if close < 0 {
+				return "", fmt.Errorf("malformed format string")
+			}
+			name := format[i+1 : i+1+close]
+			value, ok := formatNamedValue(args, name)
+			if !ok {
+				return "", fmt.Errorf("no such name %s", name)
+			}
+			named = value
+			hasNamed = true
+			i += 1 + close + 1
+		}
+
 		flags := ""
 		for i < len(format) && strings.ContainsRune("-+ 0#", rune(format[i])) {
 			flags += string(format[i])
@@ -1005,86 +1037,284 @@ func formatString(format string, args []Value) (string, error) {
 			}
 		}
 		if i >= len(format) {
-			builder.WriteString(format[start:])
-			break
+			return "", fmt.Errorf("malformed format string")
 		}
 		specifier := format[i]
-		if argIndex >= len(args) {
-			return "", fmt.Errorf("too few arguments")
+		i++
+
+		var value Value
+		if hasNamed {
+			value = named
+		} else {
+			if argIndex >= len(args) {
+				return "", fmt.Errorf("too few arguments")
+			}
+			value = args[argIndex]
+			argIndex++
 		}
-		value := args[argIndex]
-		argIndex++
+
 		var text string
 		switch specifier {
-		case 'd', 'i', 'u':
-			text = strconv.FormatInt(value.Int(), 10)
-		case 'x':
-			text = strconv.FormatInt(value.Int(), 16)
-		case 'X':
-			text = strings.ToUpper(strconv.FormatInt(value.Int(), 16))
-		case 'o':
-			text = strconv.FormatInt(value.Int(), 8)
-		case 'b':
-			text = strconv.FormatInt(value.Int(), 2)
-		case 'f':
-			precisionValue := 6
-			if precision >= 0 {
-				precisionValue = precision
+		case 'd', 'i', 'u', 'x', 'X', 'o', 'b', 'B':
+			base := 10
+			upper := false
+			switch specifier {
+			case 'x', 'X':
+				base = 16
+				upper = specifier == 'X'
+			case 'o':
+				base = 8
+			case 'b', 'B':
+				base = 2
+				upper = specifier == 'B'
 			}
-			text = strconv.FormatFloat(value.Float(), 'f', precisionValue, 64)
-		case 'e':
-			precisionValue := 6
-			if precision >= 0 {
-				precisionValue = precision
+			sign, digits, err := formatIntegerValue(value, base, upper, precision)
+			if err != nil {
+				return "", err
 			}
-			text = strconv.FormatFloat(value.Float(), 'e', precisionValue, 64)
-		case 'g':
-			precisionValue := -1
-			if precision >= 0 {
-				precisionValue = precision
+			if sign == "" {
+				switch {
+				case strings.Contains(flags, "+"):
+					sign = "+"
+				case strings.Contains(flags, " "):
+					sign = " "
+				}
 			}
-			text = strconv.FormatFloat(value.Float(), 'g', precisionValue, 64)
+			prefix := ""
+			if strings.Contains(flags, "#") {
+				switch specifier {
+				case 'x':
+					prefix = "0x"
+				case 'X':
+					prefix = "0X"
+				case 'o':
+					if !strings.HasPrefix(digits, "0") {
+						prefix = "0"
+					}
+				case 'b':
+					prefix = "0b"
+				}
+			}
+			text = padNumeric(sign, prefix, digits, width, flags)
+		case 'f', 'e', 'E', 'g', 'G':
+			var err error
+			text, err = formatFloatValue(value, specifier, precision, width, flags)
+			if err != nil {
+				return "", err
+			}
 		case 'c':
-			text = string(rune(value.Int()))
-		case 'p':
-			text = value.Inspect()
+			var char string
+			switch value.Kind() {
+			case KindInt:
+				char = string(rune(value.Int()))
+			case KindString:
+				runes := []rune(value.String())
+				if len(runes) != 1 {
+					return "", fmt.Errorf("%%c requires a character")
+				}
+				char = string(runes[0])
+			default:
+				return "", fmt.Errorf("%%c requires a character")
+			}
+			text = padText(char, width, flags)
 		case 's':
-			text = value.ToS()
+			valueText := value.ToS()
+			if precision >= 0 {
+				runes := []rune(valueText)
+				if len(runes) > precision {
+					valueText = string(runes[:precision])
+				}
+			}
+			text = padText(valueText, width, flags)
+		case 'p':
+			valueText := value.Inspect()
+			if precision >= 0 {
+				runes := []rune(valueText)
+				if len(runes) > precision {
+					valueText = string(runes[:precision])
+				}
+			}
+			text = padText(valueText, width, flags)
 		default:
 			return "", fmt.Errorf("malformed format string - %%%c", specifier)
-		}
-		if width > len([]rune(text)) {
-			missing := width - len([]rune(text))
-			if strings.Contains(flags, "-") {
-				text += strings.Repeat(" ", missing)
-			} else if strings.Contains(flags, "0") && strings.IndexByte("diuxXob", specifier) >= 0 {
-				sign := ""
-				if strings.HasPrefix(text, "-") && !strings.Contains(flags, "+") {
-					sign = "-"
-					text = text[1:]
-				}
-				text = sign + strings.Repeat("0", missing) + text
-			} else {
-				text = strings.Repeat(" ", missing) + text
-			}
-		}
-		if strings.Contains(flags, "+") && value.Kind() == KindInt && value.Int() >= 0 &&
-			strings.IndexByte("di", specifier) >= 0 {
-			text = "+" + text
 		}
 		builder.WriteString(text)
 	}
 	return builder.String(), nil
 }
 
+func formatNamedValue(args []Value, name string) (Value, bool) {
+	if len(args) != 1 || args[0].Kind() != KindObject || args[0].obj == nil {
+		return Nil, false
+	}
+	data, ok := args[0].obj.data.(*hashData)
+	if !ok {
+		return Nil, false
+	}
+	if index, ok := hashLookup(data, SymbolValue(name)); ok {
+		return data.entries[index].value, true
+	}
+	if index, ok := hashLookup(data, StringValue(name)); ok {
+		return data.entries[index].value, true
+	}
+	return Nil, false
+}
+
+func formatIntegerValue(value Value, base int, upper bool, precision int) (string, string, error) {
+	var integer *big.Int
+	switch value.Kind() {
+	case KindInt:
+		integer = big.NewInt(value.Int())
+	case KindBigInt:
+		integer, _ = value.BigInt()
+	case KindFloat:
+		f := value.Float()
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return "", "", fmt.Errorf("%s out of range", formatFloat(f))
+		}
+		integer, _ = new(big.Float).SetFloat64(f).Int(nil)
+	default:
+		return "", "", fmt.Errorf("can't convert %s into Integer", value.Inspect())
+	}
+	sign := ""
+	if integer.Sign() < 0 {
+		sign = "-"
+		integer = new(big.Int).Neg(integer)
+	}
+	digits := integer.Text(base)
+	if upper {
+		digits = strings.ToUpper(digits)
+	}
+	if precision == 0 && integer.Sign() == 0 {
+		digits = ""
+	}
+	if precision > 0 && len(digits) < precision {
+		digits = strings.Repeat("0", precision-len(digits)) + digits
+	}
+	return sign, digits, nil
+}
+
+func formatFloatValue(value Value, specifier byte, precision, width int, flags string) (string, error) {
+	var number float64
+	switch value.Kind() {
+	case KindInt:
+		number = float64(value.Int())
+	case KindFloat:
+		number = value.Float()
+	case KindBigInt:
+		bigValue, _ := value.BigInt()
+		f, _ := new(big.Float).SetInt(bigValue).Float64()
+		number = f
+	default:
+		return "", fmt.Errorf("can't convert %s into Float", value.Inspect())
+	}
+
+	sign := ""
+	if math.Signbit(number) && !math.IsNaN(number) {
+		sign = "-"
+		number = -number
+	}
+	if math.IsInf(number, 0) || math.IsNaN(number) {
+		text := "Inf"
+		if math.IsNaN(number) {
+			text = "NaN"
+			sign = ""
+		}
+		if sign == "" {
+			switch {
+			case strings.Contains(flags, "+"):
+				sign = "+"
+			case strings.Contains(flags, " "):
+				sign = " "
+			}
+		}
+		return padNumeric(sign, "", text, width, flags), nil
+	}
+
+	digits := 6
+	if precision >= 0 {
+		digits = precision
+	}
+	var body string
+	switch specifier {
+	case 'f':
+		body = strconv.FormatFloat(roundDecimal(number, digits), 'f', digits, 64)
+	case 'e', 'E':
+		if number != 0 {
+			exponent := math.Floor(math.Log10(number))
+			scale := math.Pow(10, float64(digits)-exponent)
+			number = floatModeValue(number*scale, floatRoundMode) / scale
+		}
+		body = strconv.FormatFloat(number, 'e', digits, 64)
+		if specifier == 'E' {
+			body = strings.ToUpper(body)
+		}
+	case 'g', 'G':
+		body = strconv.FormatFloat(number, 'g', digits, 64)
+		if specifier == 'G' {
+			body = strings.ToUpper(body)
+		}
+	}
+	if sign == "" {
+		switch {
+		case strings.Contains(flags, "+"):
+			sign = "+"
+		case strings.Contains(flags, " "):
+			sign = " "
+		}
+	}
+	return padNumeric(sign, "", body, width, flags), nil
+}
+
+// roundDecimal rounds number to the given number of decimal places, using
+// mruby's round-half-away-from-zero rule.
+func roundDecimal(number float64, digits int) float64 {
+	scale := math.Pow(10, float64(digits))
+	if math.IsInf(scale, 0) {
+		return number
+	}
+	scaled := number * scale
+	if math.IsInf(scaled, 0) {
+		return number
+	}
+	return floatModeValue(scaled, floatRoundMode) / scale
+}
+
+func padNumeric(sign, prefix, digits string, width int, flags string) string {
+	body := sign + prefix + digits
+	if width <= len(body) {
+		return body
+	}
+	padding := width - len(body)
+	if strings.Contains(flags, "-") {
+		return body + strings.Repeat(" ", padding)
+	}
+	if strings.Contains(flags, "0") {
+		return sign + prefix + strings.Repeat("0", padding) + digits
+	}
+	return strings.Repeat(" ", padding) + body
+}
+
+func padText(text string, width int, flags string) string {
+	length := len([]rune(text))
+	if width <= length {
+		return text
+	}
+	padding := width - length
+	if strings.Contains(flags, "-") {
+		return text + strings.Repeat(" ", padding)
+	}
+	return strings.Repeat(" ", padding) + text
+}
+
 func (s *State) stringCountMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) != 1 {
 		return IntValue(0), nil
 	}
-	set := expandCharSet(args[0].String())
+	set, negated := expandCharSetSpec(args[0].String())
 	count := 0
 	for _, r := range self.String() {
-		if set[r] {
+		if set[r] != negated {
 			count++
 		}
 	}
@@ -1095,10 +1325,10 @@ func (s *State) stringDeleteMethod(ctx context.Context, self Value, args []Value
 	if len(args) != 1 {
 		return StringValue(self.String()), nil
 	}
-	set := expandCharSet(args[0].String())
+	set, negated := expandCharSetSpec(args[0].String())
 	var builder strings.Builder
 	for _, r := range self.String() {
-		if !set[r] {
+		if set[r] == negated {
 			builder.WriteRune(r)
 		}
 	}
@@ -1190,14 +1420,15 @@ func (s *State) stringSuccMethod(ctx context.Context, self Value, args []Value, 
 
 func (s *State) stringSqueezeMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	set := map[rune]bool(nil)
+	negated := false
 	if len(args) > 0 {
-		set = expandCharSet(args[0].String())
+		set, negated = expandCharSetSpec(args[0].String())
 	}
 	var builder strings.Builder
 	var previous rune
 	first := true
 	for _, r := range self.String() {
-		if !first && r == previous && (set == nil || set[r]) {
+		if !first && r == previous && (set == nil || set[r] != negated) {
 			continue
 		}
 		builder.WriteRune(r)
@@ -1239,23 +1470,37 @@ func (s *State) stringDowncaseBangMethod(ctx context.Context, self Value, args [
 	return Nil, nil
 }
 
-func expandCharSet(spec string) map[rune]bool {
+func expandCharSetSpec(spec string) (map[rune]bool, bool) {
 	set := make(map[rune]bool)
 	runes := []rune(spec)
+	negated := false
+	if len(runes) > 0 && runes[0] == '^' {
+		negated = true
+		runes = runes[1:]
+	}
 	for i := 0; i < len(runes); i++ {
+		current := runes[i]
+		if current == '\\' && i+1 < len(runes) {
+			i++
+			current = runes[i]
+		}
 		if i+2 < len(runes) && runes[i+1] == '-' {
-			start, end := runes[i], runes[i+2]
-			if start <= end {
-				for r := start; r <= end; r++ {
+			end := runes[i+2]
+			if end == '\\' && i+3 < len(runes) {
+				i++
+				end = runes[i+2]
+			}
+			if current <= end {
+				for r := current; r <= end; r++ {
 					set[r] = true
 				}
 			}
 			i += 2
 			continue
 		}
-		set[runes[i]] = true
+		set[current] = true
 	}
-	return set
+	return set, negated
 }
 
 func expandCharList(spec string) []rune {

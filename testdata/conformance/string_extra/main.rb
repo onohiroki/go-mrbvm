@@ -1,0 +1,22 @@
+p "abc".each_char.to_a
+p "abc".each_byte.to_a
+p "abc".each_char { |c| c }
+p "abc".casecmp("ABC")
+p "abc".casecmp("abd")
+p "abc".casecmp(1)
+p "abc".casecmp?("ABC")
+p "abc".casecmp?("abd")
+p "abc".casecmp?(1)
+p " a  b c ".split(" ", 2)
+p " a  b c ".split(" ", -1)
+p " a  b c ".split(" ")
+p "a,b,,".split(",", 0)
+p "a,b,,".split(",", -1)
+p "a,b,,".split(",", 1)
+p "abc".split("", 2)
+p "abc".split("", 0)
+p "abc".split("", -1)
+p "".split("")
+p "".split(",", -1)
+p "abc".count("abc")
+p "aabbcc".count("^b")

@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // installCoreLibrary adds the pure-Go part of mruby's core library. The
@@ -197,6 +198,10 @@ func (s *State) installStringLibrary() {
 		}
 		return BoolValue(strings.Contains(self.String(), args[0].String())), nil
 	})
+	class.define("each_char", s.stringEachCharMethod)
+	class.define("each_byte", s.stringEachByteMethod)
+	class.define("casecmp", s.stringCasecmpMethod)
+	class.define("casecmp?", s.stringCasecmpPredicateMethod)
 	class.define("start_with?", s.stringStartWithMethod)
 	class.define("end_with?", s.stringEndWithMethod)
 	class.define("index", s.stringIndexMethod)
@@ -1525,24 +1530,159 @@ func (s *State) hashValuesAtMethod(ctx context.Context, self Value, args []Value
 
 func (s *State) stringSplitMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	text := self.String()
+	limit := 0
+	if len(args) > 1 && args[1].Kind() == KindInt {
+		limit = int(args[1].Int())
+	}
 	var parts []string
-	if len(args) == 0 || args[0].IsNil() {
+	switch {
+	case len(args) == 0 || args[0].IsNil():
 		parts = strings.Fields(text)
-	} else {
-		separator := args[0].String()
-		if separator == "" {
-			for _, r := range text {
-				parts = append(parts, string(r))
-			}
-		} else {
-			parts = strings.Split(text, separator)
-		}
+	case args[0].String() == " ":
+		parts = splitWhitespace(text, limit)
+	case args[0].String() == "":
+		parts = splitRunes(text, limit)
+	default:
+		parts = splitSeparator(text, args[0].String(), limit)
 	}
 	values := make([]Value, len(parts))
 	for i, part := range parts {
 		values[i] = StringValue(part)
 	}
 	return ArrayValue(values), nil
+}
+
+func splitSeparator(text, separator string, limit int) []string {
+	if text == "" {
+		return nil
+	}
+	if limit > 0 {
+		parts := make([]string, 0, limit)
+		remaining := text
+		for len(parts) < limit-1 {
+			index := strings.Index(remaining, separator)
+			if index < 0 {
+				break
+			}
+			parts = append(parts, remaining[:index])
+			remaining = remaining[index+len(separator):]
+		}
+		parts = append(parts, remaining)
+		return parts
+	}
+	parts := strings.Split(text, separator)
+	if limit == 0 {
+		for len(parts) > 0 && parts[len(parts)-1] == "" {
+			parts = parts[:len(parts)-1]
+		}
+	}
+	return parts
+}
+
+func splitRunes(text string, limit int) []string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return nil
+	}
+	if limit > 0 {
+		parts := make([]string, 0, limit)
+		for i := 0; i < limit-1 && i < len(runes); i++ {
+			parts = append(parts, string(runes[i]))
+		}
+		if len(parts) < limit {
+			parts = append(parts, string(runes[len(parts):]))
+		}
+		return parts
+	}
+	parts := make([]string, len(runes))
+	for i, r := range runes {
+		parts[i] = string(r)
+	}
+	if limit < 0 {
+		parts = append(parts, "")
+	}
+	return parts
+}
+
+func splitWhitespace(text string, limit int) []string {
+	runes := []rune(text)
+	position := 0
+	for position < len(runes) && unicode.IsSpace(runes[position]) {
+		position++
+	}
+	if limit > 0 {
+		parts := make([]string, 0, limit)
+		for len(parts) < limit-1 && position < len(runes) {
+			start := position
+			for position < len(runes) && !unicode.IsSpace(runes[position]) {
+				position++
+			}
+			parts = append(parts, string(runes[start:position]))
+			for position < len(runes) && unicode.IsSpace(runes[position]) {
+				position++
+			}
+		}
+		if position < len(runes) {
+			parts = append(parts, string(runes[position:]))
+		}
+		return parts
+	}
+	parts := strings.Fields(text)
+	if limit < 0 && len(runes) > 0 && unicode.IsSpace(runes[len(runes)-1]) {
+		parts = append(parts, "")
+	}
+	return parts
+}
+
+func (s *State) stringEachCharMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "each_char", nil), nil
+	}
+	for _, r := range self.String() {
+		if _, err := s.callBlock1(ctx, block, StringValue(string(r)), Nil); err != nil {
+			return Nil, err
+		}
+	}
+	return self, nil
+}
+
+func (s *State) stringEachByteMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "each_byte", nil), nil
+	}
+	for i := 0; i < len(self.String()); i++ {
+		if _, err := s.callBlock1(ctx, block, IntValue(int64(self.String()[i])), Nil); err != nil {
+			return Nil, err
+		}
+	}
+	return self, nil
+}
+
+func (s *State) stringCasecmpMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	if args[0].Kind() != KindString {
+		return Nil, nil
+	}
+	left := strings.ToLower(self.String())
+	right := strings.ToLower(args[0].String())
+	switch {
+	case left < right:
+		return IntValue(-1), nil
+	case left > right:
+		return IntValue(1), nil
+	default:
+		return IntValue(0), nil
+	}
+}
+
+func (s *State) stringCasecmpPredicateMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	result, err := s.stringCasecmpMethod(ctx, self, args, kw, block)
+	if err != nil || result.IsNil() {
+		return result, err
+	}
+	return BoolValue(result.Int() == 0), nil
 }
 
 func (s *State) stringStartWithMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
