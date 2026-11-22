@@ -111,6 +111,10 @@ type State struct {
 	arraySetBuiltin     *method
 	eqSeen              map[objectPair]bool
 	immediateSingletons map[Kind]*Class
+	// bopRedefined is set when Ruby code replaces one of the builtin
+	// arithmetic or comparison operators. Specialized opcodes use it to
+	// decide whether they may take their native fast path.
+	bopRedefined bool
 
 	frames            []callFrame
 	callDepth         int
@@ -997,6 +1001,9 @@ func New(opts Options) *State {
 	s.installRegexpClass()
 	s.installMatchDataClass()
 	s.installFiberClass()
+	s.installNumericOperatorMethods()
+	s.markBuiltinOperatorMethods()
+	s.bopRedefined = false
 	s.stringPlusBuiltin = s.StringClass.methods["+"]
 	s.objectEqBuiltin = s.ObjectClass.methods["=="]
 	for name, m := range s.ClassClass.methods {
@@ -1755,6 +1762,8 @@ func (s *State) classAliasMethod(ctx context.Context, self Value, args []Value, 
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+oldName+"'")}
 		}
 		class.singletonOf.classMethods[newName] = m
+		s.noteOperatorDefinition(newName)
+		s.noteOperatorDefinition(oldName)
 		return SymbolValue(newName), nil
 	}
 	m, ok := class.lookup(oldName)
@@ -1762,22 +1771,31 @@ func (s *State) classAliasMethod(ctx context.Context, self Value, args []Value, 
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+oldName+"'")}
 	}
 	class.methods[newName] = m
+	s.noteOperatorDefinition(newName)
+	s.noteOperatorDefinition(oldName)
 	return SymbolValue(newName), nil
 }
 
 func (s *State) classRemoveMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
-	if !ok || len(args) != 1 {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "remove_method expects one name")}
+	if !ok || len(args) < 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "remove_method expects at least one name")}
 	}
 	if err := s.ensureMutable(self); err != nil {
 		return Nil, err
 	}
-	name := args[0].String()
-	if _, ok := class.methods[name]; !ok {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "method '"+name+"' not defined in "+class.name)}
+	names := flattenNames(args)
+	for _, nameValue := range names {
+		name := nameValue.String()
+		if _, ok := class.methods[name]; !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "method '"+name+"' not defined in "+class.name)}
+		}
 	}
-	delete(class.methods, name)
+	for _, nameValue := range names {
+		name := nameValue.String()
+		delete(class.methods, name)
+		s.noteOperatorDefinition(name)
+	}
 	return self, nil
 }
 

@@ -2202,6 +2202,14 @@ func (s *State) sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, h
 }
 
 func (s *State) call(ctx context.Context, recv Value, name string, args []Value, kw Value, block Value) (Value, error) {
+	// A Ruby redefinition of an operator wins over the native fast paths
+	// below. This is what makes send(:+), aliases, and method_missing agree
+	// with normal method dispatch.
+	if s.bopRedefined && builtinOperatorNames[name] {
+		if m, ok := s.classOf(recv).lookup(name); ok && !m.builtin {
+			return s.invoke(ctx, m, recv, args, kw, block)
+		}
+	}
 	if len(args) == 0 {
 		switch name {
 		case "nil?":

@@ -101,11 +101,12 @@ type Class struct {
 }
 
 type method struct {
-	owner  *Class
-	cref   *Class
-	name   string
-	native NativeFunc
-	irep   *Irep
+	owner   *Class
+	cref    *Class
+	name    string
+	native  NativeFunc
+	irep    *Irep
+	builtin bool
 }
 
 // NativeFunc is a Go function exposed as a Ruby method.
@@ -285,6 +286,12 @@ func classAncestors(c *Class) []*Class {
 	return result
 }
 
+func (c *Class) noteDefinition(name string) {
+	if c.state != nil {
+		c.state.noteOperatorDefinition(name)
+	}
+}
+
 func (c *Class) lookup(name string) (*method, bool) {
 	for _, current := range classAncestors(c) {
 		if current.undefMethods[name] {
@@ -345,11 +352,13 @@ func (c *Class) define(name string, fn NativeFunc) {
 			delete(c.singletonOf.privateClassMethods, name)
 			delete(c.singletonOf.protectedClassMethods, name)
 		}
+		c.noteDefinition(name)
 		return
 	}
 	c.methods[name] = &method{owner: c, name: name, native: fn}
 	delete(c.undefMethods, name)
 	c.applyVisibility(name)
+	c.noteDefinition(name)
 }
 
 func (c *Class) defineIrep(name string, irep *Irep) {
@@ -366,6 +375,7 @@ func (c *Class) defineIrep(name string, irep *Irep) {
 			delete(c.singletonOf.privateClassMethods, name)
 			delete(c.singletonOf.protectedClassMethods, name)
 		}
+		c.noteDefinition(name)
 		return
 	}
 	m := &method{owner: c, name: name, irep: irep}
@@ -380,10 +390,12 @@ func (c *Class) defineIrep(name string, irep *Irep) {
 			}
 		}
 	}
+	c.noteDefinition(name)
 }
 
 func (c *Class) defineClassIrep(name string, irep *Irep) {
 	c.classMethods[name] = &method{owner: c, name: name, irep: irep}
+	c.noteDefinition(name)
 }
 
 func (c *Class) lookupClassMethod(name string) (*method, bool) {
