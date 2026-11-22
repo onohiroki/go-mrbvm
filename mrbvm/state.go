@@ -271,6 +271,12 @@ func New(opts Options) *State {
 		}
 		return Nil, nil
 	})
+	s.ClassClass.define("protected", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) > 0 {
+			return args[0], nil
+		}
+		return Nil, nil
+	})
 	s.ClassClass.define("===", s.classCaseEqMethod)
 	s.ClassClass.define("attr_reader", s.classAttrReaderMethod)
 	s.ClassClass.define("attr", s.classAttrReaderMethod)
@@ -496,6 +502,7 @@ func New(opts Options) *State {
 	s.arraySetBuiltin = s.ArrayClass.methods["[]="]
 	s.HashClass.define("[]=", s.hashSetMethod)
 	s.ProcClass.define("call", s.procCallMethod)
+	s.ProcClass.classMethods["new"] = &method{owner: s.ProcClass, name: "new", native: s.kernelProcMethod}
 	s.ObjectClass.define("respond_to?", s.objectRespondToMethod)
 	s.ObjectClass.define("dup", s.objectDupMethod)
 	s.ObjectClass.define("instance_variables", s.objectInstanceVariablesMethod)
@@ -508,6 +515,9 @@ func New(opts Options) *State {
 		return ArrayValue(nil), nil
 	})
 	s.ObjectClass.define("clone", s.objectDupMethod)
+	s.ObjectClass.define("__ENCODING__", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return StringValue("ASCII-8BIT"), nil
+	})
 	s.ObjectClass.define("proc", s.kernelProcMethod)
 	s.ObjectClass.define("lambda", s.kernelProcMethod)
 
@@ -878,12 +888,30 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: Class#new receiver is not a class")
 	}
+	if class == s.ModuleClass {
+		created := newClass("#<Module>", nil)
+		s.ensureClassObject(created)
+		createdValue := s.classValue(created)
+		if !block.IsNil() {
+			if _, err := s.callBlockWithSelf(ctx, block, createdValue, nil, Nil); err != nil {
+				return Nil, err
+			}
+		}
+		return createdValue, nil
+	}
 	if class == s.ClassClass {
 		super := s.ObjectClass
 		if len(args) > 0 {
-			if parent, ok := s.asClass(args[0]); ok {
-				super = parent
+			parent, ok := s.asClass(args[0])
+			if !ok {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+					fmt.Sprintf("%s is not class/module", args[0].Inspect()))}
 			}
+			if parent != s.BasicObjectClass && parent.super == nil {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+					fmt.Sprintf("superclass must be a Class (%s given)", args[0].Inspect()))}
+			}
+			super = parent
 		}
 		created := newClass("#<Class>", super)
 		s.ensureClassObject(created)
@@ -1061,6 +1089,42 @@ func (s *State) isA(value Value, class *Class) bool {
 	return false
 }
 
+// classOp implements OP_CLASS / OP_MODULE: resolve the outer namespace,
+// create or reopen the class, and validate the superclass.
+func (s *State) classOp(outerValue, superValue Value, name string, isClass bool) (Value, error) {
+	outer := s.ObjectClass
+	if !outerValue.IsNil() {
+		class, ok := s.asClass(outerValue)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+				fmt.Sprintf("%s is not class/module", outerValue.Inspect()))}
+		}
+		outer = class
+	}
+	super := s.ObjectClass
+	if isClass && !superValue.IsNil() {
+		class, ok := s.asClass(superValue)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+				fmt.Sprintf("superclass must be a Class (%s given)", superValue.Inspect()))}
+		}
+		super = class
+	}
+	var class *Class
+	if existing := s.lookupConstant(outer, name); !existing.IsNil() {
+		if c, ok := s.asClass(existing); ok {
+			class = c
+		}
+	}
+	if class == nil {
+		class = newClass(name, super)
+		s.ensureClassObject(class)
+		outer.constants[name] = s.classValue(class)
+		s.constants[name] = s.classValue(class)
+	}
+	return s.classValue(class), nil
+}
+
 func (s *State) classIncludeMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
 	if !ok {
@@ -1134,11 +1198,11 @@ func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
 					return sliceString(data.str(), rangeIndex), nil
 				}
 			}
-			if index.Kind() != KindInt {
-				return Nil, fmt.Errorf("mrbvm: string index must be an integer")
+			pos, err := s.indexInteger(index)
+			if err != nil {
+				return Nil, err
 			}
 			runes := []rune(data.str())
-			pos := int(index.Int())
 			if pos < 0 {
 				pos += len(runes)
 			}
@@ -1918,13 +1982,13 @@ func (s *State) objectRespondToMethod(ctx context.Context, self Value, args []Va
 
 func (s *State) kernelProcMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return Nil, fmt.Errorf("mrbvm: tried to create Proc without a block")
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
 	}
 	return block, nil
 }
 
 func (s *State) newMethodError(name string, recv Value, args []Value) Value {
-	message := fmt.Sprintf("undefined method %q for %s", name, recv.Inspect())
+	message := fmt.Sprintf("undefined method '%s' for %s", name, s.classOf(recv).name)
 	exception := newException(s.NoMethodErrorClass, message)
 	if data, ok := exception.obj.data.(*exceptionData); ok {
 		data.name = SymbolValue(name)

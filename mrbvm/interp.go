@@ -458,20 +458,30 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			restSlot := 1 + req + opt
 			if hasRest {
 				rest := make([]Value, restCount)
-				copy(rest, frameArgs[req+optional:req+optional+restCount])
+				if restCount > 0 {
+					start := req + optional
+					copy(rest, frameArgs[start:start+restCount])
+				}
 				regs[restSlot] = ArrayValue(rest)
 			}
 			postStart := restSlot
 			if hasRest {
 				postStart++
 			}
+			filledPost := provided - req
+			if filledPost > post {
+				filledPost = post
+			}
+			if filledPost < 0 {
+				filledPost = 0
+			}
 			for i := 0; i < post; i++ {
-				index := provided - post + i
-				if index >= 0 && index < provided {
-					regs[postStart+i] = frameArgs[index]
-				} else {
+				if i < post-filledPost {
 					regs[postStart+i] = Nil
+					continue
 				}
+				index := provided - (post - i)
+				regs[postStart+i] = frameArgs[index]
 			}
 			positional := req + opt
 			if hasRest {
@@ -688,42 +698,23 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 
 		case bytecode.OpMODULE, bytecode.OpCLASS:
 			a := int(in.Operands[0])
-			name := irep.Syms[in.Operands[1]]
-			var outer *Class
-			if !regs[a].IsNil() {
-				var ok bool
-				outer, ok = s.asClass(regs[a])
-				if !ok {
-					return Nil, fmt.Errorf("mrbvm: class/module outer is not a class")
+			var super Value = Nil
+			if in.Op == bytecode.OpCLASS && a+1 < len(regs) {
+				super = regs[a+1]
+			}
+			value, err := s.classOp(regs[a], super, irep.Syms[in.Operands[1]], in.Op == bytecode.OpCLASS)
+			if err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
 				}
-			} else {
-				outer = s.ObjectClass
-			}
-			var super *Class
-			if in.Op == bytecode.OpCLASS {
-				if !regs[a+1].IsNil() {
-					var ok bool
-					super, ok = s.asClass(regs[a+1])
-					if !ok {
-						return Nil, fmt.Errorf("mrbvm: superclass is not a class")
-					}
-				} else {
-					super = s.ObjectClass
+				if done {
+					return rv, nil
 				}
+				pc = np - 1
+				continue
 			}
-			var class *Class
-			if existing := s.lookupConstant(outer, name); !existing.IsNil() {
-				if c, ok := s.asClass(existing); ok {
-					class = c
-				}
-			}
-			if class == nil {
-				class = newClass(name, super)
-				s.ensureClassObject(class)
-				outer.constants[name] = s.classValue(class)
-				s.constants[name] = s.classValue(class)
-			}
-			regs[a] = s.classValue(class)
+			regs[a] = value
 
 		case bytecode.OpEXEC:
 			a := int(in.Operands[0])

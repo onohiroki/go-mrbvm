@@ -279,6 +279,15 @@ func inspectValue(v Value, seen map[*Object]bool) string {
 					op = "..."
 				}
 				return inspectValue(data.low, seen) + op + inspectValue(data.high, seen)
+			case *exceptionData:
+				className := "Exception"
+				if v.obj.class != nil {
+					className = v.obj.class.name
+				}
+				if data.message == "" {
+					return className
+				}
+				return "#<" + className + ": " + data.message + ">"
 			case *blockData:
 				return "#<Proc>"
 			case *enumeratorData:

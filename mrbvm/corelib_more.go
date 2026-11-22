@@ -242,6 +242,24 @@ func (s *State) installFloatLibrary() {
 	class.define("truncate", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(int64(self.Float())), nil
 	})
+	class.define("finite?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		value := self.Float()
+		return BoolValue(!math.IsInf(value, 0) && !math.IsNaN(value)), nil
+	})
+	class.define("integer?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		value := self.Float()
+		return BoolValue(!math.IsInf(value, 0) && !math.IsNaN(value) && value == math.Trunc(value)), nil
+	})
+	class.define("quo", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+		}
+		_, divisor, ok := numeric(args[0])
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a number")}
+		}
+		return FloatValue(self.Float() / divisor), nil
+	})
 	class.define("nan?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return BoolValue(math.IsNaN(self.Float())), nil
 	})

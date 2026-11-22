@@ -153,7 +153,7 @@ type unwindSignal struct {
 func (e *unwindSignal) Error() string {
 	switch e.kind {
 	case unwindException:
-		text := "unhandled exception: " + e.value.Inspect() + " (" + exceptionMessage(e.value) + ")"
+		text := "unhandled exception: " + e.value.Inspect()
 		if e.value.obj != nil {
 			if data, ok := e.value.obj.data.(*exceptionData); ok {
 				for _, line := range data.backtrace {
