@@ -1166,9 +1166,22 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					continue
 				}
 			}
-			args, kw, block, err := s.sendArguments(irep, regs, a, in.Operands[2], false)
-			if err != nil {
-				return Nil, err
+			var args []Value
+			kw := Nil
+			block := Nil
+			var err error
+			switch in.Operands[2] {
+			case 1:
+				args = s.acquireValues(1)
+				args[0] = regs[a+1]
+			case 2:
+				args = s.acquireValues(2)
+				copy(args, regs[a+1:a+3])
+			default:
+				args, kw, block, err = s.sendArguments(irep, regs, a, in.Operands[2], false)
+				if err != nil {
+					return Nil, err
+				}
 			}
 			if s.privateMethodCount > 0 {
 				if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
