@@ -18,6 +18,7 @@ func (s *State) installEnumerableLibrary() {
 	class.define("find", s.enumerableFindMethod)
 	class.define("detect", s.enumerableFindMethod)
 	class.define("include?", s.enumerableIncludeMethod)
+	class.define("grep", s.enumerableGrepMethod)
 	class.define("member?", s.enumerableIncludeMethod)
 	class.define("inject", s.enumerableInjectMethod)
 	class.define("reduce", s.enumerableInjectMethod)
@@ -47,12 +48,12 @@ func (s *State) installEnumerableLibrary() {
 	class.define("sum", s.enumerableSumMethod)
 }
 
-func nativeBlockValue(fn func(ctx context.Context, args []Value) (Value, error)) Value {
-	return ObjectValue(&Object{data: &nativeBlockData{fn: fn}})
+func nativeBlockValue(class *Class, fn func(ctx context.Context, args []Value) (Value, error)) Value {
+	return ObjectValue(&Object{class: class, data: &nativeBlockData{fn: fn}})
 }
 
 func (s *State) eachRaw(ctx context.Context, self Value, fn func(args []Value) error) error {
-	block := nativeBlockValue(func(ctx context.Context, args []Value) (Value, error) {
+	block := nativeBlockValue(s.ProcClass, func(ctx context.Context, args []Value) (Value, error) {
 		return Nil, fn(args)
 	})
 	_, err := s.call(ctx, self, "each", nil, Nil, block)
@@ -160,6 +161,12 @@ func (s *State) enumerableFindMethod(ctx context.Context, self Value, args []Val
 	if block.IsNil() {
 		return s.toEnum(self, "find", args), nil
 	}
+	var ifnone Value
+	if len(args) > 0 {
+		// Nested blocks may reuse a pooled argument slice, so copy before
+		// iterating.
+		ifnone = args[0]
+	}
 	var found Value
 	matched := false
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
@@ -182,19 +189,54 @@ func (s *State) enumerableFindMethod(ctx context.Context, self Value, args []Val
 	if matched {
 		return found, nil
 	}
-	if len(args) > 0 && !args[0].IsNil() {
-		return s.call(ctx, args[0], "call", nil, Nil, Nil)
+	if !ifnone.IsNil() {
+		return s.call(ctx, ifnone, "call", nil, Nil, Nil)
 	}
 	return Nil, nil
+}
+
+func (s *State) enumerableGrepMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	pattern := args[0]
+	var result []Value
+	err := s.eachRaw(ctx, self, func(raw []Value) error {
+		value := svalueOf(raw)
+		match, err := s.call(ctx, pattern, "===", []Value{value}, Nil, Nil)
+		if err != nil {
+			return err
+		}
+		if !match.IsTruthy() {
+			return nil
+		}
+		if !block.IsNil() {
+			value, err = s.callBlock1(ctx, block, value, Nil)
+			if err != nil {
+				return err
+			}
+		}
+		result = append(result, value)
+		return nil
+	})
+	if err != nil {
+		return Nil, err
+	}
+	return ArrayValue(result), nil
 }
 
 func (s *State) enumerableIncludeMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) != 1 {
 		return False, nil
 	}
+	target := args[0]
 	found := false
 	err := s.eachRaw(ctx, self, func(raw []Value) error {
-		if valuesEqual(svalueOf(raw), args[0]) {
+		equal, err := s.rubyEqual(ctx, svalueOf(raw), target)
+		if err != nil {
+			return err
+		}
+		if equal {
 			found = true
 		}
 		return nil

@@ -158,7 +158,7 @@ func (s *State) installHashLibrary() {
 	class.define("fetch", s.hashFetchMethod)
 	class.define("default", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) > 1 {
-			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+			return Nil, argumentCountError(s, len(args), "0..1")
 		}
 		data, ok := hashDataOf(self)
 		if !ok {
@@ -724,27 +724,30 @@ func (s *State) integerEnsureMethod(ctx context.Context, self Value, args []Valu
 	return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't convert "+name+" into Integer")}
 }
 
-func (s *State) installObjectLibrary() {
-	class := s.ObjectClass
-	class.define("defined?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		if s.definedSet {
-			kind := s.definedKind
-			isNil := s.definedNil
-			s.definedSet = false
-			s.definedKind = ""
-			s.definedNil = false
-			if isNil {
-				return Nil, nil
-			}
-			if kind != "" {
-				return StringValue(kind), nil
-			}
-		}
-		if len(args) == 0 || args[0].IsNil() {
+func (s *State) objectDefinedMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if s.definedSet {
+		kind := s.definedKind
+		isNil := s.definedNil
+		s.definedSet = false
+		s.definedKind = ""
+		s.definedNil = false
+		if isNil {
 			return Nil, nil
 		}
-		return StringValue("expression"), nil
-	})
+		if kind != "" {
+			return StringValue(kind), nil
+		}
+	}
+	if len(args) == 0 || args[0].IsNil() {
+		return Nil, nil
+	}
+	return StringValue("expression"), nil
+}
+
+func (s *State) installObjectLibrary() {
+	class := s.ObjectClass
+	class.define("defined?", s.objectDefinedMethod)
+	s.BasicObjectClass.define("defined?", s.objectDefinedMethod)
 	class.define("is_a?", s.objectIsAMethod)
 	class.define("kind_of?", s.objectIsAMethod)
 	class.define("instance_of?", s.objectInstanceOfMethod)
@@ -794,9 +797,15 @@ func (s *State) installObjectLibrary() {
 		return Nil, nil
 	})
 	class.define("__id__", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 0 || !kw.IsNil() {
+			return Nil, argumentCountError(s, len(args), "0")
+		}
 		return IntValue(hashValue(self, map[*Object]bool{})), nil
 	})
 	class.define("object_id", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 0 {
+			return Nil, argumentCountError(s, len(args), "0")
+		}
 		return IntValue(hashValue(self, map[*Object]bool{})), nil
 	})
 	class.define("instance_eval", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -820,15 +829,23 @@ func (s *State) installObjectLibrary() {
 	class.define("send", s.objectSendMethod)
 	class.define("__send__", s.objectSendMethod)
 	class.define("tap", s.objectTapMethod)
+	s.SymbolClass.define("to_sym", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return self, nil
+	})
 	s.SymbolClass.define("to_proc", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		name := self.String()
-		return nativeBlockValue(func(ctx context.Context, args []Value) (Value, error) {
+		return nativeBlockValue(s.ProcClass, func(ctx context.Context, args []Value) (Value, error) {
 			if len(args) == 0 {
 				return Nil, nil
 			}
 			return s.call(ctx, args[0], name, args[1:], Nil, Nil)
 		}), nil
 	})
+	s.ProcClass.define("[]", s.procCallMethod)
+	s.ProcClass.define("arity", s.procArityMethod)
+	s.ProcClass.define("==", s.procEqualMethod)
+	s.ProcClass.define("eql?", s.procEqualMethod)
+	s.ProcClass.define("hash", s.procHashMethod)
 }
 
 func (s *State) installRangeLibrary() {
@@ -1489,7 +1506,11 @@ func (s *State) arrayRejectMethod(ctx context.Context, self Value, args []Value,
 
 func (s *State) arrayFindMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return s.toEnum(self, "find", nil), nil
+		return s.toEnum(self, "find", args), nil
+	}
+	var ifnone Value
+	if len(args) > 0 {
+		ifnone = args[0]
 	}
 	for _, value := range arrayValues(self) {
 		match, err := s.callBlock(ctx, block, []Value{value}, Nil)
@@ -1500,8 +1521,8 @@ func (s *State) arrayFindMethod(ctx context.Context, self Value, args []Value, k
 			return value, nil
 		}
 	}
-	if len(args) > 0 {
-		return args[0], nil
+	if !ifnone.IsNil() {
+		return s.call(ctx, ifnone, "call", nil, Nil, Nil)
 	}
 	return Nil, nil
 }
@@ -2610,7 +2631,7 @@ func (s *State) objectInstanceOfMethod(ctx context.Context, self Value, args []V
 
 func (s *State) objectSendMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) == 0 {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "send expects a method name")}
+		return Nil, argumentCountError(s, 0, "1+")
 	}
 	name := args[0].String()
 	return s.call(ctx, self, name, args[1:], kw, block)

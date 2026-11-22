@@ -34,7 +34,7 @@ func (s *State) toEnum(receiver Value, method string, args []Value) Value {
 	// buffer (which may be pooled).
 	argsCopy := append([]Value(nil), args...)
 	return s.newEnumerator(func(ctx context.Context, yield func([]Value) error) error {
-		block := nativeBlockValue(func(ctx context.Context, raw []Value) (Value, error) {
+		block := nativeBlockValue(s.ProcClass, func(ctx context.Context, raw []Value) (Value, error) {
 			return Nil, yield(raw)
 		})
 		_, err := s.call(ctx, receiver, method, argsCopy, Nil, block)

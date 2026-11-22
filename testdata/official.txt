@@ -22,3 +22,12 @@ nomethoderror.rb
 exception.rb
 integer.rb
 float.rb
+argumenterror.rb
+basicobject.rb
+bs_block.rb
+ensure.rb
+enumerable.rb
+methods.rb
+proc.rb
+shareable_constant.rb
+symbol.rb

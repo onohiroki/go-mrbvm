@@ -1266,7 +1266,11 @@ func (s *State) hashRejectMethod(ctx context.Context, self Value, args []Value, 
 
 func (s *State) hashFindMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
-		return s.toEnum(self, "find", nil), nil
+		return s.toEnum(self, "find", args), nil
+	}
+	var ifnone Value
+	if len(args) > 0 {
+		ifnone = args[0]
 	}
 	for _, entry := range hashEntries(self) {
 		match, err := s.callHashPairBlock(ctx, block, entry, Nil)
@@ -1276,6 +1280,9 @@ func (s *State) hashFindMethod(ctx context.Context, self Value, args []Value, kw
 		if match.IsTruthy() {
 			return ArrayValue([]Value{entry.key, entry.value}), nil
 		}
+	}
+	if !ifnone.IsNil() {
+		return s.call(ctx, ifnone, "call", nil, Nil, Nil)
 	}
 	return Nil, nil
 }

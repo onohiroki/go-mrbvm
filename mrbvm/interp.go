@@ -149,9 +149,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		frameEnv.parent = capturedEnv
 		frameEnv.regs = regs
 		frameEnv.block = block
-		frameEnv.methodFrame = mid != ""
+		frameEnv.methodFrame = strict
 	} else {
-		frameEnv = &environment{parent: capturedEnv, regs: regs, block: block, methodFrame: mid != ""}
+		frameEnv = &environment{parent: capturedEnv, regs: regs, block: block, methodFrame: strict}
 	}
 	_ = frameEnv
 	keywordSlot := -1
@@ -435,6 +435,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					frameArgs = array.values
 				}
 			}
+			// A non-strict block drops extra arguments rather than letting
+			// them shift the post parameters; a rest parameter still takes
+			// the middle.
+			if !strict && !hasRest && len(frameArgs) > req+opt+post {
+				frameArgs = frameArgs[:req+opt+post]
+			}
 			provided := len(frameArgs)
 			if strict && provided < req+post {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, fmt.Sprintf("wrong number of arguments (given %d, expected %d)", provided, req+post))}
@@ -476,20 +482,21 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if hasRest {
 				postStart++
 			}
-			filledPost := provided - req
-			if filledPost > post {
-				filledPost = post
-			}
-			if filledPost < 0 {
-				filledPost = 0
-			}
-			for i := 0; i < post; i++ {
-				if i < post-filledPost {
-					regs[postStart+i] = Nil
-					continue
+			if provided >= req+post {
+				for i := 0; i < post; i++ {
+					regs[postStart+i] = frameArgs[provided-post+i]
 				}
-				index := provided - (post - i)
-				regs[postStart+i] = frameArgs[index]
+			} else {
+				// Fewer arguments than the required and post slots: the
+				// available tail fills the first post slots and the rest are
+				// nil, as in `|a,b,*c,d,e|.call(1,2,3)`.
+				for i := 0; i < post; i++ {
+					if req+i < provided {
+						regs[postStart+i] = frameArgs[req+i]
+					} else {
+						regs[postStart+i] = Nil
+					}
+				}
 			}
 			positional := req + opt
 			if hasRest {
@@ -533,7 +540,23 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				continue
 			}
 		case bytecode.OpUNDEF:
-			delete(targetClass.methods, irep.Syms[in.Operands[0]])
+			name := irep.Syms[in.Operands[0]]
+			if _, ok := targetClass.methods[name]; !ok {
+				if _, ok := targetClass.lookup(name); !ok {
+					sig := &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+name+"'")}
+					np, rv, done, fatal := dispatch(sig, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+			}
+			delete(targetClass.methods, name)
+			targetClass.undefMethods[name] = true
 
 		case bytecode.OpSCLASS:
 			a := int(in.Operands[0])
@@ -579,6 +602,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if obj.singleton == nil {
 				original := s.classOf(regs[a])
 				obj.singleton = newClass("#<Class:"+original.name+">", original)
+				obj.singleton.singletonOwner = regs[a]
 				obj.singleton.isSingleton = true
 				s.ensureClassObject(obj.singleton)
 			}
@@ -616,6 +640,17 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				targetClass.moduleFunction = false
 			}
 			targetClass.defineIrep(name, irep.Reps[childIndex])
+			if err := s.notifyMethodDefinition(ctx, targetClass, name); err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
+			}
 			methodCref := cref
 			if targetClass.singletonOf != nil {
 				if m, ok := targetClass.singletonOf.classMethods[name]; ok {
@@ -816,6 +851,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				s.constants[name] = regs[in.Operands[0]]
 			}
 			constTarget.constants[name] = regs[in.Operands[0]]
+			s.definedKind, s.definedSet, s.definedNil = "assignment", true, false
 		case bytecode.OpGETMCNST:
 			a := int(in.Operands[0])
 			class, ok := s.asClass(regs[a])
@@ -885,6 +921,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			name := irep.Syms[in.Operands[1]]
 			s.nameClassConstant(regs[a], class, name)
 			class.constants[name] = regs[a]
+			s.definedKind, s.definedSet, s.definedNil = "assignment", true, false
 
 		case bytecode.OpMODULE, bytecode.OpCLASS:
 			a := int(in.Operands[0])
@@ -964,14 +1001,46 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				if m, ok := class.classMethods[name]; ok {
 					m.cref = cref
 				}
+				if err := s.notifySingletonMethodAdded(ctx, regs[a], name); err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
 			} else if regs[a].obj != nil {
 				obj := regs[a].obj
 				if obj.singleton == nil {
 					original := s.classOf(regs[a])
 					obj.singleton = newClass("#<Class>", original)
+					obj.singleton.singletonOwner = regs[a]
+					obj.singleton.isSingleton = true
 					s.ensureClassObject(obj.singleton)
 				}
 				obj.singleton.defineIrep(name, irep.Reps[childIndex])
+				if m, ok := obj.singleton.methods[name]; ok {
+					// Nested `def`s use the lexical class the receiver method
+					// was written in, not the receiver's singleton class.
+					if targetClass != nil {
+						m.owner = targetClass
+					}
+					m.cref = cref
+				}
+				if err := s.notifySingletonMethodAdded(ctx, regs[a], name); err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
 			} else {
 				return Nil, fmt.Errorf("mrbvm: singleton method definition on an immediate value is not supported")
 			}
@@ -1048,6 +1117,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[a] = env.block
 		case bytecode.OpBLKCALL:
 			a := int(in.Operands[0])
+			if definedCallAfter(instructions, pc, a, irep.Syms) {
+				s.definedKind, s.definedSet = "yield", true
+				s.definedNil = frameBlock.IsNil()
+				if s.definedNil {
+					s.definedKind = ""
+				}
+				regs[a] = Nil
+				continue
+			}
 			n := int(in.Operands[1])
 			args := s.acquireValues(n)
 			copy(args, regs[a+1:a+1+n])
@@ -1196,7 +1274,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSENDB {
 				recv = regs[in.Operands[0]]
 			}
-			args, kw, block, err := s.sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], true)
+			args, kw, block, err := s.sendArguments(ctx, irep, regs, int(in.Operands[0]), in.Operands[2], true)
 			if err != nil {
 				return Nil, err
 			}
@@ -1277,6 +1355,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 
 		case bytecode.OpSUPER:
 			a := int(in.Operands[0])
+			if definedCallAfter(instructions, pc, a, irep.Syms) {
+				s.definedKind, s.definedSet, s.definedNil = "", true, true
+				regs[a] = Nil
+				continue
+			}
 			argInfo := in.Operands[1]
 			if owner == nil {
 				sig := &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, "super called outside of method")}
@@ -1335,7 +1418,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				pc = np - 1
 				continue
 			}
-			args, kw, block, err := s.sendArguments(irep, regs, a, argInfo, true)
+			args, kw, block, err := s.sendArguments(ctx, irep, regs, a, argInfo, true)
 			if err != nil {
 				return Nil, err
 			}
@@ -1358,9 +1441,20 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[a] = result
 
 		case bytecode.OpSEND0, bytecode.OpSSEND0:
+			a := int(in.Operands[0])
 			recv := self
 			if in.Op == bytecode.OpSEND0 {
-				recv = regs[in.Operands[0]]
+				recv = regs[a]
+			}
+			if definedCallAfter(instructions, pc, a, irep.Syms) {
+				name := irep.Syms[in.Operands[1]]
+				s.definedKind, s.definedSet = "method", true
+				s.definedNil = !s.methodDefinedFor(recv, name)
+				if s.definedNil {
+					s.definedKind = ""
+				}
+				regs[a] = Nil
+				continue
 			}
 			if s.privateMethodCount > 0 || s.protectedCount > 0 || s.classPrivateCount > 0 {
 				if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
@@ -1398,6 +1492,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSEND {
 				recv = regs[a]
 			}
+			if definedCallAfter(instructions, pc, a, irep.Syms) {
+				name := irep.Syms[in.Operands[1]]
+				s.definedKind, s.definedSet = "method", true
+				s.definedNil = !s.methodDefinedFor(recv, name)
+				if s.definedNil {
+					s.definedKind = ""
+				}
+				regs[a] = Nil
+				continue
+			}
 			// Operators on built-in values are the hottest sends. Evaluate
 			// them directly instead of marshalling a one-element argument
 			// slice; fall through for user-defined behaviour or errors.
@@ -1426,7 +1530,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				args = s.acquireValues(2)
 				copy(args, regs[a+1:a+3])
 			default:
-				args, kw, block, err = s.sendArguments(irep, regs, a, in.Operands[2], false)
+				args, kw, block, err = s.sendArguments(ctx, irep, regs, a, in.Operands[2], false)
 				if err != nil {
 					return Nil, err
 				}
@@ -1509,6 +1613,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpADD, bytecode.OpSUB, bytecode.OpMUL, bytecode.OpDIV,
 			bytecode.OpEQ, bytecode.OpLT, bytecode.OpLE, bytecode.OpGT, bytecode.OpGE:
 			a := int(in.Operands[0])
+			if in.Op == bytecode.OpEQ && s.builtinIdentityEqual(regs[a], regs[a+1]) {
+				regs[a] = True
+				continue
+			}
 			if s.bopRedefined {
 				result, err := s.call(ctx, regs[a], bytecodeArithName(in.Op), []Value{regs[a+1]}, Nil, Nil)
 				if err != nil {
@@ -2208,7 +2316,7 @@ func (s *State) releaseValues(values []Value) {
 	s.argFree = append(s.argFree, values[:0])
 }
 
-func (s *State) sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, hasBlock bool) ([]Value, Value, Value, error) {
+func (s *State) sendArguments(ctx context.Context, irep *Irep, regs []Value, a int, argInfo uint32, hasBlock bool) ([]Value, Value, Value, error) {
 	n := int(argInfo & 0x0f)
 	k := int((argInfo >> 4) & 0x0f)
 	var args []Value
@@ -2245,8 +2353,57 @@ func (s *State) sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, h
 	block := Nil
 	if hasBlock {
 		block = regs[a+1+positionalRegs+kwRegs]
+		var err error
+		block, err = s.prepareBlockArgument(ctx, block)
+		if err != nil {
+			return nil, Nil, Nil, err
+		}
 	}
 	return args, kw, block, nil
+}
+
+// prepareBlockArgument implements the `&obj` conversion: a Proc, nil, or a
+// Symbol is used as is; anything else is asked for #to_proc.
+func (s *State) prepareBlockArgument(ctx context.Context, block Value) (Value, error) {
+	if block.IsNil() || block.Kind() == KindSymbol {
+		return block, nil
+	}
+	if block.Kind() == KindObject && block.obj != nil {
+		switch block.obj.data.(type) {
+		case *blockData, *nativeBlockData:
+			return block, nil
+		}
+	}
+	proc, err := s.call(ctx, block, "to_proc", nil, Nil, Nil)
+	if err != nil {
+		name := "Object"
+		if class := s.classOf(block); class != nil && class.name != "" {
+			name = class.name
+		}
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type "+name+" (expected Proc)")}
+	}
+	if proc.Kind() != KindObject || proc.obj == nil {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "to_proc did not return a Proc")}
+	}
+	switch proc.obj.data.(type) {
+	case *blockData, *nativeBlockData:
+		return proc, nil
+	}
+	return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "to_proc did not return a Proc")}
+}
+
+// builtinIdentityEqual is the `obj == obj` shortcut. It applies only while
+// the resolved `==` is the builtin: a class that defines `==` decides the
+// answer for itself, and a NaN is never equal to anything.
+func (s *State) builtinIdentityEqual(left, right Value) bool {
+	if !identicalValue(left, right) {
+		return false
+	}
+	if left.Kind() == KindFloat && math.IsNaN(left.Float()) {
+		return false
+	}
+	m, ok := s.classOf(left).lookup("==")
+	return ok && m.builtin
 }
 
 func (s *State) call(ctx context.Context, recv Value, name string, args []Value, kw Value, block Value) (Value, error) {
@@ -2257,6 +2414,9 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 		if m, ok := s.classOf(recv).lookup(name); ok && !m.builtin {
 			return s.invoke(ctx, m, recv, args, kw, block)
 		}
+	}
+	if name == "==" && len(args) == 1 && s.builtinIdentityEqual(recv, args[0]) {
+		return True, nil
 	}
 	if len(args) == 0 {
 		switch name {
@@ -3056,6 +3216,39 @@ func definedNext(instructions []bytecode.Instruction, pc int, syms []string) boo
 	case bytecode.OpSEND, bytecode.OpSSEND, bytecode.OpSEND0, bytecode.OpSSEND0:
 		index := int(next.Operands[1])
 		return index >= 0 && index < len(syms) && syms[index] == "defined?"
+	}
+	return false
+}
+
+func definedCallAfter(instructions []bytecode.Instruction, pc, dest int, syms []string) bool {
+	reg := dest
+	for i := pc + 1; i < len(instructions) && i <= pc+4; i++ {
+		in := instructions[i]
+		switch in.Op {
+		case bytecode.OpMOVE:
+			if int(in.Operands[1]) != reg {
+				return false
+			}
+			reg = int(in.Operands[0])
+		case bytecode.OpSEND, bytecode.OpSSEND:
+			if len(in.Operands) < 3 || in.Operands[2] != 1 {
+				return false
+			}
+			if syms[in.Operands[1]] != "defined?" {
+				return false
+			}
+			return int(in.Operands[0])+1 == reg
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func (s *State) methodDefinedFor(recv Value, name string) bool {
+	if class := s.classOf(recv); class != nil {
+		_, ok := class.lookup(name)
+		return ok
 	}
 	return false
 }

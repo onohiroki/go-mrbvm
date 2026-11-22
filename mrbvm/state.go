@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/onohiroki/go-mrbc/bytecode"
 	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
@@ -562,8 +563,11 @@ func New(opts Options) *State {
 			return Nil, err
 		}
 		class.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-			return s.callBlockWithSelf(ctx, body, self, args, kw)
+			return s.callBlockWithSelfAndBlock(ctx, body, self, args, kw, block)
 		})
+		if err := s.notifyMethodDefinition(ctx, class, name); err != nil {
+			return Nil, err
+		}
 		return SymbolValue(name), nil
 	})
 	s.ClassClass.define("private_constant", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -981,7 +985,7 @@ func New(opts Options) *State {
 		return StringValue("ASCII-8BIT"), nil
 	})
 	s.ObjectClass.define("proc", s.kernelProcMethod)
-	s.ObjectClass.define("lambda", s.kernelProcMethod)
+	s.ObjectClass.define("lambda", s.kernelLambdaMethod)
 
 	s.installEnumerableLibrary()
 	s.installEnumeratorLibrary()
@@ -1091,8 +1095,11 @@ func (s *State) constLookupPath(ctx context.Context, root *Class, path string, i
 
 func (s *State) classConstDefinedMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
-	if !ok || len(args) < 1 || len(args) > 2 {
+	if !ok {
 		return False, nil
+	}
+	if len(args) < 1 || len(args) > 2 {
+		return Nil, argumentCountError(s, len(args), "1..2")
 	}
 	if args[0].Kind() != KindString && args[0].Kind() != KindSymbol {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "constant name must be a Symbol or String")}
@@ -1518,8 +1525,11 @@ func (s *State) classConstGetMethod(ctx context.Context, self Value, args []Valu
 
 func (s *State) classConstSetMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
-	if !ok || len(args) != 2 {
+	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "const_set expects a name and a value")}
+	}
+	if len(args) != 2 {
+		return Nil, argumentCountError(s, len(args), "2")
 	}
 	name := args[0].String()
 	if !validConstSegment(name) {
@@ -1775,6 +1785,49 @@ func (s *State) classAliasMethod(ctx context.Context, self Value, args []Value, 
 	s.noteOperatorDefinition(newName)
 	s.noteOperatorDefinition(oldName)
 	return SymbolValue(newName), nil
+}
+
+func argumentCountError(s *State, given int, expected string) error {
+	return &unwindSignal{
+		kind:  unwindException,
+		value: newException(s.ArgumentErrorClass, fmt.Sprintf("wrong number of arguments (given %d, expected %s)", given, expected)),
+	}
+}
+
+func (s *State) notifyMethodDefinition(ctx context.Context, class *Class, name string) error {
+	if class == nil || name == "method_added" || name == "singleton_method_added" {
+		return nil
+	}
+	if class.isSingleton || class.singletonOf != nil {
+		owner := class.singletonOwner
+		if class.singletonOf != nil {
+			owner = s.classValue(class.singletonOf)
+		}
+		if owner.IsNil() {
+			return nil
+		}
+		return s.notifySingletonMethodAdded(ctx, owner, name)
+	}
+	if _, ok := class.lookupClassMethod("method_added"); !ok {
+		return nil
+	}
+	_, err := s.call(ctx, s.classValue(class), "method_added", []Value{SymbolValue(name)}, Nil, Nil)
+	return err
+}
+
+func (s *State) notifySingletonMethodAdded(ctx context.Context, recv Value, name string) error {
+	if name == "method_added" || name == "singleton_method_added" {
+		return nil
+	}
+	if class, ok := s.asClass(recv); ok {
+		if _, found := class.lookupClassMethod("singleton_method_added"); !found {
+			return nil
+		}
+	} else if _, found := s.classOf(recv).lookup("singleton_method_added"); !found {
+		return nil
+	}
+	_, err := s.call(ctx, recv, "singleton_method_added", []Value{SymbolValue(name)}, Nil, Nil)
+	return err
 }
 
 func (s *State) classRemoveMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -3334,11 +3387,151 @@ func (s *State) methodMissingDefined(class *Class) bool {
 	return found
 }
 
+func (s *State) kernelLambdaMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.Kind() == KindObject && block.obj != nil {
+		if data, ok := block.obj.data.(*blockData); ok {
+			copyData := *data
+			copyData.strict = true
+			return BlockValue(copyData), nil
+		}
+	}
+	return s.kernelProcMethod(ctx, self, args, kw, block)
+}
+
 func (s *State) kernelProcMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
 	}
+	if class, ok := s.asClass(self); ok && class != s.ProcClass && s.classIsSubclass(class, s.ProcClass) {
+		var data any
+		switch payload := block.obj.data.(type) {
+		case *blockData:
+			copyData := *payload
+			data = &copyData
+		case *nativeBlockData:
+			copyData := *payload
+			data = &copyData
+		default:
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "block is not a Proc")}
+		}
+		instance := ObjectValue(&Object{class: class, data: data})
+		if m, ok := class.lookup("initialize"); ok {
+			if _, err := s.invoke(ctx, m, instance, args, kw, block); err != nil {
+				return Nil, err
+			}
+		}
+		return instance, nil
+	}
 	return block, nil
+}
+
+func (s *State) procArityMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.Kind() == KindObject && self.obj != nil {
+		if data, ok := self.obj.data.(*blockData); ok {
+			return IntValue(procArity(data)), nil
+		}
+	}
+	return IntValue(-1), nil
+}
+
+func procArity(data *blockData) int64 {
+	if data.irep == nil {
+		return 0
+	}
+	first, err := bytecode.DecodeInstruction(data.irep.Code, 0)
+	if err != nil || first.Op != bytecode.OpENTER || len(first.Operands) == 0 {
+		return 0
+	}
+	aspec := first.Operands[0]
+	req := int64((aspec >> 18) & 0x1f)
+	opt := int64((aspec >> 13) & 0x1f)
+	rest := (aspec>>12)&1 != 0
+	post := int64((aspec >> 7) & 0x1f)
+	key := int64((aspec >> 2) & 0x1f)
+	kdict := (aspec>>1)&1 != 0
+	min := req + post
+	if key > 0 && procHasRequiredKeyword(data.irep, first, int(opt), int(key)) {
+		min++
+	}
+	if rest {
+		return -(min + 1)
+	}
+	kw := int64(0)
+	if key > 0 || kdict {
+		kw = 1
+	}
+	if data.strict && req+opt+post+kw != min {
+		return -(min + 1)
+	}
+	return min
+}
+
+func procHasRequiredKeyword(irep *Irep, enter bytecode.Instruction, opt, key int) bool {
+	pc := enter.Offset + enter.Size
+	if opt > 0 {
+		pc += opt * 3
+		jump, err := bytecode.DecodeInstruction(irep.Code, pc)
+		if err != nil || jump.Op != bytecode.OpJMP {
+			return false
+		}
+		target, err := bytecode.JumpTarget(jump)
+		if err != nil {
+			return false
+		}
+		pc = target
+	}
+	for i := 0; i < key; i++ {
+		in, err := bytecode.DecodeInstruction(irep.Code, pc)
+		if err != nil {
+			return false
+		}
+		if in.Op == bytecode.OpKARG {
+			return true
+		}
+		if in.Op != bytecode.OpKEY_P {
+			return false
+		}
+		pc += in.Size
+		in, err = bytecode.DecodeInstruction(irep.Code, pc)
+		if err != nil || in.Op != bytecode.OpJMPIF || len(in.Operands) < 2 {
+			return false
+		}
+		target := in.Offset + in.Size + int(int16(uint16(in.Operands[1])))
+		pc = target
+		in, err = bytecode.DecodeInstruction(irep.Code, pc)
+		if err != nil || in.Op != bytecode.OpKARG {
+			return false
+		}
+		pc += in.Size
+	}
+	return false
+}
+
+func procBlockData(value Value) (*blockData, bool) {
+	if value.Kind() == KindObject && value.obj != nil {
+		data, ok := value.obj.data.(*blockData)
+		return data, ok
+	}
+	return nil, false
+}
+
+func (s *State) procEqualMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return False, nil
+	}
+	left, leftOK := procBlockData(self)
+	right, rightOK := procBlockData(args[0])
+	if !leftOK || !rightOK {
+		return BoolValue(identicalValue(self, args[0])), nil
+	}
+	return BoolValue(left.irep == right.irep && left.env == right.env), nil
+}
+
+func (s *State) procHashMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if data, ok := procBlockData(self); ok {
+		return IntValue(fnvString(fmt.Sprintf("%p/%p", data.irep, data.env), 1469598103934665603, 1099511628211)), nil
+	}
+	return IntValue(hashValue(self, map[*Object]bool{})), nil
 }
 
 func (s *State) invokeMethodMissing(ctx context.Context, recv Value, name string, args []Value, kw Value, block Value) (Value, error) {
@@ -3831,6 +4024,27 @@ func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw
 		}
 	}
 	return s.callBlock(ctx, self, args, kw)
+}
+
+func (s *State) callBlockWithSelfAndBlock(ctx context.Context, block Value, self Value, args []Value, kw Value, passedBlock Value) (Value, error) {
+	if block.Kind() == KindObject && block.obj != nil {
+		if data, ok := block.obj.data.(*blockData); ok {
+			copyData := *data
+			copyData.self = self
+			if target, ok := s.asClass(self); ok {
+				copyData.targetClass = target
+			} else if self.obj != nil {
+				if self.obj.singleton == nil {
+					original := s.classOf(self)
+					self.obj.singleton = newClass("#<Class>", original)
+					s.ensureClassObject(self.obj.singleton)
+				}
+				copyData.targetClass = self.obj.singleton
+			}
+			return s.executeFrame(ctx, copyData.irep, self, copyData.targetClass, args, kw, passedBlock, copyData.env, copyData.mid, copyData.owner, copyData.cref, copyData.strict)
+		}
+	}
+	return s.callBlock(ctx, block, args, kw)
 }
 
 func (s *State) callBlockWithSelf(ctx context.Context, block Value, self Value, args []Value, kw Value) (Value, error) {

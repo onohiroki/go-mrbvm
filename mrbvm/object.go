@@ -83,6 +83,7 @@ type Class struct {
 	classVars             map[string]Value
 	object                *Object
 	singletonOf           *Class
+	singletonOwner        Value
 	singleton             *Class
 	isModule              bool
 	moduleFunction        bool
@@ -340,7 +341,7 @@ func (c *Class) applyVisibility(name string) {
 
 func (c *Class) define(name string, fn NativeFunc) {
 	if c.singletonOf != nil {
-		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, native: fn}
+		c.singletonOf.classMethods[name] = &method{owner: c, name: name, native: fn}
 		if c.defaultVisibility == "private" {
 			if !c.singletonOf.privateClassMethods[name] && c.state != nil {
 				c.state.classPrivateCount++
@@ -363,7 +364,7 @@ func (c *Class) define(name string, fn NativeFunc) {
 
 func (c *Class) defineIrep(name string, irep *Irep) {
 	if c.singletonOf != nil {
-		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, irep: irep}
+		c.singletonOf.classMethods[name] = &method{owner: c, name: name, irep: irep}
 		if c.defaultVisibility == "private" {
 			if !c.singletonOf.privateClassMethods[name] && c.state != nil {
 				c.state.classPrivateCount++
