@@ -21,7 +21,11 @@ type hashEntry struct {
 type hashData struct {
 	entries      []hashEntry
 	defaultValue Value
-	index        map[hashKey]int
+	// index is an open-addressed table of entry indexes (-1 for empty),
+	// used only for primitive keys. indexBuilt records how many entries it
+	// describes so length-changing mutations can trigger a rebuild.
+	index      []int
+	indexBuilt int
 }
 
 type hashKey struct {
@@ -29,7 +33,6 @@ type hashKey struct {
 	i    int64
 	bits uint64
 	str  string
-	ptr  *Object
 }
 
 type rangeData struct {

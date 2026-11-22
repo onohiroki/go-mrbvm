@@ -1496,51 +1496,112 @@ func (s *State) Execute(ctx context.Context, irep *Irep) (Value, error) {
 	return s.executeFrame(ctx, irep, s.TopSelf, s.ObjectClass, nil, Nil, Nil, nil, "", nil, false)
 }
 
-func hashKeyOf(value Value) hashKey {
+const (
+	hashInitialSize = 8
+	fnvOffset       = 14695981039346656037
+	fnvPrime        = 1099511628211
+)
+
+// indexableHashKey returns a table key for primitive hash keys. Other kinds
+// fall back to a linear scan so that Ruby-level eql?/hash can be honoured.
+func indexableHashKey(value Value) (hashKey, bool) {
 	key := hashKey{kind: value.Kind()}
 	switch value.Kind() {
+	case KindNil, KindTrue, KindFalse:
 	case KindInt:
 		key.i = value.Int()
-	case KindBigInt:
-		key.str = value.String()
 	case KindFloat:
 		key.bits = value.bits
 	case KindString, KindSymbol:
 		key.str = value.String()
-	case KindObject:
-		key.ptr = value.obj
+	default:
+		return hashKey{}, false
 	}
-	return key
+	return key, true
+}
+
+func (k hashKey) hash() uint64 {
+	h := uint64(k.kind) * 0x9e3779b97f4a7c15
+	switch k.kind {
+	case KindString, KindSymbol:
+		for i := 0; i < len(k.str); i++ {
+			h ^= uint64(k.str[i])
+			h *= fnvPrime
+		}
+	case KindFloat:
+		h ^= k.bits
+	default:
+		h ^= uint64(k.i)
+	}
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	return h
 }
 
 func ensureHashIndex(data *hashData) {
-	if data.index != nil {
+	if data.index != nil && data.indexBuilt == len(data.entries) {
 		return
 	}
-	data.index = make(map[hashKey]int, len(data.entries))
-	for i, entry := range data.entries {
-		data.index[hashKeyOf(entry.key)] = i
+	size := hashInitialSize
+	for size < len(data.entries)*2 {
+		size <<= 1
 	}
+	table := make([]int, size)
+	for i := range table {
+		table[i] = -1
+	}
+	mask := size - 1
+	for i := range data.entries {
+		key, ok := indexableHashKey(data.entries[i].key)
+		if !ok {
+			continue
+		}
+		pos := int(key.hash()) & mask
+		for table[pos] != -1 {
+			pos = (pos + 1) & mask
+		}
+		table[pos] = i
+	}
+	data.index = table
+	data.indexBuilt = len(data.entries)
 }
 
-func primitiveHashKey(value Value) bool {
-	switch value.Kind() {
-	case KindNil, KindTrue, KindFalse, KindInt, KindBigInt, KindFloat, KindString, KindSymbol:
-		return true
+func addHashIndex(data *hashData, index int) {
+	if data.index == nil || len(data.entries)*2 >= len(data.index) {
+		// Rebuild once the table would exceed a 50% load factor.
+		ensureHashIndex(data)
+		return
 	}
-	return false
+	if key, ok := indexableHashKey(data.entries[index].key); ok {
+		mask := len(data.index) - 1
+		pos := int(key.hash()) & mask
+		for data.index[pos] != -1 {
+			pos = (pos + 1) & mask
+		}
+		data.index[pos] = index
+	}
+	data.indexBuilt = len(data.entries)
 }
 
 func hashLookup(data *hashData, key Value) (int, bool) {
 	ensureHashIndex(data)
-	if index, ok := data.index[hashKeyOf(key)]; ok && index < len(data.entries) && valuesEqual(data.entries[index].key, key) {
-		return index, true
+	if tableKey, ok := indexableHashKey(key); ok {
+		mask := len(data.index) - 1
+		pos := int(tableKey.hash()) & mask
+		for {
+			index := data.index[pos]
+			if index < 0 {
+				return -1, false
+			}
+			if valuesEqual(data.entries[index].key, key) {
+				return index, true
+			}
+			pos = (pos + 1) & mask
+		}
 	}
-	if primitiveHashKey(key) {
-		return -1, false
-	}
-	for i, entry := range data.entries {
-		if valuesEqual(entry.key, key) {
+	for i := range data.entries {
+		if valuesEqual(data.entries[i].key, key) {
 			return i, true
 		}
 	}
@@ -1584,8 +1645,8 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 				return Nil, err
 			}
 			ensureHashIndex(data)
-			data.index[hashKeyOf(index)] = len(data.entries)
 			data.entries = append(data.entries, hashEntry{key: index, value: value})
+			addHashIndex(data, len(data.entries)-1)
 			return value, nil
 		}
 	}
