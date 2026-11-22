@@ -300,6 +300,74 @@ func (s *State) installAdvancedStringLibrary() {
 		}
 		return self, nil
 	})
+	class.define("getbyte", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "getbyte expects one argument")}
+		}
+		index, err := s.indexInteger(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		bytes := []byte(self.String())
+		if index < 0 {
+			index += len(bytes)
+		}
+		if index < 0 || index >= len(bytes) {
+			return Nil, nil
+		}
+		return IntValue(int64(bytes[index])), nil
+	})
+	class.define("byteslice", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		bytes := []byte(self.String())
+		length := len(bytes)
+		switch len(args) {
+		case 1:
+			if rangeIndex, ok := rangeDataOf(args[0]); ok {
+				start, count := rangeBounds(rangeIndex, length)
+				if start > length {
+					return Nil, nil
+				}
+				end := start + count
+				if end > length {
+					end = length
+				}
+				return StringValue(string(bytes[start:end])), nil
+			}
+			index, err := s.indexInteger(args[0])
+			if err != nil {
+				return Nil, err
+			}
+			if index < 0 {
+				index += length
+			}
+			if index < 0 || index >= length {
+				return Nil, nil
+			}
+			return StringValue(string(bytes[index : index+1])), nil
+		case 2:
+			index, err := s.indexInteger(args[0])
+			if err != nil {
+				return Nil, err
+			}
+			count, err := s.indexInteger(args[1])
+			if err != nil {
+				return Nil, err
+			}
+			if index < 0 {
+				index += length
+			}
+			if index < 0 || index > length || count < 0 {
+				return Nil, nil
+			}
+			end := index + count
+			if end > length {
+				end = length
+			}
+			return StringValue(string(bytes[index:end])), nil
+		default:
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+		}
+	})
 	class.define("setbyte", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		data, ok := stringDataOf(self)
 		if !ok || len(args) != 2 || args[0].Kind() != KindInt || args[1].Kind() != KindInt {
@@ -1185,14 +1253,20 @@ func (s *State) hashSelectBangMethod(ctx context.Context, self Value, args []Val
 	if err != nil {
 		return Nil, err
 	}
-	if self.obj == nil {
-		return self, nil
-	}
-	data, ok := self.obj.data.(*hashData)
+	data, ok := hashDataOf(self)
 	if !ok {
 		return self, nil
 	}
-	data.entries = hashEntries(selected)
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	entries := hashEntries(selected)
+	if hashEntriesEquivalent(data.entries, entries) {
+		return Nil, nil
+	}
+	data.entries = entries
+	data.index = nil
+	data.indexBuilt = 0
 	return self, nil
 }
 
@@ -1201,15 +1275,33 @@ func (s *State) hashRejectBangMethod(ctx context.Context, self Value, args []Val
 	if err != nil {
 		return Nil, err
 	}
-	if self.obj == nil {
-		return self, nil
-	}
-	data, ok := self.obj.data.(*hashData)
+	data, ok := hashDataOf(self)
 	if !ok {
 		return self, nil
 	}
-	data.entries = hashEntries(rejected)
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	entries := hashEntries(rejected)
+	if hashEntriesEquivalent(data.entries, entries) {
+		return Nil, nil
+	}
+	data.entries = entries
+	data.index = nil
+	data.indexBuilt = 0
 	return self, nil
+}
+
+func hashEntriesEquivalent(left, right []hashEntry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !valuesEqual(left[i].key, right[i].key) || !valuesEqual(left[i].value, right[i].value) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *State) hashAnyMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1848,6 +1940,9 @@ func (s *State) stringUpcaseBangMethod(ctx context.Context, self Value, args []V
 	if self.obj == nil {
 		return Nil, nil
 	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	if data, ok := self.obj.data.(*stringData); ok {
 		current := data.str()
 		updated := strings.ToUpper(current)
@@ -1863,6 +1958,9 @@ func (s *State) stringUpcaseBangMethod(ctx context.Context, self Value, args []V
 func (s *State) stringDowncaseBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if self.obj == nil {
 		return Nil, nil
+	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
 	}
 	if data, ok := self.obj.data.(*stringData); ok {
 		current := data.str()

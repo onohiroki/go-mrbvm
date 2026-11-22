@@ -155,6 +155,9 @@ func (s *State) installHashLibrary() {
 		return Nil, nil
 	})
 	class.define("default=", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
 		if self.obj != nil && len(args) == 1 {
 			if data, ok := self.obj.data.(*hashData); ok {
 				data.defaultValue = args[0]
@@ -234,6 +237,9 @@ func (s *State) installHashLibrary() {
 		return Nil, nil
 	})
 	class.define("shift", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
 		data, ok := hashDataOf(self)
 		if !ok || len(data.entries) == 0 {
 			return Nil, nil
@@ -658,6 +664,12 @@ func (s *State) installObjectLibrary() {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
 		}
 		return s.callBlockWithSelf(ctx, block, self, args, kw)
+	})
+	class.define("_str_match?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 2 {
+			return False, nil
+		}
+		return BoolValue(globMatch(args[0].String(), args[1].String())), nil
 	})
 	class.define("send", s.objectSendMethod)
 	class.define("__send__", s.objectSendMethod)
@@ -1353,7 +1365,11 @@ func (s *State) arrayIncludeMethod(ctx context.Context, self Value, args []Value
 		return False, nil
 	}
 	for _, value := range arrayValues(self) {
-		if valuesEqual(value, args[0]) {
+		equal, err := s.rubyEqual(ctx, value, args[0])
+		if err != nil {
+			return Nil, err
+		}
+		if equal {
 			return True, nil
 		}
 	}
@@ -1708,6 +1724,9 @@ func (s *State) hashDeleteMethod(ctx context.Context, self Value, args []Value, 
 	data, ok := self.obj.data.(*hashData)
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a hash")
+	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
 	}
 	index, found, err := s.hashLookupKey(ctx, data, args[0])
 	if err != nil {
@@ -2198,6 +2217,19 @@ func (s *State) stringSubMethod(ctx context.Context, self Value, args []Value, k
 		return StringValue(text[:location[0]] + replacement + text[location[1]:]), nil
 	}
 	pattern := args[0].String()
+	if pattern == "" {
+		var replacement string
+		if !block.IsNil() {
+			result, err := s.callBlock(ctx, block, []Value{StringValue("")}, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			replacement = result.ToS()
+		} else if len(args) == 2 {
+			replacement = expandStringReplacement(args[1].String(), "", "", text)
+		}
+		return StringValue(replacement + text), nil
+	}
 	index := strings.Index(text, pattern)
 	if index < 0 {
 		return StringValue(text), nil
@@ -2210,7 +2242,7 @@ func (s *State) stringSubMethod(ctx context.Context, self Value, args []Value, k
 		}
 		replacement = result.ToS()
 	} else if len(args) == 2 {
-		replacement = args[1].String()
+		replacement = expandStringReplacement(args[1].String(), pattern, text[:index], text[index+len(pattern):])
 	}
 	return StringValue(text[:index] + replacement + text[index+len(pattern):]), nil
 }
@@ -2237,10 +2269,23 @@ func (s *State) stringGsubMethod(ctx context.Context, self Value, args []Value, 
 	}
 	pattern := args[0].String()
 	if pattern == "" {
-		return StringValue(text), nil
-	}
-	if block.IsNil() && len(args) == 2 {
-		return StringValue(strings.ReplaceAll(text, pattern, args[1].String())), nil
+		runes := []rune(text)
+		var builder strings.Builder
+		for i := 0; i <= len(runes); i++ {
+			if !block.IsNil() {
+				result, err := s.callBlock(ctx, block, []Value{StringValue("")}, Nil)
+				if err != nil {
+					return Nil, err
+				}
+				builder.WriteString(result.ToS())
+			} else if len(args) == 2 {
+				builder.WriteString(expandStringReplacement(args[1].String(), "", string(runes[:i]), string(runes[i:])))
+			}
+			if i < len(runes) {
+				builder.WriteRune(runes[i])
+			}
+		}
+		return StringValue(builder.String()), nil
 	}
 	var builder strings.Builder
 	offset := 0
@@ -2252,11 +2297,15 @@ func (s *State) stringGsubMethod(ctx context.Context, self Value, args []Value, 
 		}
 		index += offset
 		builder.WriteString(text[offset:index])
-		result, err := s.callBlock(ctx, block, []Value{StringValue(pattern)}, Nil)
-		if err != nil {
-			return Nil, err
+		if !block.IsNil() {
+			result, err := s.callBlock(ctx, block, []Value{StringValue(pattern)}, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			builder.WriteString(result.ToS())
+		} else if len(args) == 2 {
+			builder.WriteString(expandStringReplacement(args[1].String(), text[index:index+len(pattern)], text[:index], text[index+len(pattern):]))
 		}
-		builder.WriteString(result.ToS())
 		offset = index + len(pattern)
 	}
 	return StringValue(builder.String()), nil
@@ -2750,4 +2799,61 @@ func parseRubyFloat(text string) float64 {
 		return 0
 	}
 	return value
+}
+
+func globMatch(pattern, text string) bool {
+	p := []rune(pattern)
+	t := []rune(text)
+	pi, ti := 0, 0
+	star, match := -1, 0
+	for ti < len(t) {
+		if pi < len(p) && (p[pi] == '?' || p[pi] == t[ti]) {
+			pi++
+			ti++
+			continue
+		}
+		if pi < len(p) && p[pi] == '*' {
+			star = pi
+			match = ti
+			pi++
+			continue
+		}
+		if star >= 0 {
+			pi = star + 1
+			match++
+			ti = match
+			continue
+		}
+		return false
+	}
+	for pi < len(p) && p[pi] == '*' {
+		pi++
+	}
+	return pi == len(p)
+}
+
+func expandStringReplacement(replacement, match, pre, post string) string {
+	var builder strings.Builder
+	for i := 0; i < len(replacement); i++ {
+		if replacement[i] != '\\' || i+1 >= len(replacement) {
+			builder.WriteByte(replacement[i])
+			continue
+		}
+		i++
+		switch replacement[i] {
+		case '0', '&':
+			builder.WriteString(match)
+		case '`':
+			builder.WriteString(pre)
+		case '\'':
+			builder.WriteString(post)
+		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			// String patterns have no capture groups.
+		case '\\':
+			builder.WriteByte('\\')
+		default:
+			builder.WriteByte(replacement[i])
+		}
+	}
+	return builder.String()
 }

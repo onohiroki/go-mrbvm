@@ -607,7 +607,27 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[in.Operands[0]] = SymbolValue(regs[in.Operands[0]].String())
 		case bytecode.OpSTRCAT:
 			a := int(in.Operands[0])
-			regs[a] = StringValue(regs[a].ToS() + regs[a+1].ToS())
+			leftText := regs[a].ToS()
+			right := regs[a+1]
+			rightText := right.ToS()
+			if right.Kind() == KindObject {
+				converted, err := s.call(ctx, right, "to_s", nil, Nil, Nil)
+				if err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				if converted.Kind() == KindString {
+					rightText = converted.String()
+				}
+			}
+			regs[a] = StringValue(leftText + rightText)
 
 		case bytecode.OpGETGV:
 			name := irep.Syms[in.Operands[1]]
@@ -735,7 +755,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if !ok {
 				return Nil, fmt.Errorf("mrbvm: EXEC target is not a class")
 			}
+			savedVisibility := class.defaultVisibility
 			result, err := s.executeFrame(ctx, irep.Reps[childIndex], regs[a], class, nil, Nil, Nil, nil, "", class, false)
+			class.defaultVisibility = savedVisibility
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
@@ -1084,8 +1106,24 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				if owner.super != nil {
 					m, ok = owner.super.lookupClassMethod(mid)
 				}
-			} else if owner.super != nil {
-				m, ok = owner.super.lookup(mid)
+				if !ok {
+					m, ok = s.classOf(self).lookup(mid)
+				}
+			} else {
+				chain := classAncestors(s.classOf(self))
+				start := 0
+				for i, ancestor := range chain {
+					if ancestor == owner {
+						start = i + 1
+						break
+					}
+				}
+				for i := start; i < len(chain); i++ {
+					if candidate, found := chain[i].methods[mid]; found {
+						m, ok = candidate, true
+						break
+					}
+				}
 			}
 			if !ok {
 				sig := &unwindSignal{kind: unwindException, value: s.newMethodError(mid, self, args)}

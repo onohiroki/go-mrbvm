@@ -74,23 +74,24 @@ func (o *Object) setIvar(name string, value Value) {
 
 // Class is a minimal mruby class or module.
 type Class struct {
-	name              string
-	super             *Class
-	methods           map[string]*method
-	classMethods      map[string]*method
-	constants         map[string]Value
-	classVars         map[string]Value
-	object            *Object
-	singletonOf       *Class
-	singleton         *Class
-	isModule          bool
-	moduleFunction    bool
-	defaultVisibility string
-	included          []*Class
-	prepended         []*Class
-	privateMethods    map[string]bool
-	protectedMethods  map[string]bool
-	state             *State
+	name                string
+	super               *Class
+	methods             map[string]*method
+	classMethods        map[string]*method
+	constants           map[string]Value
+	classVars           map[string]Value
+	object              *Object
+	singletonOf         *Class
+	singleton           *Class
+	isModule            bool
+	moduleFunction      bool
+	defaultVisibility   string
+	privateClassMethods map[string]bool
+	included            []*Class
+	prepended           []*Class
+	privateMethods      map[string]bool
+	protectedMethods    map[string]bool
+	state               *State
 }
 
 type method struct {
@@ -234,19 +235,44 @@ func asSignal(v Value) (*unwindSignal, bool) {
 
 func newClass(name string, super *Class) *Class {
 	return &Class{
-		name:             name,
-		super:            super,
-		methods:          make(map[string]*method),
-		classMethods:     make(map[string]*method),
-		constants:        make(map[string]Value),
-		classVars:        make(map[string]Value),
-		privateMethods:   make(map[string]bool),
-		protectedMethods: make(map[string]bool),
+		name:                name,
+		super:               super,
+		methods:             make(map[string]*method),
+		classMethods:        make(map[string]*method),
+		constants:           make(map[string]Value),
+		classVars:           make(map[string]Value),
+		privateMethods:      make(map[string]bool),
+		protectedMethods:    make(map[string]bool),
+		privateClassMethods: make(map[string]bool),
 	}
 }
 
+// classAncestors returns the method lookup order: prepended modules, the
+// class itself, included modules (last included first), then the superclass.
+func classAncestors(c *Class) []*Class {
+	seen := make(map[*Class]bool)
+	var result []*Class
+	var visit func(*Class)
+	visit = func(current *Class) {
+		if current == nil || seen[current] {
+			return
+		}
+		seen[current] = true
+		for i := len(current.prepended) - 1; i >= 0; i-- {
+			visit(current.prepended[i])
+		}
+		result = append(result, current)
+		for i := len(current.included) - 1; i >= 0; i-- {
+			visit(current.included[i])
+		}
+		visit(current.super)
+	}
+	visit(c)
+	return result
+}
+
 func (c *Class) lookup(name string) (*method, bool) {
-	for current := c; current != nil; current = current.super {
+	for _, current := range classAncestors(c) {
 		if m, ok := current.methods[name]; ok {
 			return m, true
 		}
@@ -280,14 +306,25 @@ func (c *Class) applyVisibility(name string) {
 func (c *Class) define(name string, fn NativeFunc) {
 	if c.singletonOf != nil {
 		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, native: fn}
+		if c.defaultVisibility == "private" {
+			c.singletonOf.privateClassMethods[name] = true
+		} else if c.defaultVisibility == "public" {
+			delete(c.singletonOf.privateClassMethods, name)
+		}
 		return
 	}
 	c.methods[name] = &method{owner: c, name: name, native: fn}
+	c.applyVisibility(name)
 }
 
 func (c *Class) defineIrep(name string, irep *Irep) {
 	if c.singletonOf != nil {
 		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, irep: irep}
+		if c.defaultVisibility == "private" {
+			c.singletonOf.privateClassMethods[name] = true
+		} else if c.defaultVisibility == "public" {
+			delete(c.singletonOf.privateClassMethods, name)
+		}
 		return
 	}
 	m := &method{owner: c, name: name, irep: irep}
