@@ -358,13 +358,14 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - `gomirb`（永続 State、複数行継続、`-r` / `-q`）
   - `Time`（`now` / `at` / 成分 / `strftime` / 演算）
   - `JSON`（`parse` / `generate` / `dump` / `pretty_generate`）
-  - IO / File と capability 連携
-  - Regexp / MatchData（Go regexp ベース）
-  - Fiber（goroutine + channel の協調スケジューリング）
+  - IO / File（標準ストリーム、path helper、size/delete）
+  - Regexp / MatchData（フラグ、名前付きキャプチャ）
+  - Fiber（current / raise / ensure）
+  - `gomirb` の履歴永続化・補完候補
 - 次の作業
-  1. `gomirb` の履歴・補完
-  2. デバッガ連携
-  3. IO / Regexp / Fiber の公式テスト拡大
+  1. デバッガ連携
+  2. Regexp / Fiber / IO の gem 公式テスト拡大
+  3. VM-7 のベンチマーク
 
 ## 16. 現在の状態
 
@@ -457,5 +458,6 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - `t/array.rb` 完走、公式テストマニフェスト、例外 backtrace、
     リフレクション、mrblib opt-in、ホスト API の初期実装まで完了
   - VM-4b / VM-4c / VM-5 まで完了
-  - VM-6 の `gomirb` / Time / JSON / IO / File / Regexp / Fiber まで実装済み
-  - 次は VM-6 の履歴・補完とデバッガ
+  - VM-6 の `gomirb` / Time / JSON / IO / File / Regexp / Fiber /
+    履歴・補完まで実装済み
+  - 次はデバッガ連携と VM-7 の性能計測
