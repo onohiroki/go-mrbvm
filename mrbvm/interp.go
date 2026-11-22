@@ -18,6 +18,7 @@ type irepProgram struct {
 	instructions []bytecode.Instruction
 	pcByOffset   map[int]int
 	lineAt       []int32
+	binaryOps    []binaryOp
 	hasBlocks    bool
 }
 
@@ -64,7 +65,20 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 			break
 		}
 	}
-	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineAt: lineAt, hasBlocks: hasBlocks}
+	binaryOps := make([]binaryOp, len(instructions))
+	for i, in := range instructions {
+		if in.Op != bytecode.OpSEND && in.Op != bytecode.OpSSEND {
+			continue
+		}
+		argInfo := in.Operands[2]
+		if argInfo&0x0f != 1 || (argInfo>>4)&0x0f != 0 {
+			continue
+		}
+		if sym := int(in.Operands[1]); sym < len(irep.Syms) {
+			binaryOps[i] = binaryOpForName(irep.Syms[sym])
+		}
+	}
+	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineAt: lineAt, binaryOps: binaryOps, hasBlocks: hasBlocks}
 	s.programs[irep] = program
 	return program, nil
 }
@@ -131,6 +145,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	_ = keywordSlot
 	pcByOffset := program.pcByOffset
 	lineAt := program.lineAt
+	binaryOps := program.binaryOps
 	frame := callFrame{file: irep.Filename, method: mid}
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope
@@ -1123,8 +1138,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			// Operators on built-in values are the hottest sends. Evaluate
 			// them directly instead of marshalling a one-element argument
 			// slice; fall through for user-defined behaviour or errors.
-			if argInfo := in.Operands[2]; argInfo&0x0f == 1 && (argInfo>>4)&0x0f == 0 && s.privateMethodCount == 0 {
-				if result, ok := binaryValue(recv, irep.Syms[in.Operands[1]], regs[a+1]); ok {
+			if op := binaryOps[pc]; op != binNone && s.privateMethodCount == 0 {
+				right := regs[a+1]
+				if recv.Kind() == KindInt && right.Kind() == KindInt {
+					if result, ok := intBinaryOp(recv.Int(), right.Int(), op); ok {
+						regs[a] = result
+						continue
+					}
+				}
+				if result, ok := binaryValueOp(recv, op, right); ok {
 					regs[a] = result
 					continue
 				}
@@ -1814,6 +1836,45 @@ func (s *State) invoke(ctx context.Context, m *method, recv Value, args []Value,
 	return s.executeFrame(ctx, m.irep, recv, m.owner, args, kw, block, nil, m.name, m.owner, true)
 }
 
+type binaryOp uint8
+
+const (
+	binNone binaryOp = iota
+	binEq
+	binLt
+	binLe
+	binGt
+	binGe
+	binAdd
+	binSub
+	binMul
+	binDiv
+	binMod
+	binPow
+	binShl
+	binShr
+)
+
+var binaryOpsByName = map[string]binaryOp{
+	"==": binEq,
+	"<":  binLt,
+	"<=": binLe,
+	">":  binGt,
+	">=": binGe,
+	"+":  binAdd,
+	"-":  binSub,
+	"*":  binMul,
+	"/":  binDiv,
+	"%":  binMod,
+	"**": binPow,
+	"<<": binShl,
+	">>": binShr,
+}
+
+func binaryOpForName(name string) binaryOp {
+	return binaryOpsByName[name]
+}
+
 func binaryCall(recv Value, name string, args []Value) (Value, bool) {
 	if len(args) != 1 {
 		return Nil, false
@@ -1821,14 +1882,57 @@ func binaryCall(recv Value, name string, args []Value) (Value, bool) {
 	return binaryValue(recv, name, args[0])
 }
 
+// intBinaryOp evaluates the common integer/integer operators directly.
+// Unsigned shifts and exponentiation fall back to the general path because
+// they can produce big integers.
+func intBinaryOp(left, right int64, op binaryOp) (Value, bool) {
+	switch op {
+	case binAdd:
+		return IntValue(left + right), true
+	case binSub:
+		return IntValue(left - right), true
+	case binMul:
+		return IntValue(left * right), true
+	case binDiv:
+		if right == 0 {
+			return Nil, false
+		}
+		return IntValue(floorDiv(left, right)), true
+	case binMod:
+		if right == 0 {
+			return Nil, false
+		}
+		rem := left % right
+		if rem != 0 && (rem < 0) != (right < 0) {
+			rem += right
+		}
+		return IntValue(rem), true
+	case binEq:
+		return BoolValue(left == right), true
+	case binLt:
+		return BoolValue(left < right), true
+	case binLe:
+		return BoolValue(left <= right), true
+	case binGt:
+		return BoolValue(left > right), true
+	case binGe:
+		return BoolValue(left >= right), true
+	}
+	return Nil, false
+}
+
 func binaryValue(left Value, name string, right Value) (Value, bool) {
-	switch name {
-	case "==":
+	return binaryValueOp(left, binaryOpForName(name), right)
+}
+
+func binaryValueOp(left Value, op binaryOp, right Value) (Value, bool) {
+	switch op {
+	case binEq:
 		if builtinComparable(left) && builtinComparable(right) {
 			return BoolValue(valuesEqual(left, right)), true
 		}
 		return Nil, false
-	case "<", "<=", ">", ">=":
+	case binLt, binLe, binGt, binGe:
 		var cmp int
 		if li, ri, ok := bothBigInts(left, right); ok {
 			cmp = li.Cmp(ri)
@@ -1852,17 +1956,17 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		} else {
 			return Nil, false
 		}
-		switch name {
-		case "<":
+		switch op {
+		case binLt:
 			return BoolValue(cmp < 0), true
-		case "<=":
+		case binLe:
 			return BoolValue(cmp <= 0), true
-		case ">":
+		case binGt:
 			return BoolValue(cmp > 0), true
-		case ">=":
+		case binGe:
 			return BoolValue(cmp >= 0), true
 		}
-	case "+":
+	case binAdd:
 		if left.Kind() == KindString && right.Kind() == KindString {
 			return StringValue(left.String() + right.String()), true
 		}
@@ -1875,7 +1979,7 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		if lf, rf, ok := bothFloats(left, right); ok {
 			return FloatValue(lf + rf), true
 		}
-	case "-":
+	case binSub:
 		if li, ri, ok := bothBigInts(left, right); ok {
 			return normalizedBigInt(new(big.Int).Sub(li, ri)), true
 		}
@@ -1885,7 +1989,7 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		if lf, rf, ok := bothFloats(left, right); ok {
 			return FloatValue(lf - rf), true
 		}
-	case "*":
+	case binMul:
 		if li, ri, ok := bothBigInts(left, right); ok {
 			return normalizedBigInt(new(big.Int).Mul(li, ri)), true
 		}
@@ -1895,7 +1999,7 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		if lf, rf, ok := bothFloats(left, right); ok {
 			return FloatValue(lf * rf), true
 		}
-	case "%":
+	case binMod:
 		if li, ri, ok := bothBigInts(left, right); ok {
 			if ri.Sign() == 0 {
 				return Nil, false
@@ -1926,19 +2030,19 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 			}
 			return FloatValue(rem), true
 		}
-	case "<<":
+	case binShl:
 		if li, ok := integerBig(left); ok {
 			if ri, ok := integerBig(right); ok && ri.Sign() >= 0 && ri.IsInt64() {
 				return normalizedBigInt(new(big.Int).Lsh(li, uint(ri.Int64()))), true
 			}
 		}
-	case ">>":
+	case binShr:
 		if li, ok := integerBig(left); ok {
 			if ri, ok := integerBig(right); ok && ri.Sign() >= 0 && ri.IsInt64() {
 				return normalizedBigInt(new(big.Int).Rsh(li, uint(ri.Int64()))), true
 			}
 		}
-	case "**":
+	case binPow:
 		if li, ri, ok := bothBigInts(left, right); ok {
 			if ri.Sign() < 0 {
 				return Nil, false
@@ -1954,7 +2058,7 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 		if lf, rf, ok := bothFloats(left, right); ok {
 			return FloatValue(math.Pow(lf, rf)), true
 		}
-	case "/":
+	case binDiv:
 		if li, ri, ok := bothBigInts(left, right); ok {
 			if ri.Sign() == 0 {
 				return Nil, false
