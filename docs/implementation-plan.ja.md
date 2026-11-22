@@ -1,6 +1,7 @@
 # go-mrbvm 実装計画
 
-このドキュメントは `go-mrbvm` の実装計画である。英語の設計資料は
+このドキュメントは `go-mrbvm` の実装計画である。フェーズ計画・直近スプリント・
+品質ゲートは [roadmap.ja.md](roadmap.ja.md)、英語の設計資料は
 [architecture.md](architecture.md)、RITE 04.00 の仕様は
 [bytecode-format.md](bytecode-format.md) を参照。
 
@@ -289,6 +290,9 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 | VM-6 | `gomirb`、Fiber、Regexp/IO/JSON、デバッガ | REPL と opt-in 機能 |
 | VM-7 | 性能、ベンチマーク、最適化 | C mruby との比較を公開 |
 
+フェーズごとの詳細な作業、直近スプリント、品質ゲートは
+[roadmap.ja.md](roadmap.ja.md) にまとめている。
+
 ## 14. リスク
 
 - コアライブラリの量が最大の作業。
@@ -304,13 +308,37 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 
 ## 15. 直近の作業
 
-1. VM-4 の実装
-   - mrblib のロードと pure-Ruby メソッドの有効化
-   - `Enumerable` / `Comparable` のモジュール化
-   - `Enumerator` の最小実装
-   - `String` / `Array` / `Hash` / `Integer` の残りメソッド
-2. 公式テストの subset 実行
-3. 例外の `backtrace` と `Exception#full_message`
+詳細なフェーズ計画・品質ゲート・リスクは
+[roadmap.ja.md](roadmap.ja.md) を参照。ここでは直近スプリントのみを示す。
+
+1. **VM-4a: `t/array.rb` を完走させる**
+   - `Array#hash`（循環配列を含めて安全に）
+   - `freeze` / `frozen?` / `FrozenError`
+   - `sort` / `sort!` の Float / bigint / NaN / 非整数ブロック
+   - `delete` / `delete_at` / `shift` / `pop` / `replace`
+   - `initialize_copy` / `dup` / `clone`
+   - `slice` / `first` / `last` の境界
+   - 完了条件: `mrbtest mruby/test/t/array.rb` が
+     `KO: 0` / `Crash: 0`
+2. **公式テストマニフェスト**
+   - `testdata/official.txt` を追加
+   - `cmd/mrbtest` に manifest 実行オプションを追加
+   - 成功ファイルを `go test` に固定
+3. **例外の実用化**
+   - `backtrace`（file:line）、`full_message`、`cause`、`$!`
+   - `FrozenError` と raise の再送出・cause 連鎖
+4. **リフレクション**
+   - `instance_variables` / `instance_variable_get` /
+     `instance_variable_set`
+   - `const_get` / `const_set` / `ancestors` / `methods`
+   - `respond_to?` の private 引数
+5. **mrblib の段階導入**
+   - `Options.LoadMrblib` で opt-in
+   - まず `10error.rb` / `compar.rb` / `enum.rb` のみ
+   - ネイティブ実装との差分を conformance で比較
+6. **ホスト API の設計着手**
+   - `DefineFunction` / `DefineClass` / `DefineConst` / `Send`
+   - `Value` ↔ Go 型変換、`context.Context` キャンセル
 
 ## 16. 現在の状態
 
@@ -400,4 +428,4 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
     `enumerator` / `comparable` / `singleton_classes` /
     `metaprogramming` / `immediate_values` conformance を追加し、
     37 ケースが両コンパイラで成功
-  - 次は mrblib のロードと `Enumerator`
+  - 次は VM-4a（`t/array.rb` の完走と公式テストマニフェスト）

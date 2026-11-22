@@ -67,6 +67,7 @@ Design and plan:
 
 - [docs/architecture.md](docs/architecture.md) — architecture and design
 - [docs/implementation-plan.ja.md](docs/implementation-plan.ja.md) — implementation plan (Japanese)
+- [docs/roadmap.ja.md](docs/roadmap.ja.md) — phases, sprint plan, and quality gates (Japanese)
 - [docs/bytecode-format.md](docs/bytecode-format.md) — RITE 04.00 format
 
 ## Relationship to go-mrbc
