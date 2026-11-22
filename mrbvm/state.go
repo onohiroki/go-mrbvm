@@ -15,6 +15,7 @@ import (
 
 // Options controls VM construction.
 type Options struct {
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 
@@ -95,6 +96,7 @@ type State struct {
 
 	globals          map[string]Value
 	constants        map[string]Value
+	stdin            io.Reader
 	stdout           io.Writer
 	stderr           io.Writer
 	currentException Value
@@ -121,6 +123,10 @@ type State struct {
 // New creates a VM state with the minimal core needed to execute VM-0
 // bytecode.
 func New(opts Options) *State {
+	stdin := opts.Stdin
+	if stdin == nil {
+		stdin = os.Stdin
+	}
 	stdout := opts.Stdout
 	if stdout == nil {
 		stdout = os.Stdout
@@ -133,6 +139,7 @@ func New(opts Options) *State {
 	s := &State{
 		globals:   make(map[string]Value),
 		constants: make(map[string]Value),
+		stdin:     stdin,
 		stdout:    stdout,
 		stderr:    stderr,
 
@@ -507,6 +514,7 @@ func New(opts Options) *State {
 	s.installCoreLibrary()
 	s.installTimeClass()
 	s.installJSONModule()
+	s.installIOLibrary()
 	s.installFileLibrary()
 	s.installRegexpClass()
 	s.installMatchDataClass()

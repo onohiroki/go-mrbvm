@@ -3,6 +3,7 @@ package mrbvm
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/onohiroki/go-mrbvm/sandbox"
@@ -52,6 +53,49 @@ func (s *State) installFileLibrary() {
 		_, err := os.Stat(args[0].ToS())
 		return BoolValue(err == nil), nil
 	}}
+	fileClass.classMethods["size"] = &method{owner: fileClass, name: "size", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.requireCapability(sandbox.FileRead); err != nil {
+			return Nil, err
+		}
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "File.size expects a path")}
+		}
+		info, err := os.Stat(args[0].ToS())
+		if err != nil {
+			return Nil, s.ioError(err)
+		}
+		return IntValue(info.Size()), nil
+	}}
+	fileClass.classMethods["delete"] = &method{owner: fileClass, name: "delete", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.requireCapability(sandbox.FileWrite); err != nil {
+			return Nil, err
+		}
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "File.delete expects a path")}
+		}
+		if err := os.Remove(args[0].ToS()); err != nil {
+			return Nil, s.ioError(err)
+		}
+		return IntValue(0), nil
+	}}
+	fileClass.classMethods["basename"] = &method{owner: fileClass, name: "basename", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "File.basename expects a path")}
+		}
+		return StringValue(filepath.Base(args[0].ToS())), nil
+	}}
+	fileClass.classMethods["dirname"] = &method{owner: fileClass, name: "dirname", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "File.dirname expects a path")}
+		}
+		return StringValue(filepath.Dir(args[0].ToS())), nil
+	}}
+	fileClass.classMethods["extname"] = &method{owner: fileClass, name: "extname", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "File.extname expects a path")}
+		}
+		return StringValue(filepath.Ext(args[0].ToS())), nil
+	}}
 	fileClass.classMethods["open"] = &method{owner: fileClass, name: "open", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) < 1 {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "File.open expects a path")}
@@ -60,6 +104,9 @@ func (s *State) installFileLibrary() {
 		mode := "r"
 		if len(args) > 1 {
 			mode = args[1].ToS()
+		}
+		if !validFileMode(mode) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "invalid access mode "+mode)}
 		}
 		capability := sandbox.FileRead
 		if strings.ContainsAny(mode, "wa+") {
@@ -191,6 +238,23 @@ func (s *State) requireCapability(capability sandbox.Capability) error {
 		return nil
 	}
 	return &unwindSignal{kind: unwindException, value: newException(s.SecurityErrorClass, "capability denied: "+string(capability))}
+}
+
+func validFileMode(mode string) bool {
+	if mode == "" {
+		return false
+	}
+	switch mode[0] {
+	case 'r', 'w', 'a':
+	default:
+		return false
+	}
+	for _, char := range mode[1:] {
+		if !strings.ContainsRune("b+t", char) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *State) ioError(err error) error {
