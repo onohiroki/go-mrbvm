@@ -249,10 +249,10 @@
 
 | ファイル | OK / Total | 備考 |
 | --- | ---: | --- |
-| `hash.rb` | 39 / 57 | カスタムキー、frozen、default、merge まで対応 |
+| `hash.rb` | 51 / 57 | 残りは再入・カーソル系と GC ヘルパー |
 | `range.rb` | 23 / 26 | 残りは mruby GC テスト用ヘルパー |
-| `class.rb` | 39 / 49 | 定数・特異メソッドの一部が残る |
-| `module.rb` | 36 / 86 | 祖先チェーンと可視性を実装、高度な定数探索が残る |
+| `class.rb` | 49 / 49 | 全通過 |
+| `module.rb` | 80 / 86 | 残りは定数 cref・`defined?`・テスト間依存 |
 | `string.rb` | 66 / 80 | Unicode 変換・inspect・byte 単位 length が残る |
 
 追加で以下を解決した。
@@ -266,8 +266,19 @@
 - Hash の frozen 検査と `reject!` / `select!` の nil 返却
 - String の `getbyte` / `byteslice`、補間での `to_s` 呼び出しと例外伝播、
   `sub` / `gsub` の `\\`` / `\\'` と後方参照、空パターン
+- Hash の Array/Hash 等価性、`compare_by_identity`、`rehash`、`assoc`、
+  ライブなイテレーションと frozen 検査
+- Class の再オープン時 superclass 検査、`Class.new` の `inherited` 順、
+  入れ子クラスの名前と定数パス、`Module#dup`、`undef_method`
+- `attr_*` の返り値・String 名・可視性、`private_class_method`、
+  `module_function` のトグル、protected クラスメソッド
+- 祖先チェーンの重複（superclass をまたぐ prepend）と include/prepend の
+  先勝ち、クラス変数の所属解決と frozen 検査
+- `class_eval` / lambda の可視性スコープ、`method_missing` の可視性無視、
+  Proc#call へのブロック引き渡し
 
-conformance は 51 ケースに拡大。
+conformance は 51 ケースに拡大。除外している 3 系統（mruby GC 内部、
+Encoding の byte/char、Hash 再入カーソル）は引き続き対象外。
 
 ## 5. 品質ゲート
 

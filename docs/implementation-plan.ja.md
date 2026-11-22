@@ -387,6 +387,14 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   `[]=` を追加
 - 祖先チェーンに基づくメソッド探索と `super`、スコープ付き可視性、
   Hash の frozen 検査、String の byte API を追加
+- Phase 1（Hash）: Array/Hash の Ruby 等価性、identity、rehash、assoc、
+  ライブイテレーションを実装（`hash.rb` 51/57）
+- Phase 2（Class/Module）: 再オープン検査、inherited、Module#dup、
+  attr/可視性、定数可視性、method_defined?、undef、クラス変数を実装
+  （`class.rb` 49/49、`module.rb` 80/86）
+- Phase 3（可視性・呼び出し文脈）: class_eval の可視性リセット、
+  lambda の可視性捕捉、private/protected クラスメソッド、
+  method_missing、Proc#call のブロック束縛を実装
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態
