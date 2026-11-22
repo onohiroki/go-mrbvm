@@ -61,9 +61,18 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 	return program, nil
 }
 
+func decrementDepth(s *State) {
+	s.callDepth--
+}
+
+func popFrame(s *State, entryException Value) {
+	s.frames = s.frames[:len(s.frames)-1]
+	s.currentException = entryException
+}
+
 func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, strict bool) (Value, error) {
 	s.callDepth++
-	defer func() { s.callDepth-- }()
+	defer decrementDepth(s)
 	if s.maxDepth > 0 && s.callDepth > s.maxDepth {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.SystemStackErrorClass, "stack level too deep")}
 	}
@@ -84,18 +93,8 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	nregs += 2
 	var regs []Value
 	if !program.hasBlocks {
-		if pooled := s.regPool.Get(); pooled != nil {
-			regs = pooled.([]Value)
-			if cap(regs) < nregs {
-				regs = make([]Value, nregs)
-			} else {
-				regs = regs[:nregs]
-				clear(regs)
-			}
-		} else {
-			regs = make([]Value, nregs)
-		}
-		defer func() { s.regPool.Put(regs[:0]) }()
+		regs = s.acquireSlice(&s.regFree, nregs)
+		defer s.releaseSlice(&s.regFree, regs)
 	} else {
 		regs = make([]Value, nregs)
 	}
@@ -103,20 +102,27 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	frameArgs := args
 	frameKw := kw
 	frameBlock := block
-	frameEnv := &environment{parent: capturedEnv, regs: regs, block: block, methodFrame: mid != ""}
+	var frameEnv *environment
+	if !program.hasBlocks {
+		frameEnv = s.acquireEnvironment()
+		frameEnv.parent = capturedEnv
+		frameEnv.regs = regs
+		frameEnv.block = block
+		frameEnv.methodFrame = mid != ""
+		defer s.releaseEnvironment(frameEnv)
+	} else {
+		frameEnv = &environment{parent: capturedEnv, regs: regs, block: block, methodFrame: mid != ""}
+	}
 	_ = frameEnv
 	keywordSlot := -1
 	_ = keywordSlot
 	pcByOffset := program.pcByOffset
 	lineByOffset := program.lineByOffset
-	frame := &callFrame{file: irep.Filename, method: mid}
+	frame := callFrame{file: irep.Filename, method: mid}
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope
 	s.frames = append(s.frames, frame)
-	defer func() {
-		s.frames = s.frames[:len(s.frames)-1]
-		s.currentException = entryException
-	}()
+	defer popFrame(s, entryException)
 	lastLine := 0
 
 	// caught holds the signal that transferred control into an ensure or
@@ -298,10 +304,6 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		}
 		return handle(sig, offset)
 	}
-	returnFrom := func(value Value, offset int) (int, Value, bool, error) {
-		return handle(&unwindSignal{kind: unwindReturn, value: value, target: frameEnv}, offset)
-	}
-
 	for pc := 0; pc < len(instructions); pc++ {
 		if err := ctx.Err(); err != nil {
 			return Nil, err
@@ -318,7 +320,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		if line, ok := lineByOffset[in.Offset]; ok {
 			lastLine = line
 		}
-		frame.line = lastLine
+		s.frames[len(s.frames)-1].line = lastLine
 		switch in.Op {
 		case bytecode.OpNOP:
 			// no-op
@@ -788,9 +790,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpBLKCALL:
 			a := int(in.Operands[0])
 			n := int(in.Operands[1])
-			args := make([]Value, n)
+			args := s.acquireValues(n)
 			copy(args, regs[a+1:a+1+n])
 			result, err := s.callBlock(ctx, regs[a], args, Nil)
+			s.releaseValues(args)
 			if err != nil {
 				if sig, ok := err.(*unwindSignal); ok && sig.kind == unwindBreak && sig.target == nil {
 					copySig := *sig
@@ -931,7 +934,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSENDB {
 				recv = regs[in.Operands[0]]
 			}
-			args, kw, block, err := sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], true)
+			args, kw, block, err := s.sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], true)
 			if err != nil {
 				return Nil, err
 			}
@@ -947,6 +950,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				continue
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
+			s.releaseValues(args)
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
@@ -1040,11 +1044,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				pc = np - 1
 				continue
 			}
-			args, kw, block, err := sendArguments(irep, regs, a, argInfo, true)
+			args, kw, block, err := s.sendArguments(irep, regs, a, argInfo, true)
 			if err != nil {
 				return Nil, err
 			}
 			result, err := s.invoke(ctx, m, self, args, kw, block)
+			s.releaseValues(args)
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
@@ -1093,7 +1098,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSEND {
 				recv = regs[in.Operands[0]]
 			}
-			args, kw, block, err := sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], false)
+			args, kw, block, err := s.sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], false)
 			if err != nil {
 				return Nil, err
 			}
@@ -1109,6 +1114,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				continue
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
+			s.releaseValues(args)
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
@@ -1474,7 +1480,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[a] = value
 
 		case bytecode.OpRETURN:
-			np, rv, done, fatal := returnFrom(regs[in.Operands[0]], in.Offset)
+			if ensureAt(in.Offset, -1) == nil {
+				return regs[in.Operands[0]], nil
+			}
+			np, rv, done, fatal := handle(&unwindSignal{kind: unwindReturn, value: regs[in.Operands[0]], target: frameEnv}, in.Offset)
 			if fatal != nil {
 				return Nil, fatal
 			}
@@ -1483,7 +1492,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			pc = np - 1
 		case bytecode.OpRETNIL:
-			np, rv, done, fatal := returnFrom(Nil, in.Offset)
+			if ensureAt(in.Offset, -1) == nil {
+				return Nil, nil
+			}
+			np, rv, done, fatal := handle(&unwindSignal{kind: unwindReturn, value: Nil, target: frameEnv}, in.Offset)
 			if fatal != nil {
 				return Nil, fatal
 			}
@@ -1492,7 +1504,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			pc = np - 1
 		case bytecode.OpRETSELF:
-			np, rv, done, fatal := returnFrom(self, in.Offset)
+			if ensureAt(in.Offset, -1) == nil {
+				return self, nil
+			}
+			np, rv, done, fatal := handle(&unwindSignal{kind: unwindReturn, value: self, target: frameEnv}, in.Offset)
 			if fatal != nil {
 				return Nil, fatal
 			}
@@ -1501,7 +1516,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			pc = np - 1
 		case bytecode.OpRETTRUE:
-			np, rv, done, fatal := returnFrom(True, in.Offset)
+			if ensureAt(in.Offset, -1) == nil {
+				return True, nil
+			}
+			np, rv, done, fatal := handle(&unwindSignal{kind: unwindReturn, value: True, target: frameEnv}, in.Offset)
 			if fatal != nil {
 				return Nil, fatal
 			}
@@ -1510,7 +1528,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			pc = np - 1
 		case bytecode.OpRETFALSE:
-			np, rv, done, fatal := returnFrom(False, in.Offset)
+			if ensureAt(in.Offset, -1) == nil {
+				return False, nil
+			}
+			np, rv, done, fatal := handle(&unwindSignal{kind: unwindReturn, value: False, target: frameEnv}, in.Offset)
 			if fatal != nil {
 				return Nil, fatal
 			}
@@ -1578,7 +1599,64 @@ func (s *State) lookupConstant(class *Class, name string) Value {
 	return Nil
 }
 
-func sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, hasBlock bool) ([]Value, Value, Value, error) {
+const freeSliceLimit = 64
+
+// acquireSlice returns a zeroed slice of length n from the free list. Free
+// lists avoid sync.Pool because storing a slice in an interface boxes its
+// header, which allocates on every release.
+func (s *State) acquireSlice(free *[][]Value, n int) []Value {
+	if n <= 0 {
+		return nil
+	}
+	if stack := *free; len(stack) > 0 {
+		buffer := stack[len(stack)-1]
+		*free = stack[:len(stack)-1]
+		if cap(buffer) >= n {
+			buffer = buffer[:n]
+			clear(buffer)
+			return buffer
+		}
+	}
+	return make([]Value, n)
+}
+
+func (s *State) releaseSlice(free *[][]Value, values []Value) {
+	if cap(values) == 0 || len(*free) >= freeSliceLimit {
+		return
+	}
+	clear(values)
+	*free = append(*free, values[:0])
+}
+
+func (s *State) acquireEnvironment() *environment {
+	if n := len(s.envFree); n > 0 {
+		env := s.envFree[n-1]
+		s.envFree = s.envFree[:n-1]
+		return env
+	}
+	return &environment{}
+}
+
+func (s *State) releaseEnvironment(env *environment) {
+	if len(s.envFree) >= freeSliceLimit {
+		return
+	}
+	env.parent = nil
+	env.regs = nil
+	env.block = Nil
+	env.methodFrame = false
+	s.envFree = append(s.envFree, env)
+}
+
+func (s *State) acquireValues(n int) []Value {
+	return s.acquireSlice(&s.argFree, n)
+}
+
+func (s *State) releaseValues(values []Value) {
+	s.releaseSlice(&s.argFree, values)
+}
+
+func (s *State) sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, hasBlock bool) ([]Value, Value, Value, error) {
 	n := int(argInfo & 0x0f)
 	k := int((argInfo >> 4) & 0x0f)
 	var args []Value
@@ -1590,9 +1668,10 @@ func sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, hasBlock boo
 		if !ok {
 			return nil, Nil, Nil, fmt.Errorf("mrbvm: packed arguments are not an array")
 		}
-		args = append(args, data.values...)
+		args = s.acquireValues(len(data.values))
+		copy(args, data.values)
 	} else {
-		args = make([]Value, n)
+		args = s.acquireValues(n)
 		copy(args, regs[a+1:a+1+n])
 	}
 	kwRegs := 0
@@ -1679,6 +1758,9 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 
 func (s *State) invoke(ctx context.Context, m *method, recv Value, args []Value, kw Value, block Value) (Value, error) {
 	if m.native != nil {
+		// Callers may pass a pooled buffer that is reused once the call
+		// returns. Native methods must copy the slice if they retain it; see
+		// kernelP and DefineFunction.
 		return m.native(ctx, recv, args, kw, block)
 	}
 	return s.executeFrame(ctx, m.irep, recv, m.owner, args, kw, block, nil, m.name, m.owner, true)

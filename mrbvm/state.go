@@ -8,7 +8,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/onohiroki/go-mrbvm/sandbox"
@@ -107,10 +106,12 @@ type State struct {
 	arrayIndexBuiltin *method
 	arraySetBuiltin   *method
 
-	frames    []*callFrame
+	frames    []callFrame
 	callDepth int
 	programs  map[*Irep]*irepProgram
-	regPool   sync.Pool
+	regFree   [][]Value
+	argFree   [][]Value
+	envFree   []*environment
 	gcEnabled bool
 
 	policy           *sandbox.Policy
@@ -897,7 +898,7 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 				values = make([]Value, count)
 				if !block.IsNil() {
 					for i := range values {
-						item, err := s.callBlock(ctx, block, []Value{IntValue(int64(i))}, Nil)
+						item, err := s.callBlock1(ctx, block, IntValue(int64(i)), Nil)
 						if err != nil {
 							return Nil, err
 						}
@@ -1600,7 +1601,8 @@ func (s *State) kernelP(ctx context.Context, self Value, args []Value, kw Value,
 	case 1:
 		return args[0], nil
 	default:
-		return ArrayValue(args), nil
+		// args may be a pooled buffer owned by the caller.
+		return ArrayValue(append([]Value(nil), args...)), nil
 	}
 }
 
@@ -1622,7 +1624,7 @@ func (s *State) rangeEachMethod(ctx context.Context, self Value, args []Value, k
 		if data.exclusive && i == data.high.Int() {
 			break
 		}
-		if _, err := s.callBlock(ctx, block, []Value{IntValue(i)}, Nil); err != nil {
+		if _, err := s.callBlock1(ctx, block, IntValue(i), Nil); err != nil {
 			if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
 				return br.value, nil
 			}
@@ -2066,7 +2068,7 @@ func (s *State) arraySortBangMethod(ctx context.Context, self Value, args []Valu
 
 func (s *State) compareValues(ctx context.Context, left, right Value, block Value) (int, error) {
 	if !block.IsNil() {
-		result, err := s.callBlock(ctx, block, []Value{left, right}, Nil)
+		result, err := s.callBlock2(ctx, block, left, right, Nil)
 		if err != nil {
 			return 0, err
 		}
@@ -2195,7 +2197,7 @@ func (s *State) arrayMapMethod(ctx context.Context, self Value, args []Value, kw
 	}
 	values := make([]Value, 0, len(data.values))
 	for _, value := range data.values {
-		result, err := s.callBlock(ctx, block, []Value{value}, Nil)
+		result, err := s.callBlock1(ctx, block, value, Nil)
 		if err != nil {
 			if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
 				return br.value, nil
@@ -2219,7 +2221,7 @@ func (s *State) arrayEachMethod(ctx context.Context, self Value, args []Value, k
 		return Nil, fmt.Errorf("mrbvm: not an array")
 	}
 	for _, value := range data.values {
-		_, err := s.callBlock(ctx, block, []Value{value}, Nil)
+		_, err := s.callBlock1(ctx, block, value, Nil)
 		if err != nil {
 			if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
 				return br.value, nil
@@ -2255,6 +2257,23 @@ func (s *State) callBlockWithSelf(ctx context.Context, block Value, self Value, 
 	return s.callBlock(ctx, block, args, kw)
 }
 
+// callBlock1 invokes a block with one argument without heap-allocating an
+// argument slice for the common case.
+func (s *State) callBlock1(ctx context.Context, block Value, arg Value, kw Value) (Value, error) {
+	var buffer [1]Value
+	buffer[0] = arg
+	return s.callBlock(ctx, block, buffer[:], kw)
+}
+
+// callBlock2 invokes a block with two arguments without heap-allocating an
+// argument slice for the common case.
+func (s *State) callBlock2(ctx context.Context, block Value, first, second Value, kw Value) (Value, error) {
+	var buffer [2]Value
+	buffer[0] = first
+	buffer[1] = second
+	return s.callBlock(ctx, block, buffer[:], kw)
+}
+
 func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Value) (Value, error) {
 	if block.Kind() == KindSymbol {
 		proc, err := s.call(ctx, block, "to_proc", nil, Nil, Nil)
@@ -2267,7 +2286,9 @@ func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Val
 		return Nil, fmt.Errorf("mrbvm: no block given")
 	}
 	if data, ok := block.obj.data.(*nativeBlockData); ok {
-		return data.fn(ctx, args)
+		// Native blocks may retain the slice; callers such as callBlock1
+		// pass stack-backed buffers.
+		return data.fn(ctx, append([]Value(nil), args...))
 	}
 	data, ok := block.obj.data.(*blockData)
 	if !ok {

@@ -14,7 +14,9 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 // it as a normal method; a Go error is converted to an unhandled VM error.
 func (s *State) DefineFunction(name string, fn Func) {
 	s.ObjectClass.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return fn(ctx, s, self, args, block)
+		// Host functions may retain the argument slice, so hand them an
+		// independent copy.
+		return fn(ctx, s, self, append([]Value(nil), args...), block)
 	})
 }
 

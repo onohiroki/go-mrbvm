@@ -30,11 +30,14 @@ func (s *State) newEnumerator(collect func(ctx context.Context, yield func([]Val
 }
 
 func (s *State) toEnum(receiver Value, method string, args []Value) Value {
+	// The enumerator outlives the call, so detach from the caller's argument
+	// buffer (which may be pooled).
+	argsCopy := append([]Value(nil), args...)
 	return s.newEnumerator(func(ctx context.Context, yield func([]Value) error) error {
 		block := nativeBlockValue(func(ctx context.Context, raw []Value) (Value, error) {
 			return Nil, yield(raw)
 		})
-		_, err := s.call(ctx, receiver, method, args, Nil, block)
+		_, err := s.call(ctx, receiver, method, argsCopy, Nil, block)
 		return err
 	})
 }
