@@ -10,8 +10,9 @@ type fiberMessage struct {
 
 type fiberData struct {
 	block    Value
-	resumeCh chan []Value
+	resumeCh chan fiberMessage
 	outCh    chan fiberMessage
+	self     Value
 	started  bool
 	dead     bool
 }
@@ -24,8 +25,10 @@ func (s *State) installFiberClass() {
 		if block.IsNil() {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "Fiber.new requires a block")}
 		}
-		data := &fiberData{block: block, resumeCh: make(chan []Value), outCh: make(chan fiberMessage)}
-		return ObjectValue(&Object{class: class, data: data}), nil
+		data := &fiberData{block: block, resumeCh: make(chan fiberMessage), outCh: make(chan fiberMessage)}
+		value := ObjectValue(&Object{class: class, data: data})
+		data.self = value
+		return value, nil
 	}}
 	class.classMethods["yield"] = &method{owner: class, name: "yield", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		data, ok := ctx.Value(fiberContextKey{}).(*fiberData)
@@ -34,10 +37,13 @@ func (s *State) installFiberClass() {
 		}
 		data.outCh <- fiberMessage{values: append([]Value(nil), args...)}
 		next := <-data.resumeCh
-		if len(next) == 0 {
+		if next.err != nil {
+			return Nil, next.err
+		}
+		if len(next.values) == 0 {
 			return Nil, nil
 		}
-		return next[0], nil
+		return next.values[0], nil
 	}}
 	class.define("resume", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		data, ok := fiberOf(self)
@@ -55,8 +61,54 @@ func (s *State) installFiberClass() {
 				data.outCh <- fiberMessage{values: []Value{result}, done: true, err: err}
 			}()
 		} else {
-			data.resumeCh <- append([]Value(nil), args...)
+			data.resumeCh <- fiberMessage{values: append([]Value(nil), args...)}
 		}
+		message := <-data.outCh
+		if message.done {
+			data.dead = true
+			if message.err != nil {
+				return Nil, message.err
+			}
+			if len(message.values) == 0 {
+				return Nil, nil
+			}
+			return message.values[0], nil
+		}
+		if len(message.values) == 0 {
+			return Nil, nil
+		}
+		return message.values[0], nil
+	})
+	class.define("raise", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := fiberOf(self)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a fiber")}
+		}
+		if data.dead {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.FiberErrorClass, "dead fiber called")}
+		}
+		if !data.started {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.FiberErrorClass, "cannot raise into an unstarted fiber")}
+		}
+		var exception Value
+		if len(args) == 0 {
+			exception = newException(s.RuntimeErrorClass, "")
+		} else if class, ok := s.asClass(args[0]); ok {
+			message := class.name
+			if len(args) > 1 {
+				message = args[1].ToS()
+			}
+			exception = newException(class, message)
+		} else if args[0].Kind() == KindObject && args[0].obj != nil {
+			if _, ok := args[0].obj.data.(*exceptionData); ok {
+				exception = args[0]
+			} else {
+				exception = newException(s.RuntimeErrorClass, args[0].ToS())
+			}
+		} else {
+			exception = newException(s.RuntimeErrorClass, args[0].ToS())
+		}
+		data.resumeCh <- fiberMessage{err: &unwindSignal{kind: unwindException, value: exception}}
 		message := <-data.outCh
 		if message.done {
 			data.dead = true
@@ -77,6 +129,12 @@ func (s *State) installFiberClass() {
 		data, ok := fiberOf(self)
 		return BoolValue(ok && !data.dead), nil
 	})
+	class.classMethods["current"] = &method{owner: class, name: "current", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if data, ok := ctx.Value(fiberContextKey{}).(*fiberData); ok {
+			return data.self, nil
+		}
+		return s.RootFiber, nil
+	}}
 	class.define("dead?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		data, ok := fiberOf(self)
 		return BoolValue(!ok || data.dead), nil

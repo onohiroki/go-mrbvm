@@ -67,6 +67,7 @@ type State struct {
 	RegexpClass      *Class
 	MatchDataClass   *Class
 	FiberClass       *Class
+	RootFiber        Value
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -519,6 +520,9 @@ func New(opts Options) *State {
 	s.installRegexpClass()
 	s.installMatchDataClass()
 	s.installFiberClass()
+	rootData := &fiberData{resumeCh: make(chan fiberMessage), outCh: make(chan fiberMessage)}
+	s.RootFiber = ObjectValue(&Object{class: s.FiberClass, data: rootData})
+	rootData.self = s.RootFiber
 	if opts.LoadMrblib {
 		irep, err := s.LoadBytecode(mrblibBytecode)
 		if err == nil {
