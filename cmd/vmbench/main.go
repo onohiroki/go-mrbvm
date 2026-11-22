@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime/pprof"
 	"time"
 
 	"github.com/onohiroki/go-mrbc/mrbc"
@@ -19,6 +20,8 @@ import (
 func main() {
 	iterations := flag.Int("n", 5, "number of iterations")
 	compare := flag.Bool("compare", false, "compare with the reference mruby")
+	cpuProfile := flag.String("cpuprofile", "", "write a CPU profile to this file")
+	memProfile := flag.String("memprofile", "", "write a heap profile to this file")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: vmbench [-n N] [-compare] file.rb")
 		flag.PrintDefaults()
@@ -41,6 +44,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	if *cpuProfile != "" {
+		file, err := os.Create(*cpuProfile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer file.Close()
+		if err := pprof.StartCPUProfile(file); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
 	start := time.Now()
 	for i := 0; i < *iterations; i++ {
 		state := mrbvm.New(mrbvm.Options{Stdout: io.Discard, Stderr: io.Discard})
@@ -51,6 +68,18 @@ func main() {
 	}
 	goDuration := time.Since(start)
 	fmt.Printf("go-mrbvm  %d iterations  %s  %.2f ops/s\n", *iterations, goDuration, float64(*iterations)/goDuration.Seconds())
+	if *memProfile != "" {
+		file, err := os.Create(*memProfile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer file.Close()
+		if err := pprof.WriteHeapProfile(file); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 
 	if !*compare {
 		return
