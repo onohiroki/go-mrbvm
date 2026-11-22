@@ -18,6 +18,7 @@ func main() {
 	version := flag.Bool("v", false, "print version")
 	quiet := flag.Bool("q", false, "do not print expression results")
 	preload := flag.String("r", "", "preload a Ruby file before the REPL")
+	historyPath := flag.String("H", defaultHistoryPath(), "history file (empty disables history)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: gomirb [-v] [-q] [-r file]")
 		flag.PrintDefaults()
@@ -46,13 +47,49 @@ func main() {
 	if info, err := os.Stdin.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
 		interactive = true
 	}
-	if err := runREPL(ctx, os.Stdin, os.Stdout, os.Stderr, state, interactive, *quiet); err != nil {
+	if err := runREPL(ctx, os.Stdin, os.Stdout, os.Stderr, state, *historyPath, interactive, *quiet); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func runREPL(ctx context.Context, input io.Reader, output, errOutput io.Writer, state *mrbvm.State, interactive, quiet bool) error {
+func defaultHistoryPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home + "/.gomirb_history"
+}
+
+func loadHistory(path string) []string {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var history []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			history = append(history, line)
+		}
+	}
+	if len(history) > 1000 {
+		history = history[len(history)-1000:]
+	}
+	return history
+}
+
+func saveHistory(path string, history []string) {
+	if path == "" || len(history) == 0 {
+		return
+	}
+	_ = os.WriteFile(path, []byte(strings.Join(history, "\n")+"\n"), 0o600)
+}
+
+func runREPL(ctx context.Context, input io.Reader, output, errOutput io.Writer, state *mrbvm.State, historyPath string, interactive, quiet bool) error {
 	if !interactive {
 		source, err := io.ReadAll(input)
 		if err != nil {
@@ -68,6 +105,8 @@ func runREPL(ctx context.Context, input io.Reader, output, errOutput io.Writer, 
 		return err
 	}
 
+	history := loadHistory(historyPath)
+	defer func() { saveHistory(historyPath, history) }()
 	scanner := bufio.NewScanner(input)
 	var buffer strings.Builder
 	prompt := func(continuation bool) {
@@ -91,6 +130,19 @@ func runREPL(ctx context.Context, input io.Reader, output, errOutput io.Writer, 
 			if trimmed == "" {
 				continue
 			}
+			if trimmed == "history" {
+				for i, entry := range history {
+					fmt.Fprintf(output, "%d: %s\n", i+1, entry)
+				}
+				continue
+			}
+			if strings.HasPrefix(trimmed, "complete ") {
+				prefix := strings.TrimSpace(strings.TrimPrefix(trimmed, "complete "))
+				for _, name := range state.Complete(prefix) {
+					fmt.Fprintln(output, name)
+				}
+				continue
+			}
 		}
 		if buffer.Len() > 0 {
 			buffer.WriteByte('\n')
@@ -103,8 +155,14 @@ func runREPL(ctx context.Context, input io.Reader, output, errOutput io.Writer, 
 		}
 		if err != nil {
 			fmt.Fprintln(errOutput, err)
-		} else if !quiet && !result.IsNil() {
-			fmt.Fprintf(output, "=> %s\n", result.Inspect())
+		} else {
+			source := buffer.String()
+			if len(history) == 0 || history[len(history)-1] != source {
+				history = append(history, source)
+			}
+			if !quiet && !result.IsNil() {
+				fmt.Fprintf(output, "=> %s\n", result.Inspect())
+			}
 		}
 		buffer.Reset()
 	}

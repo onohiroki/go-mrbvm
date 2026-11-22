@@ -1,6 +1,10 @@
 package mrbvm
 
-import "context"
+import (
+	"context"
+	"sort"
+	"strings"
+)
 
 // Func is the host-facing native method signature. It omits the internal
 // keyword dictionary; use Send when keywords are needed.
@@ -141,4 +145,31 @@ func AsBool(v Value) (bool, bool) {
 	default:
 		return false, false
 	}
+}
+
+// Complete returns constant and method names matching prefix. It is a small
+// completion source for REPL front ends.
+func (s *State) Complete(prefix string) []string {
+	names := make(map[string]bool)
+	for name := range s.constants {
+		if strings.HasPrefix(name, prefix) {
+			names[name] = true
+		}
+	}
+	for name := range s.ObjectClass.methods {
+		if strings.HasPrefix(name, prefix) {
+			names[name] = true
+		}
+	}
+	for name := range s.ObjectClass.classMethods {
+		if strings.HasPrefix(name, prefix) {
+			names[name] = true
+		}
+	}
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
 }
