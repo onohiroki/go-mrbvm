@@ -290,6 +290,8 @@ func (s *State) classOf(v Value) *Class {
 			return s.EnumeratorClass
 		case *timeData:
 			return s.TimeClass
+		case *fileData:
+			return s.FileClass
 		}
 	}
 	switch v.kind {

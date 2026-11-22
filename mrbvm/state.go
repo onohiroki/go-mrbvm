@@ -61,6 +61,8 @@ type State struct {
 	GCClass          *Class
 	TimeClass        *Class
 	JSONClass        *Class
+	IOClass          *Class
+	FileClass        *Class
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -78,6 +80,8 @@ type State struct {
 	NotImplementedErrorClass    *Class
 	RangeErrorClass             *Class
 	FrozenErrorClass            *Class
+	SecurityErrorClass          *Class
+	IOErrorClass                *Class
 	RegexpErrorClass            *Class
 	ScriptErrorClass            *Class
 	SyntaxErrorClass            *Class
@@ -166,6 +170,8 @@ func New(opts Options) *State {
 	s.GCClass = newClass("GC", nil)
 	s.TimeClass = newClass("Time", s.ObjectClass)
 	s.JSONClass = newClass("JSON", nil)
+	s.IOClass = newClass("IO", s.ObjectClass)
+	s.FileClass = newClass("File", s.IOClass)
 	s.ExceptionClass = newClass("Exception", s.ObjectClass)
 	s.StandardErrorClass = newClass("StandardError", s.ExceptionClass)
 	s.RuntimeErrorClass = newClass("RuntimeError", s.StandardErrorClass)
@@ -183,6 +189,8 @@ func New(opts Options) *State {
 	s.RangeErrorClass = newClass("RangeError", s.StandardErrorClass)
 	s.FrozenErrorClass = newClass("FrozenError", s.RuntimeErrorClass)
 	s.RegexpErrorClass = newClass("RegexpError", s.StandardErrorClass)
+	s.SecurityErrorClass = newClass("SecurityError", s.StandardErrorClass)
+	s.IOErrorClass = newClass("IOError", s.StandardErrorClass)
 	s.ScriptErrorClass = newClass("ScriptError", s.ExceptionClass)
 	s.SyntaxErrorClass = newClass("SyntaxError", s.ScriptErrorClass)
 	s.SystemStackErrorClass = newClass("SystemStackError", s.ExceptionClass)
@@ -194,12 +202,14 @@ func New(opts Options) *State {
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
 		s.RangeClass, s.ProcClass, s.EnumerableClass, s.EnumeratorClass,
 		s.ComparableClass, s.GCClass, s.TimeClass, s.JSONClass,
+		s.IOClass, s.FileClass,
 		s.ExceptionClass, s.StandardErrorClass, s.RuntimeErrorClass,
 		s.ArgumentErrorClass, s.TypeErrorClass, s.NameErrorClass,
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
 		s.NoMatchingPatternErrorClass,
 		s.IndexErrorClass, s.StopIterationClass, s.KeyErrorClass,
 		s.NotImplementedErrorClass, s.RangeErrorClass, s.FrozenErrorClass,
+		s.SecurityErrorClass, s.IOErrorClass,
 		s.RegexpErrorClass, s.ScriptErrorClass, s.SyntaxErrorClass,
 		s.SystemStackErrorClass,
 	} {
@@ -265,6 +275,8 @@ func New(opts Options) *State {
 		"GC":            s.GCClass,
 		"Time":          s.TimeClass,
 		"JSON":          s.JSONClass,
+		"IO":            s.IOClass,
+		"File":          s.FileClass,
 		"Exception":     s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
 		"ArgumentError": s.ArgumentErrorClass, "TypeError": s.TypeErrorClass,
@@ -278,6 +290,8 @@ func New(opts Options) *State {
 		"NotImplementedError":    s.NotImplementedErrorClass,
 		"RangeError":             s.RangeErrorClass,
 		"FrozenError":            s.FrozenErrorClass,
+		"SecurityError":          s.SecurityErrorClass,
+		"IOError":                s.IOErrorClass,
 		"RegexpError":            s.RegexpErrorClass,
 		"ScriptError":            s.ScriptErrorClass,
 		"SyntaxError":            s.SyntaxErrorClass,
@@ -481,6 +495,7 @@ func New(opts Options) *State {
 	s.installCoreLibrary()
 	s.installTimeClass()
 	s.installJSONModule()
+	s.installFileLibrary()
 	if opts.LoadMrblib {
 		irep, err := s.LoadBytecode(mrblibBytecode)
 		if err == nil {
