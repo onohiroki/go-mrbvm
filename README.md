@@ -9,7 +9,7 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-**VM-4b, VM-4c, and VM-5 are implemented; VM-6 has started.** The VM loads RITE 04.00 through
+**VM-4b, VM-4c, and VM-5 are implemented; VM-6 is mostly complete.** The VM loads RITE 04.00 through
 `go-mrbc/bytecode` and supports:
 
 - values, objects, classes, methods, blocks, closures, and upvars
@@ -56,6 +56,11 @@ compiler and the reference implementation is always C mruby 4.0.0.
   process, OS, eval, load, and require
 - `Time` (`now`, `at`, components, `strftime`, arithmetic)
 - `JSON` (`parse`, `generate`, `dump`, `pretty_generate`)
+- capability-gated `IO` / `File` with read/write/open/close
+- `Regexp` / `MatchData` backed by Go regexp, including `String#=~`,
+  `#match`, `#scan`, and regexp `sub` / `gsub`
+- cooperative `Fiber` (`resume` / `yield` / `alive?`) preserving nested
+  Ruby stacks
 - `gomirb`, a persistent-State REPL with multi-line continuation
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
