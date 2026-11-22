@@ -29,7 +29,7 @@ type hashData struct {
 	// index is an open-addressed table of entry indexes (-1 for empty),
 	// used only for primitive keys. indexBuilt records how many entries it
 	// describes so length-changing mutations can trigger a rebuild.
-	index      []int
+	index      []int32
 	indexBuilt int
 }
 

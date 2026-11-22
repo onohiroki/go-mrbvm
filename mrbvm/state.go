@@ -1554,7 +1554,7 @@ func ensureHashIndex(data *hashData) {
 	for size < len(data.entries)*2 {
 		size <<= 1
 	}
-	table := make([]int, size)
+	table := make([]int32, size)
 	for i := range table {
 		table[i] = -1
 	}
@@ -1568,7 +1568,7 @@ func ensureHashIndex(data *hashData) {
 		for table[pos] != -1 {
 			pos = (pos + 1) & mask
 		}
-		table[pos] = i
+		table[pos] = int32(i)
 	}
 	data.index = table
 	data.indexBuilt = len(data.entries)
@@ -1586,9 +1586,25 @@ func addHashIndex(data *hashData, index int) {
 		for data.index[pos] != -1 {
 			pos = (pos + 1) & mask
 		}
-		data.index[pos] = index
+		data.index[pos] = int32(index)
 	}
 	data.indexBuilt = len(data.entries)
+}
+
+// appendHashEntry grows the entry slice geometrically. Go's append switches to
+// a ~1.25x growth factor for large element sizes, which makes the cumulative
+// allocation much larger than the final slice.
+func appendHashEntry(entries []hashEntry, entry hashEntry) []hashEntry {
+	if len(entries) == cap(entries) {
+		capacity := cap(entries) * 2
+		if capacity < 8 {
+			capacity = 8
+		}
+		grown := make([]hashEntry, len(entries), capacity)
+		copy(grown, entries)
+		entries = grown
+	}
+	return append(entries, entry)
 }
 
 func hashLookup(data *hashData, key Value) (int, bool) {
@@ -1602,7 +1618,7 @@ func hashLookup(data *hashData, key Value) (int, bool) {
 				return -1, false
 			}
 			if valuesEqual(data.entries[index].key, key) {
-				return index, true
+				return int(index), true
 			}
 			pos = (pos + 1) & mask
 		}
@@ -1652,7 +1668,7 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 				return Nil, err
 			}
 			ensureHashIndex(data)
-			data.entries = append(data.entries, hashEntry{key: index, value: value})
+			data.entries = appendHashEntry(data.entries, hashEntry{key: index, value: value})
 			addHashIndex(data, len(data.entries)-1)
 			return value, nil
 		}
