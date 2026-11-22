@@ -20,7 +20,18 @@ type callFrame struct {
 	method string
 }
 
+type exceptionScope struct {
+	prev   Value
+	exitPC int
+	kind   uint8
+}
+
 func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, strict bool) (Value, error) {
+	s.callDepth++
+	defer func() { s.callDepth-- }()
+	if s.maxDepth > 0 && s.callDepth > s.maxDepth {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.SystemStackErrorClass, "stack level too deep")}
+	}
 	instructions, err := bytecode.Decode(irep.Code)
 	if err != nil {
 		return Nil, err
@@ -53,9 +64,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		lineByOffset[int(line.Offset)] = int(line.Line)
 	}
 	frame := &callFrame{file: irep.Filename, method: mid}
+	entryException := s.currentException
+	var exceptionScopes []exceptionScope
 	s.frames = append(s.frames, frame)
 	defer func() {
 		s.frames = s.frames[:len(s.frames)-1]
+		s.currentException = entryException
 	}()
 	lastLine := 0
 
@@ -90,6 +104,75 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	}
 	// handle routes a signal through catch handlers. It returns either a new
 	// pc, a value to return from this frame, or the signal to propagate.
+	handlerExit := func(handler *bytecode.CatchHandler) int {
+		start, ok := pcByOffset[int(handler.Target)]
+		if !ok {
+			return len(instructions)
+		}
+		if handler.Type == bytecode.CatchEnsure {
+			for i := start; i < len(instructions); i++ {
+				if instructions[i].Op == bytecode.OpRAISEIF {
+					return i + 1
+				}
+			}
+			return len(instructions)
+		}
+		i := start
+		if i < len(instructions) && instructions[i].Op == bytecode.OpEXCEPT {
+			i++
+		}
+		for i < len(instructions) {
+			for i < len(instructions) && instructions[i].Op != bytecode.OpJMPIF {
+				i++
+			}
+			if i >= len(instructions) {
+				break
+			}
+			bodyStart, err := jumpTarget(instructions[i], pcByOffset)
+			if err != nil {
+				break
+			}
+			j := i + 1
+			for j < len(instructions) && instructions[j].Op != bytecode.OpJMP {
+				j++
+			}
+			if j >= len(instructions) {
+				break
+			}
+			nextClause, err := jumpTarget(instructions[j], pcByOffset)
+			if err != nil {
+				break
+			}
+			exit := -1
+			for k := bodyStart; k < nextClause && k < len(instructions); k++ {
+				if instructions[k].Op == bytecode.OpJMP {
+					if target, err := jumpTarget(instructions[k], pcByOffset); err == nil && target > exit {
+						exit = target
+					}
+				}
+			}
+			if exit >= 0 {
+				return exit
+			}
+			if nextClause >= len(instructions) {
+				break
+			}
+			i = nextClause
+		}
+		return start
+	}
+
+	pruneExceptionScopes := func(target int) {
+		for len(exceptionScopes) > 0 && target >= exceptionScopes[len(exceptionScopes)-1].exitPC {
+			scope := exceptionScopes[len(exceptionScopes)-1]
+			exceptionScopes = exceptionScopes[:len(exceptionScopes)-1]
+			s.currentException = scope.prev
+		}
+	}
+	pushExceptionScope := func(handler *bytecode.CatchHandler, target int) {
+		pruneExceptionScopes(target)
+		exceptionScopes = append(exceptionScopes, exceptionScope{prev: s.currentException, exitPC: handlerExit(handler), kind: handler.Type})
+	}
 	targetPC := func(handler *bytecode.CatchHandler) (int, error) {
 		target, ok := pcByOffset[int(handler.Target)]
 		if !ok {
@@ -100,6 +183,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	handle := func(sig *unwindSignal, offset int) (int, Value, bool, error) {
 		switch sig.kind {
 		case unwindJump:
+			for len(exceptionScopes) > 0 && exceptionScopes[len(exceptionScopes)-1].kind == bytecode.CatchEnsure && sig.jumpTarget >= exceptionScopes[len(exceptionScopes)-1].exitPC {
+				scope := exceptionScopes[len(exceptionScopes)-1]
+				exceptionScopes = exceptionScopes[:len(exceptionScopes)-1]
+				s.currentException = scope.prev
+			}
 			jumpOffset := -1
 			if sig.jumpTarget >= 0 && sig.jumpTarget < len(instructions) {
 				jumpOffset = instructions[sig.jumpTarget].Offset
@@ -109,6 +197,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				if err != nil {
 					return 0, Nil, false, err
 				}
+				pushExceptionScope(handler, target)
 				caught = sig
 				return target, Nil, false, nil
 			}
@@ -120,6 +209,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				if err != nil {
 					return 0, Nil, false, err
 				}
+				pushExceptionScope(handler, target)
 				caught = sig
 				return target, Nil, false, nil
 			}
@@ -130,6 +220,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				if err != nil {
 					return 0, Nil, false, err
 				}
+				pushExceptionScope(handler, target)
 				caught = sig
 				return target, Nil, false, nil
 			}
@@ -143,8 +234,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				if err != nil {
 					return 0, Nil, false, err
 				}
+				pushExceptionScope(handler, target)
 				caught = sig
 				return target, Nil, false, nil
+			}
+			if sig.target == frameEnv {
+				return 0, sig.value, true, nil
 			}
 			return 0, Nil, false, sig
 		}
@@ -164,6 +259,14 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	for pc := 0; pc < len(instructions); pc++ {
 		if err := ctx.Err(); err != nil {
 			return Nil, err
+		}
+		if err := s.checkExecutionLimits(); err != nil {
+			return Nil, err
+		}
+		for len(exceptionScopes) > 0 && pc == exceptionScopes[len(exceptionScopes)-1].exitPC {
+			scope := exceptionScopes[len(exceptionScopes)-1]
+			exceptionScopes = exceptionScopes[:len(exceptionScopes)-1]
+			s.currentException = scope.prev
 		}
 		in := instructions[pc]
 		if line, ok := lineByOffset[in.Offset]; ok {
@@ -302,8 +405,19 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpALIAS:
 			a := irep.Syms[in.Operands[0]]
 			b := irep.Syms[in.Operands[1]]
-			if m, ok := targetClass.methods[b]; ok {
+			if m, ok := targetClass.lookup(b); ok {
 				targetClass.methods[a] = m
+			} else {
+				sig := &unwindSignal{kind: unwindException, value: s.newNameError(b, s.classValue(targetClass))}
+				np, rv, done, fatal := handle(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 		case bytecode.OpUNDEF:
 			delete(targetClass.methods, irep.Syms[in.Operands[0]])
@@ -407,11 +521,41 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			targetClass.classVars[irep.Syms[in.Operands[1]]] = regs[in.Operands[0]]
 		case bytecode.OpGETCONST:
 			name := irep.Syms[in.Operands[1]]
-			value := s.constants[name]
-			if value.IsNil() {
-				value = s.ObjectClass.constants[name]
+			if value, ok := s.constants[name]; ok {
+				regs[in.Operands[0]] = value
+			} else if value, ok := s.ObjectClass.constants[name]; ok {
+				regs[in.Operands[0]] = value
+			} else if targetClass != nil {
+				if value, ok := targetClass.constants[name]; ok {
+					regs[in.Operands[0]] = value
+				} else if constAssignedSoon(instructions, pc, in.Operands[1]) {
+					regs[in.Operands[0]] = Nil
+				} else {
+					sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(targetClass))}
+					np, rv, done, fatal := handle(sig, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+			} else if constAssignedSoon(instructions, pc, in.Operands[1]) {
+				regs[in.Operands[0]] = Nil
+			} else {
+				sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(s.ObjectClass))}
+				np, rv, done, fatal := handle(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
-			regs[in.Operands[0]] = value
 		case bytecode.OpSETCONST:
 			name := irep.Syms[in.Operands[1]]
 			s.constants[name] = regs[in.Operands[0]]
@@ -424,7 +568,21 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if !ok {
 				return Nil, fmt.Errorf("mrbvm: GETMCNST receiver is not a class")
 			}
-			regs[a] = s.lookupConstant(class, irep.Syms[in.Operands[1]])
+			name := irep.Syms[in.Operands[1]]
+			value := s.lookupConstant(class, name)
+			if value.IsNil() {
+				sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(class))}
+				np, rv, done, fatal := handle(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
+			}
+			regs[a] = value
 		case bytecode.OpSETMCNST:
 			a := int(in.Operands[0])
 			class, ok := s.asClass(regs[a+1])
@@ -588,6 +746,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			copy(args, regs[a+1:a+1+n])
 			result, err := s.callBlock(ctx, regs[a], args, Nil)
 			if err != nil {
+				if sig, ok := err.(*unwindSignal); ok && sig.kind == unwindBreak && sig.target == nil {
+					copySig := *sig
+					copySig.target = frameEnv
+					err = &copySig
+				}
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
 					return Nil, fatal
@@ -640,12 +803,30 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpRAISEIF:
 			value := regs[in.Operands[0]]
 			if value.IsNil() {
-				s.currentException = Nil
 				break
 			}
 			sig, ok := asSignal(value)
 			if !ok {
 				sig = &unwindSignal{kind: unwindException, value: value}
+			}
+			if len(exceptionScopes) > 0 {
+				scope := exceptionScopes[len(exceptionScopes)-1]
+				pop := scope.exitPC == pc+1
+				if scope.kind == bytecode.CatchRescue {
+					pop = false
+					for j := pc + 1; j < len(instructions); j++ {
+						if instructions[j].Op == bytecode.OpJMP {
+							if target, err := jumpTarget(instructions[j], pcByOffset); err == nil && target == scope.exitPC {
+								pop = true
+							}
+							break
+						}
+					}
+				}
+				if pop {
+					exceptionScopes = exceptionScopes[:len(exceptionScopes)-1]
+					s.currentException = scope.prev
+				}
 			}
 			np, rv, done, fatal := handle(sig, in.Offset)
 			if fatal != nil {
@@ -707,6 +888,17 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			args, kw, block, err := sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], true)
 			if err != nil {
 				return Nil, err
+			}
+			if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			if err != nil {
@@ -791,7 +983,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				m, ok = owner.super.lookup(mid)
 			}
 			if !ok {
-				sig := &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, fmt.Sprintf("no superclass method %q", mid))}
+				sig := &unwindSignal{kind: unwindException, value: s.newMethodError(mid, self, args)}
 				np, rv, done, fatal := handle(sig, in.Offset)
 				if fatal != nil {
 					return Nil, fatal
@@ -825,6 +1017,17 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSEND0 {
 				recv = regs[in.Operands[0]]
 			}
+			if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
+			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], nil, Nil, Nil)
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
@@ -847,6 +1050,17 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			args, kw, block, err := sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], false)
 			if err != nil {
 				return Nil, err
+			}
+			if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			if err != nil {
@@ -1023,6 +1237,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			data, ok := regs[a].obj.data.(*arrayData)
 			if !ok {
 				return Nil, fmt.Errorf("mrbvm: ARYPUSH receiver is not an array")
+			}
+			if err := s.checkArraySize(len(data.values) + n); err != nil {
+				return Nil, err
 			}
 			for i := 0; i < n; i++ {
 				data.values = append(data.values, regs[a+1+i])
@@ -1397,9 +1614,19 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 	if result, ok := binaryCall(recv, name, args); ok {
 		return result, nil
 	}
+	if len(args) == 1 && (recv.Kind() == KindInt || recv.Kind() == KindFloat || recv.Kind() == KindBigInt) {
+		switch name {
+		case "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^":
+			other := args[0]
+			if other.Kind() != KindInt && other.Kind() != KindFloat && other.Kind() != KindBigInt {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+					"no implicit conversion of "+s.classOf(other).name+" into Integer")}
+			}
+		}
+	}
 	m, ok := s.classOf(recv).lookup(name)
 	if !ok {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, fmt.Sprintf("undefined method %q for %s", name, recv.Inspect()))}
+		return Nil, &unwindSignal{kind: unwindException, value: s.newMethodError(name, recv, args)}
 	}
 	return s.invoke(ctx, m, recv, args, kw, block)
 }
@@ -1769,6 +1996,19 @@ func valuesEqualSeen(left, right Value, seen map[objectPair]bool) bool {
 	default:
 		return false
 	}
+}
+
+func constAssignedSoon(instructions []bytecode.Instruction, pc int, symbol uint32) bool {
+	limit := pc + 8
+	if limit > len(instructions) {
+		limit = len(instructions)
+	}
+	for i := pc + 1; i < limit; i++ {
+		if instructions[i].Op == bytecode.OpSETCONST && instructions[i].Operands[1] == symbol {
+			return true
+		}
+	}
+	return false
 }
 
 func jumpTarget(in bytecode.Instruction, pcByOffset map[int]int) (int, error) {

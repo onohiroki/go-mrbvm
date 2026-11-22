@@ -6,7 +6,11 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"strings"
+	"time"
+
+	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
 // Options controls VM construction.
@@ -15,30 +19,46 @@ type Options struct {
 	Stderr io.Writer
 
 	// LoadMrblib loads a precompiled subset of mruby's Ruby-level core
-	// library (10error.rb, compar.rb, enum.rb) at VM creation.
+	// library (10error, compar, enum, array, hash, string, range) at VM
+	// creation.
 	LoadMrblib bool
+
+	// Policy is the capability allow-list exposed to embeddings.
+	Policy *sandbox.Policy
+
+	// Execution limits. Zero means unlimited, except MaxDepth, where zero
+	// selects the default depth.
+	MaxInstructions uint64
+	MaxDepth        int
+	MaxTime         time.Duration
+	MaxOutputBytes  int
+	MaxArraySize    int
+	MaxHashSize     int
+	MaxStringSize   int
 }
 
 // State is one mruby VM instance. A State is owned by a single goroutine.
 type State struct {
-	ObjectClass     *Class
-	ClassClass      *Class
-	NumericClass    *Class
-	NilClass        *Class
-	TrueClass       *Class
-	FalseClass      *Class
-	IntegerClass    *Class
-	FloatClass      *Class
-	StringClass     *Class
-	SymbolClass     *Class
-	ArrayClass      *Class
-	HashClass       *Class
-	RangeClass      *Class
-	ProcClass       *Class
-	EnumerableClass *Class
-	EnumeratorClass *Class
-	ComparableClass *Class
-	GCClass         *Class
+	BasicObjectClass *Class
+	ObjectClass      *Class
+	ModuleClass      *Class
+	ClassClass       *Class
+	NumericClass     *Class
+	NilClass         *Class
+	TrueClass        *Class
+	FalseClass       *Class
+	IntegerClass     *Class
+	FloatClass       *Class
+	StringClass      *Class
+	SymbolClass      *Class
+	ArrayClass       *Class
+	HashClass        *Class
+	RangeClass       *Class
+	ProcClass        *Class
+	EnumerableClass  *Class
+	EnumeratorClass  *Class
+	ComparableClass  *Class
+	GCClass          *Class
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -56,6 +76,10 @@ type State struct {
 	NotImplementedErrorClass    *Class
 	RangeErrorClass             *Class
 	FrozenErrorClass            *Class
+	RegexpErrorClass            *Class
+	ScriptErrorClass            *Class
+	SyntaxErrorClass            *Class
+	SystemStackErrorClass       *Class
 
 	TopSelf Value
 
@@ -69,7 +93,19 @@ type State struct {
 	arrayIndexBuiltin *method
 	arraySetBuiltin   *method
 
-	frames []*callFrame
+	frames    []*callFrame
+	callDepth int
+
+	policy           *sandbox.Policy
+	maxInstructions  uint64
+	maxDepth         int
+	maxTime          time.Duration
+	startTime        time.Time
+	instructionCount uint64
+	maxArraySize     int
+	maxHashSize      int
+	maxStringSize    int
+	output           *limitWriter
 }
 
 // New creates a VM state with the minimal core needed to execute VM-0
@@ -89,9 +125,27 @@ func New(opts Options) *State {
 		constants: make(map[string]Value),
 		stdout:    stdout,
 		stderr:    stderr,
+
+		policy:          opts.Policy,
+		maxInstructions: opts.MaxInstructions,
+		maxDepth:        opts.MaxDepth,
+		maxTime:         opts.MaxTime,
+		maxArraySize:    opts.MaxArraySize,
+		maxHashSize:     opts.MaxHashSize,
+		maxStringSize:   opts.MaxStringSize,
+		startTime:       time.Now(),
 	}
-	s.ObjectClass = newClass("Object", nil)
-	s.ClassClass = newClass("Class", s.ObjectClass)
+	if s.maxDepth == 0 {
+		s.maxDepth = 200
+	}
+	if opts.MaxOutputBytes > 0 {
+		s.output = &limitWriter{writer: stdout, remaining: opts.MaxOutputBytes}
+		s.stdout = s.output
+	}
+	s.BasicObjectClass = newClass("BasicObject", nil)
+	s.ObjectClass = newClass("Object", s.BasicObjectClass)
+	s.ModuleClass = newClass("Module", s.ObjectClass)
+	s.ClassClass = newClass("Class", s.ModuleClass)
 	s.NumericClass = newClass("Numeric", s.ObjectClass)
 	s.NilClass = newClass("NilClass", s.ObjectClass)
 	s.TrueClass = newClass("TrueClass", s.ObjectClass)
@@ -124,9 +178,14 @@ func New(opts Options) *State {
 	s.NotImplementedErrorClass = newClass("NotImplementedError", s.StandardErrorClass)
 	s.RangeErrorClass = newClass("RangeError", s.StandardErrorClass)
 	s.FrozenErrorClass = newClass("FrozenError", s.RuntimeErrorClass)
+	s.RegexpErrorClass = newClass("RegexpError", s.StandardErrorClass)
+	s.ScriptErrorClass = newClass("ScriptError", s.ExceptionClass)
+	s.SyntaxErrorClass = newClass("SyntaxError", s.ScriptErrorClass)
+	s.SystemStackErrorClass = newClass("SystemStackError", s.ExceptionClass)
 
 	for _, class := range []*Class{
-		s.ObjectClass, s.ClassClass, s.NumericClass, s.NilClass,
+		s.BasicObjectClass, s.ObjectClass, s.ModuleClass, s.ClassClass,
+		s.NumericClass, s.NilClass,
 		s.TrueClass, s.FalseClass, s.IntegerClass, s.FloatClass,
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
 		s.RangeClass, s.ProcClass, s.EnumerableClass, s.EnumeratorClass,
@@ -137,6 +196,8 @@ func New(opts Options) *State {
 		s.NoMatchingPatternErrorClass,
 		s.IndexErrorClass, s.StopIterationClass, s.KeyErrorClass,
 		s.NotImplementedErrorClass, s.RangeErrorClass, s.FrozenErrorClass,
+		s.RegexpErrorClass, s.ScriptErrorClass, s.SyntaxErrorClass,
+		s.SystemStackErrorClass,
 	} {
 		s.ensureClassObject(class)
 	}
@@ -151,6 +212,17 @@ func New(opts Options) *State {
 	s.ClassClass.define("class_exec", s.classEvalMethod)
 	s.ClassClass.define("alias_method", s.classAliasMethod)
 	s.ClassClass.define("remove_method", s.classRemoveMethod)
+	s.ClassClass.define("private", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if class, ok := s.asClass(self); ok {
+			for _, arg := range args {
+				class.privateMethods[arg.String()] = true
+			}
+		}
+		if len(args) > 0 {
+			return args[0], nil
+		}
+		return Nil, nil
+	})
 	s.ClassClass.define("===", s.classCaseEqMethod)
 	s.ClassClass.define("attr_reader", s.classAttrReaderMethod)
 	s.ClassClass.define("attr", s.classAttrReaderMethod)
@@ -176,7 +248,9 @@ func New(opts Options) *State {
 	})
 
 	for name, class := range map[string]*Class{
-		"Object": s.ObjectClass, "Class": s.ClassClass, "Numeric": s.NumericClass,
+		"BasicObject": s.BasicObjectClass, "Object": s.ObjectClass,
+		"Module": s.ModuleClass, "Class": s.ClassClass,
+		"Numeric":  s.NumericClass,
 		"NilClass": s.NilClass, "TrueClass": s.TrueClass, "FalseClass": s.FalseClass,
 		"Integer": s.IntegerClass,
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
@@ -198,6 +272,10 @@ func New(opts Options) *State {
 		"NotImplementedError":    s.NotImplementedErrorClass,
 		"RangeError":             s.RangeErrorClass,
 		"FrozenError":            s.FrozenErrorClass,
+		"RegexpError":            s.RegexpErrorClass,
+		"ScriptError":            s.ScriptErrorClass,
+		"SyntaxError":            s.SyntaxErrorClass,
+		"SystemStackError":       s.SystemStackErrorClass,
 	} {
 		value := s.classValue(class)
 		s.constants[name] = value
@@ -206,12 +284,36 @@ func New(opts Options) *State {
 
 	s.FloatClass.constants["INFINITY"] = FloatValue(math.Inf(1))
 	s.FloatClass.constants["NAN"] = FloatValue(math.NaN())
+	s.constants["MRUBY_VERSION"] = frozenString("4.0.0")
+	s.constants["MRUBY_REVISION"] = frozenString("HEAD")
+	s.constants["MRUBY_PLATFORM"] = frozenString(runtime.GOARCH + "-" + runtime.GOOS)
 	s.TopSelf = ObjectValue(&Object{class: s.ObjectClass})
 	s.ObjectClass.define("puts", s.kernelPuts)
 	s.ObjectClass.define("print", s.kernelPrint)
 	s.ObjectClass.define("p", s.kernelP)
 	s.ObjectClass.define("raise", s.kernelRaise)
 	s.ObjectClass.define("fail", s.kernelRaise)
+	s.ExceptionClass.classMethods["exception"] = &method{owner: s.ExceptionClass, name: "exception", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		class, ok := s.asClass(self)
+		if !ok {
+			class = s.ExceptionClass
+		}
+		message := ""
+		if len(args) > 0 {
+			message = args[0].ToS()
+		}
+		return newException(class, message), nil
+	}}
+	s.ExceptionClass.define("exception", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) == 0 || (len(args) == 1 && args[0].obj == self.obj) {
+			return self, nil
+		}
+		message := exceptionMessage(self)
+		if len(args) > 0 && !args[0].IsNil() {
+			message = args[0].ToS()
+		}
+		return newException(s.classOf(self), message), nil
+	})
 	s.ExceptionClass.define("message", s.exceptionMessageMethod)
 	s.ExceptionClass.define("to_s", s.exceptionMessageMethod)
 	s.ExceptionClass.define("inspect", s.exceptionInspectMethod)
@@ -261,6 +363,32 @@ func New(opts Options) *State {
 		}
 		return ArrayValue(values), nil
 	})
+	s.NameErrorClass.define("name", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if self.obj != nil {
+			if data, ok := self.obj.data.(*exceptionData); ok {
+				return data.name, nil
+			}
+		}
+		return Nil, nil
+	})
+	s.NameErrorClass.define("receiver", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if self.obj != nil {
+			if data, ok := self.obj.data.(*exceptionData); ok {
+				if data.receiverSet {
+					return data.receiver, nil
+				}
+			}
+		}
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no receiver is available")}
+	})
+	s.NoMethodErrorClass.define("args", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if self.obj != nil {
+			if data, ok := self.obj.data.(*exceptionData); ok {
+				return data.args, nil
+			}
+		}
+		return Nil, nil
+	})
 	s.ExceptionClass.define("cause", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if self.obj != nil {
 			if data, ok := self.obj.data.(*exceptionData); ok {
@@ -291,6 +419,7 @@ func New(opts Options) *State {
 	s.RangeClass.define("include?", s.rangeCaseEqMethod)
 	s.RangeClass.define("each", s.rangeEachMethod)
 	s.StringClass.define("length", s.stringLengthMethod)
+	s.StringClass.define("size", s.stringLengthMethod)
 	s.StringClass.define("upcase", s.stringUpcaseMethod)
 	s.StringClass.define("downcase", s.stringDowncaseMethod)
 	s.ArrayClass.define("each", s.arrayEachMethod)
@@ -351,6 +480,8 @@ func New(opts Options) *State {
 		}
 		s.initErr = err
 	}
+	s.instructionCount = 0
+	s.startTime = time.Now()
 	return s
 }
 
@@ -674,6 +805,14 @@ func (s *State) classAncestorsMethod(ctx context.Context, self Value, args []Val
 	return ArrayValue(values), nil
 }
 
+func frozenString(text string) Value {
+	value := StringValue(text)
+	if value.obj != nil {
+		value.obj.frozen = true
+	}
+	return value
+}
+
 func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
 	if !ok {
@@ -751,6 +890,26 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 			message = args[0].ToS()
 		}
 		instance = newException(class, message)
+		if data, ok := instance.obj.data.(*exceptionData); ok {
+			if s.classIsSubclass(class, s.NameErrorClass) && len(args) > 1 {
+				data.name = args[1]
+			}
+			if s.classIsSubclass(class, s.NoMethodErrorClass) && len(args) > 2 {
+				data.args = args[2]
+			}
+			if kw.Kind() == KindObject && kw.obj != nil {
+				if entries, ok := kw.obj.data.(*hashData); ok {
+					for _, entry := range entries.entries {
+						if entry.key.Kind() == KindSymbol && entry.key.String() == "receiver" {
+							data.receiver = entry.value
+							data.receiverSet = true
+						} else {
+							return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "unknown keyword: "+entry.key.Inspect())}
+						}
+					}
+				}
+			}
+		}
 	default:
 		instance = ObjectValue(&Object{class: class})
 	}
@@ -1266,10 +1425,19 @@ func (s *State) Run(ctx context.Context, data []byte) (Value, error) {
 	if err != nil {
 		return Nil, err
 	}
-	return s.Execute(ctx, irep)
+	result, err := s.Execute(ctx, irep)
+	if s.output != nil && s.output.exceeded {
+		return result, errOutputLimit
+	}
+	return result, err
 }
 
 // Execute runs a top-level irep.
+// Allowed reports whether the embedding's policy permits capability.
+func (s *State) Allowed(capability sandbox.Capability) bool {
+	return s.policy.Allowed(capability)
+}
+
 func (s *State) Execute(ctx context.Context, irep *Irep) (Value, error) {
 	if s.initErr != nil {
 		return Nil, s.initErr
@@ -1314,6 +1482,9 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 					data.entries[i].value = value
 					return value, nil
 				}
+			}
+			if err := s.checkHashSize(len(data.entries) + 1); err != nil {
+				return Nil, err
 			}
 			data.entries = append(data.entries, hashEntry{key: index, value: value})
 			return value, nil
@@ -1365,12 +1536,18 @@ func (s *State) rangeEachMethod(ctx context.Context, self Value, args []Value, k
 }
 
 func (s *State) arrayPushMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	if self.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: not an array")
 	}
 	data, ok := self.obj.data.(*arrayData)
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	if err := s.checkArraySize(len(data.values) + len(args)); err != nil {
+		return Nil, err
 	}
 	data.values = append(data.values, args...)
 	return self, nil
@@ -1475,6 +1652,9 @@ func (s *State) arrayAssign(data *arrayData, start, length int, value Value) (Va
 	if end < start {
 		end = start
 	}
+	if err := s.checkArraySize(len(data.values) - (end - start) + len(replacement)); err != nil {
+		return Nil, err
+	}
 	result := make([]Value, 0, len(data.values)-(end-start)+len(replacement))
 	result = append(result, data.values[:start]...)
 	result = append(result, replacement...)
@@ -1506,7 +1686,9 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 	case *stringData:
 		return StringValue(data.value), nil
 	case *exceptionData:
-		return ObjectValue(&Object{class: self.obj.class, data: &exceptionData{message: data.message}, ivars: self.obj.ivars}), nil
+		copyData := *data
+		copyData.backtrace = append([]string(nil), data.backtrace...)
+		return ObjectValue(&Object{class: self.obj.class, data: &copyData, ivars: self.obj.ivars}), nil
 	case *Class:
 		return self, nil
 	case *blockData:
@@ -1543,21 +1725,91 @@ func (s *State) kernelProcMethod(ctx context.Context, self Value, args []Value, 
 	return block, nil
 }
 
-func (s *State) kernelRaise(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) == 0 && !s.currentException.IsNil() {
-		return Nil, &unwindSignal{kind: unwindException, value: s.currentException}
+func (s *State) newMethodError(name string, recv Value, args []Value) Value {
+	message := fmt.Sprintf("undefined method %q for %s", name, recv.Inspect())
+	exception := newException(s.NoMethodErrorClass, message)
+	if data, ok := exception.obj.data.(*exceptionData); ok {
+		data.name = SymbolValue(name)
+		data.receiver = recv
+		data.receiverSet = true
+		data.args = ArrayValue(append([]Value(nil), args...))
 	}
+	s.attachImplicitCause(exception)
+	return exception
+}
+
+func (s *State) newConstError(name string, recv Value) Value {
+	exception := newException(s.NameErrorClass, "uninitialized constant "+name)
+	if data, ok := exception.obj.data.(*exceptionData); ok {
+		data.name = SymbolValue(name)
+		data.receiver = recv
+		data.receiverSet = true
+	}
+	return exception
+}
+
+func (s *State) newNameError(name string, recv Value) Value {
+	exception := newException(s.NameErrorClass, "undefined method '"+name+"'")
+	if data, ok := exception.obj.data.(*exceptionData); ok {
+		data.name = SymbolValue(name)
+		data.receiver = recv
+		data.receiverSet = true
+	}
+	s.attachImplicitCause(exception)
+	return exception
+}
+
+func (s *State) attachImplicitCause(exception Value) {
+	if s.currentException.IsNil() || s.currentException.obj == exception.obj {
+		return
+	}
+	if data, ok := exception.obj.data.(*exceptionData); ok {
+		if data.cause.IsNil() && !causeChainContains(s.currentException, exception) {
+			data.cause = s.currentException
+		}
+	}
+}
+
+func (s *State) kernelRaise(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	causeGiven := false
+	cause := Nil
+	otherKeywords := false
+	if kw.Kind() == KindObject && kw.obj != nil {
+		if entries, ok := kw.obj.data.(*hashData); ok {
+			for _, entry := range entries.entries {
+				if entry.key.Kind() == KindSymbol && entry.key.String() == "cause" {
+					cause = entry.value
+					causeGiven = true
+				} else {
+					otherKeywords = true
+				}
+			}
+		}
+	}
+	if len(args) == 0 {
+		if !causeGiven && !s.currentException.IsNil() {
+			return Nil, &unwindSignal{kind: unwindException, value: s.currentException}
+		}
+		if causeGiven && s.currentException.IsNil() {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "only cause is given with no arguments")}
+		}
+		if !s.currentException.IsNil() {
+			return Nil, &unwindSignal{kind: unwindException, value: s.currentException}
+		}
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.RuntimeErrorClass, "")}
+	}
+
 	var class *Class
 	var message string
 	var exception Value
-	switch len(args) {
-	case 0:
-		class = s.RuntimeErrorClass
-		message = "RuntimeError"
-	case 1:
+	switch {
+	case len(args) == 1:
 		if argClass, ok := s.asClass(args[0]); ok {
 			class = argClass
 			message = argClass.name
+			if otherKeywords {
+				message = kw.ToS()
+			}
 		} else if args[0].Kind() == KindObject && args[0].obj != nil {
 			if _, ok := args[0].obj.data.(*exceptionData); ok {
 				exception = args[0]
@@ -1580,25 +1832,57 @@ func (s *State) kernelRaise(ctx context.Context, self Value, args []Value, kw Va
 	if exception.IsNil() {
 		exception = newException(class, message)
 	}
-	if data, ok := exception.obj.data.(*exceptionData); ok {
-		cause := Nil
-		if kw.Kind() == KindObject && kw.obj != nil {
-			if entries, ok := kw.obj.data.(*hashData); ok {
-				for _, entry := range entries.entries {
-					if entry.key.Kind() == KindSymbol && entry.key.String() == "cause" {
-						cause = entry.value
-					}
-				}
+	data, ok := exception.obj.data.(*exceptionData)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: exception}
+	}
+	if exception.obj.frozen {
+		return Nil, &unwindSignal{kind: unwindException, value: exception}
+	}
+	if causeGiven && !cause.IsNil() {
+		if cause.obj == nil {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "exception object expected")}
+		}
+		if _, ok := cause.obj.data.(*exceptionData); !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "exception object expected")}
+		}
+		if cause.obj == exception.obj {
+			cause = Nil
+		} else {
+			if causeChainContains(cause, exception) {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "circular causes")}
 			}
-		}
-		if cause.IsNil() && !s.currentException.IsNil() && (exception.obj != s.currentException.obj) {
-			cause = s.currentException
-		}
-		if !cause.IsNil() {
 			data.cause = cause
+		}
+	} else if !causeGiven {
+		if data.cause.IsNil() && !s.currentException.IsNil() && s.currentException.obj != exception.obj &&
+			!causeChainContains(s.currentException, exception) {
+			data.cause = s.currentException
 		}
 	}
 	return Nil, &unwindSignal{kind: unwindException, value: exception}
+}
+
+func causeChainContains(cause, exception Value) bool {
+	seen := make(map[*Object]bool)
+	for current := cause; !current.IsNil(); {
+		if current.obj == nil {
+			break
+		}
+		if current.obj == exception.obj {
+			return true
+		}
+		if seen[current.obj] {
+			break
+		}
+		seen[current.obj] = true
+		data, ok := current.obj.data.(*exceptionData)
+		if !ok {
+			break
+		}
+		current = data.cause
+	}
+	return false
 }
 
 func (s *State) exceptionMessageMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1629,7 +1913,7 @@ func (s *State) captureBacktrace() []string {
 		if method == "" {
 			method = "<main>"
 		}
-		lines = append(lines, fmt.Sprintf("%s:%d:in '%s'", file, frame.line, method))
+		lines = append(lines, fmt.Sprintf("%s:%d", file, frame.line))
 	}
 	return lines
 }
@@ -1898,6 +2182,9 @@ func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Val
 func (s *State) kernelPrint(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	for _, arg := range args {
 		fmt.Fprint(s.stdout, arg.ToS())
+		if s.output != nil && s.output.exceeded {
+			return Nil, errOutputLimit
+		}
 	}
 	return Nil, nil
 }
@@ -1919,6 +2206,18 @@ func (s *State) kernelPuts(ctx context.Context, self Value, args []Value, kw Val
 		fmt.Fprintln(s.stdout, arg.ToS())
 	}
 	return Nil, nil
+}
+
+func (s *State) privateCallError(recv, self Value, name string) error {
+	if self.obj != nil && recv.obj == self.obj {
+		return nil
+	}
+	for current := s.classOf(recv); current != nil; current = current.super {
+		if current.privateMethods[name] {
+			return &unwindSignal{kind: unwindException, value: s.newMethodError(name, recv, nil)}
+		}
+	}
+	return nil
 }
 
 func (s *State) ensureMutable(value Value) error {

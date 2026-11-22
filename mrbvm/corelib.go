@@ -780,6 +780,9 @@ func (s *State) arrayUnshiftMethod(ctx context.Context, self Value, args []Value
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not an array")
 	}
+	if err := s.checkArraySize(len(data.values) + len(args)); err != nil {
+		return Nil, err
+	}
 	data.values = append(append([]Value(nil), args...), data.values...)
 	return self, nil
 }
@@ -806,6 +809,13 @@ func (s *State) arrayConcatMethod(ctx context.Context, self Value, args []Value,
 		return Nil, err
 	}
 	values := arrayValues(self)
+	total := len(values)
+	for _, arg := range args {
+		total += len(arrayValues(arg))
+	}
+	if err := s.checkArraySize(total); err != nil {
+		return Nil, err
+	}
 	for _, arg := range args {
 		values = append(values, arrayValues(arg)...)
 	}
@@ -1544,11 +1554,14 @@ func (s *State) stringConcatMethod(ctx context.Context, self Value, args []Value
 		return Nil, fmt.Errorf("mrbvm: not a string")
 	}
 	for _, arg := range args {
+		addition := arg.ToS()
 		if arg.Kind() == KindInt {
-			data.value += string(rune(arg.Int()))
-		} else {
-			data.value += arg.ToS()
+			addition = string(rune(arg.Int()))
 		}
+		if err := s.checkStringSize(len(data.value) + len(addition)); err != nil {
+			return Nil, err
+		}
+		data.value += addition
 	}
 	return self, nil
 }

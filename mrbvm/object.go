@@ -54,17 +54,18 @@ func (o *Object) setIvar(name string, value Value) {
 
 // Class is a minimal mruby class or module.
 type Class struct {
-	name         string
-	super        *Class
-	methods      map[string]*method
-	classMethods map[string]*method
-	constants    map[string]Value
-	classVars    map[string]Value
-	object       *Object
-	singletonOf  *Class
-	singleton    *Class
-	included     []*Class
-	state        *State
+	name           string
+	super          *Class
+	methods        map[string]*method
+	classMethods   map[string]*method
+	constants      map[string]Value
+	classVars      map[string]Value
+	object         *Object
+	singletonOf    *Class
+	singleton      *Class
+	included       []*Class
+	privateMethods map[string]bool
+	state          *State
 }
 
 type method struct {
@@ -99,9 +100,13 @@ type blockData struct {
 
 // exceptionData is the payload of a Ruby exception object.
 type exceptionData struct {
-	message   string
-	backtrace []string
-	cause     Value
+	message     string
+	backtrace   []string
+	cause       Value
+	name        Value
+	receiver    Value
+	receiverSet bool
+	args        Value
 }
 
 type bigIntData struct {
@@ -196,12 +201,13 @@ func asSignal(v Value) (*unwindSignal, bool) {
 
 func newClass(name string, super *Class) *Class {
 	return &Class{
-		name:         name,
-		super:        super,
-		methods:      make(map[string]*method),
-		classMethods: make(map[string]*method),
-		constants:    make(map[string]Value),
-		classVars:    make(map[string]Value),
+		name:           name,
+		super:          super,
+		methods:        make(map[string]*method),
+		classMethods:   make(map[string]*method),
+		constants:      make(map[string]Value),
+		classVars:      make(map[string]Value),
+		privateMethods: make(map[string]bool),
 	}
 }
 
