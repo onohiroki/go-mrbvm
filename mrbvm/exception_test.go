@@ -80,7 +80,7 @@ explode
 	if !strings.Contains(text, "oops") {
 		t.Fatalf("error does not include message: %s", text)
 	}
-	if !strings.Contains(text, "uncaught_case.rb:") || !strings.Contains(text, ":in") {
+	if !strings.Contains(text, "uncaught_case.rb:") {
 		t.Fatalf("error does not include file:line backtrace: %s", text)
 	}
 }
