@@ -63,6 +63,8 @@ type State struct {
 	JSONClass        *Class
 	IOClass          *Class
 	FileClass        *Class
+	RegexpClass      *Class
+	MatchDataClass   *Class
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -172,6 +174,8 @@ func New(opts Options) *State {
 	s.JSONClass = newClass("JSON", nil)
 	s.IOClass = newClass("IO", s.ObjectClass)
 	s.FileClass = newClass("File", s.IOClass)
+	s.RegexpClass = newClass("Regexp", s.ObjectClass)
+	s.MatchDataClass = newClass("MatchData", s.ObjectClass)
 	s.ExceptionClass = newClass("Exception", s.ObjectClass)
 	s.StandardErrorClass = newClass("StandardError", s.ExceptionClass)
 	s.RuntimeErrorClass = newClass("RuntimeError", s.StandardErrorClass)
@@ -202,7 +206,7 @@ func New(opts Options) *State {
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
 		s.RangeClass, s.ProcClass, s.EnumerableClass, s.EnumeratorClass,
 		s.ComparableClass, s.GCClass, s.TimeClass, s.JSONClass,
-		s.IOClass, s.FileClass,
+		s.IOClass, s.FileClass, s.RegexpClass, s.MatchDataClass,
 		s.ExceptionClass, s.StandardErrorClass, s.RuntimeErrorClass,
 		s.ArgumentErrorClass, s.TypeErrorClass, s.NameErrorClass,
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
@@ -277,6 +281,8 @@ func New(opts Options) *State {
 		"JSON":          s.JSONClass,
 		"IO":            s.IOClass,
 		"File":          s.FileClass,
+		"Regexp":        s.RegexpClass,
+		"MatchData":     s.MatchDataClass,
 		"Exception":     s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
 		"ArgumentError": s.ArgumentErrorClass, "TypeError": s.TypeErrorClass,
@@ -496,6 +502,8 @@ func New(opts Options) *State {
 	s.installTimeClass()
 	s.installJSONModule()
 	s.installFileLibrary()
+	s.installRegexpClass()
+	s.installMatchDataClass()
 	if opts.LoadMrblib {
 		irep, err := s.LoadBytecode(mrblibBytecode)
 		if err == nil {

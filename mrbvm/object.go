@@ -292,6 +292,10 @@ func (s *State) classOf(v Value) *Class {
 			return s.TimeClass
 		case *fileData:
 			return s.FileClass
+		case *regexpData:
+			return s.RegexpClass
+		case *matchData:
+			return s.MatchDataClass
 		}
 	}
 	switch v.kind {

@@ -263,6 +263,61 @@ func (s *State) installStringLibrary() {
 	class.define("to_sym", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return SymbolValue(self.String()), nil
 	})
+	class.define("=~", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, nil
+		}
+		data, ok := regexpOf(args[0])
+		if !ok {
+			return Nil, nil
+		}
+		index := regexpIndex(data.regexp, self.String())
+		if index < 0 {
+			return Nil, nil
+		}
+		return IntValue(int64(index)), nil
+	})
+	class.define("match", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, nil
+		}
+		data, ok := regexpOf(args[0])
+		if !ok {
+			return Nil, nil
+		}
+		result := s.newMatchData(data.regexp, self.String())
+		if !block.IsNil() && !result.IsNil() {
+			return s.callBlock(ctx, block, []Value{result}, Nil)
+		}
+		return result, nil
+	})
+	class.define("scan", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return ArrayValue(nil), nil
+		}
+		data, ok := regexpOf(args[0])
+		if !ok {
+			return ArrayValue(nil), nil
+		}
+		matches := data.regexp.FindAllStringSubmatch(self.String(), -1)
+		values := make([]Value, 0, len(matches))
+		for _, match := range matches {
+			if len(match) > 1 {
+				captures := make([]Value, len(match)-1)
+				for i, capture := range match[1:] {
+					captures[i] = StringValue(capture)
+				}
+				if len(captures) == 1 {
+					values = append(values, captures[0])
+				} else {
+					values = append(values, ArrayValue(captures))
+				}
+			} else {
+				values = append(values, StringValue(match[0]))
+			}
+		}
+		return ArrayValue(values), nil
+	})
 }
 
 func (s *State) installIntegerLibrary() {
@@ -1655,6 +1710,23 @@ func (s *State) stringSubMethod(ctx context.Context, self Value, args []Value, k
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "sub expects one or two arguments")}
 	}
 	text := self.String()
+	if data, ok := regexpOf(args[0]); ok {
+		location := data.regexp.FindStringIndex(text)
+		if location == nil {
+			return StringValue(text), nil
+		}
+		var replacement string
+		if !block.IsNil() {
+			result, err := s.callBlock(ctx, block, []Value{StringValue(text[location[0]:location[1]])}, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			replacement = result.ToS()
+		} else if len(args) == 2 {
+			replacement = data.regexp.ReplaceAllString(text[location[0]:location[1]], rubyReplacement(args[1].String()))
+		}
+		return StringValue(text[:location[0]] + replacement + text[location[1]:]), nil
+	}
 	pattern := args[0].String()
 	index := strings.Index(text, pattern)
 	if index < 0 {
@@ -1678,6 +1750,21 @@ func (s *State) stringGsubMethod(ctx context.Context, self Value, args []Value, 
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "gsub expects one or two arguments")}
 	}
 	text := self.String()
+	if data, ok := regexpOf(args[0]); ok {
+		if !block.IsNil() {
+			return StringValue(data.regexp.ReplaceAllStringFunc(text, func(match string) string {
+				result, err := s.callBlock(ctx, block, []Value{StringValue(match)}, Nil)
+				if err != nil || result.IsNil() {
+					return match
+				}
+				return result.ToS()
+			})), nil
+		}
+		if len(args) == 2 {
+			return StringValue(data.regexp.ReplaceAllString(text, rubyReplacement(args[1].String()))), nil
+		}
+		return StringValue(text), nil
+	}
 	pattern := args[0].String()
 	if pattern == "" {
 		return StringValue(text), nil
@@ -2018,4 +2105,9 @@ func (s *State) rubyEqual(ctx context.Context, left, right Value) (bool, error) 
 		return false, err
 	}
 	return result.IsTruthy(), nil
+}
+
+func rubyReplacement(text string) string {
+	replacer := strings.NewReplacer(`\0`, `${0}`, `\1`, `${1}`, `\2`, `${2}`, `\3`, `${3}`, `\4`, `${4}`, `\5`, `${5}`, `\6`, `${6}`, `\7`, `${7}`, `\8`, `${8}`, `\9`, `${9}`)
+	return replacer.Replace(text)
 }
