@@ -190,8 +190,16 @@ type nativeBlockData struct {
 	fn func(ctx context.Context, args []Value) (Value, error)
 }
 
+type inlineExceptionObject struct {
+	obj  Object
+	data exceptionData
+}
+
 func newException(class *Class, message string) Value {
-	return ObjectValue(&Object{class: class, data: &exceptionData{message: message, cause: Nil}})
+	holder := &inlineExceptionObject{data: exceptionData{message: message, cause: Nil}}
+	holder.obj.class = class
+	holder.obj.data = &holder.data
+	return ObjectValue(&holder.obj)
 }
 
 func exceptionMessage(v Value) string {

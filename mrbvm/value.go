@@ -76,14 +76,27 @@ func FloatValue(v float64) Value {
 	return Value{kind: KindFloat, bits: math.Float64bits(v)}
 }
 
+// inlineStringObject keeps an Object and its immediate string payload in a
+// single allocation. Object.data points back into the same allocation.
+type inlineStringObject struct {
+	obj  Object
+	data stringData
+}
+
+func newStringObject(kind Kind, value string) Value {
+	holder := &inlineStringObject{data: stringData{raw: value}}
+	holder.obj.data = &holder.data
+	return Value{kind: kind, obj: &holder.obj}
+}
+
 // SymbolValue returns a symbol value.
 func SymbolValue(name string) Value {
-	return Value{kind: KindSymbol, obj: &Object{data: &stringData{raw: name}}}
+	return newStringObject(KindSymbol, name)
 }
 
 // StringValue returns a string value.
 func StringValue(v string) Value {
-	return Value{kind: KindString, obj: &Object{data: &stringData{raw: v}}}
+	return newStringObject(KindString, v)
 }
 
 // ObjectValue returns an object value.
@@ -91,19 +104,52 @@ func ObjectValue(v *Object) Value {
 	return Value{kind: KindObject, obj: v}
 }
 
+type inlineArrayObject struct {
+	obj  Object
+	data arrayData
+}
+
 // ArrayValue returns an array value.
 func ArrayValue(values []Value) Value {
-	return Value{kind: KindObject, obj: &Object{data: &arrayData{values: values}}}
+	holder := &inlineArrayObject{data: arrayData{values: values}}
+	holder.obj.data = &holder.data
+	return Value{kind: KindObject, obj: &holder.obj}
+}
+
+type inlineHashObject struct {
+	obj  Object
+	data hashData
 }
 
 // HashValue returns a hash value.
 func HashValue(entries []hashEntry) Value {
-	return Value{kind: KindObject, obj: &Object{data: &hashData{entries: entries}}}
+	holder := &inlineHashObject{data: hashData{entries: entries}}
+	holder.obj.data = &holder.data
+	return Value{kind: KindObject, obj: &holder.obj}
+}
+
+type inlineBlockObject struct {
+	obj  Object
+	data blockData
+}
+
+// BlockValue returns a block value in a single allocation.
+func BlockValue(block blockData) Value {
+	holder := &inlineBlockObject{data: block}
+	holder.obj.data = &holder.data
+	return Value{kind: KindObject, obj: &holder.obj}
+}
+
+type inlineRangeObject struct {
+	obj  Object
+	data rangeData
 }
 
 // RangeValue returns a range value.
 func RangeValue(low, high Value, exclusive bool) Value {
-	return Value{kind: KindObject, obj: &Object{data: &rangeData{low: low, high: high, exclusive: exclusive}}}
+	holder := &inlineRangeObject{data: rangeData{low: low, high: high, exclusive: exclusive}}
+	holder.obj.data = &holder.data
+	return Value{kind: KindObject, obj: &holder.obj}
 }
 
 // Kind returns the value's runtime kind.

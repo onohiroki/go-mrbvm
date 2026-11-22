@@ -766,7 +766,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if childIndex < 0 || childIndex >= len(irep.Reps) {
 				return Nil, fmt.Errorf("mrbvm: block irep %d out of range", childIndex)
 			}
-			regs[a] = ObjectValue(&Object{data: &blockData{
+			regs[a] = BlockValue(blockData{
 				irep:        irep.Reps[childIndex],
 				env:         frameEnv,
 				self:        self,
@@ -774,7 +774,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				strict:      in.Op == bytecode.OpLAMBDA,
 				mid:         mid,
 				owner:       owner,
-			}})
+			})
 		case bytecode.OpBLKPUSH:
 			a := int(in.Operands[0])
 			level := int(in.Operands[1] & 0x0f)
