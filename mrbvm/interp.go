@@ -2395,6 +2395,28 @@ func (s *State) prepareBlockArgument(ctx context.Context, block Value) (Value, e
 // builtinIdentityEqual is the `obj == obj` shortcut. It applies only while
 // the resolved `==` is the builtin: a class that defines `==` decides the
 // answer for itself, and a NaN is never equal to anything.
+// coerceNumericArgument converts a Numeric subclass to Float through its
+// to_f, as mruby's binary numeric helpers do. A plain Object that happens to
+// define to_f is not converted.
+func (s *State) coerceNumericArgument(ctx context.Context, value Value) (Value, bool, error) {
+	if value.Kind() == KindInt || value.Kind() == KindFloat || value.Kind() == KindBigInt {
+		return value, true, nil
+	}
+	class := s.classOf(value)
+	if class == nil || !s.classIsSubclass(class, s.NumericClass) {
+		return Nil, false, nil
+	}
+	result, err := s.call(ctx, value, "to_f", nil, Nil, Nil)
+	if err != nil || result.Kind() != KindFloat {
+		name := "Object"
+		if class != nil && class.name != "" {
+			name = class.name
+		}
+		return Nil, true, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion of "+name+" into Float")}
+	}
+	return result, true, nil
+}
+
 func (s *State) builtinIdentityEqual(left, right Value) bool {
 	if !identicalValue(left, right) {
 		return false
@@ -2484,6 +2506,15 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 	if !skipBinary {
 		if result, ok := binaryCall(recv, name, args); ok {
 			return result, nil
+		}
+	}
+	if len(args) == 1 {
+		if coerced, applicable, err := s.coerceNumericArgument(ctx, args[0]); err != nil {
+			return Nil, err
+		} else if applicable {
+			if result, ok := binaryValue(recv, name, coerced); ok {
+				return result, nil
+			}
 		}
 	}
 	if len(args) == 1 && (recv.Kind() == KindInt || recv.Kind() == KindFloat || recv.Kind() == KindBigInt) {

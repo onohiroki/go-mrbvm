@@ -550,7 +550,7 @@ func (s *State) installIntegerLibrary() {
 	class.define("times", s.integerTimesMethod)
 	class.define("upto", s.integerUptoMethod)
 	class.define("downto", s.integerDowntoMethod)
-	class.define("step", s.integerStepMethod)
+	s.NumericClass.define("step", s.numericStepMethod)
 	class.define("abs", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if self.Kind() == KindBigInt {
 			value, _ := self.BigInt()
@@ -2580,31 +2580,130 @@ func (s *State) integerDowntoMethod(ctx context.Context, self Value, args []Valu
 	return self, nil
 }
 
-func (s *State) integerStepMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	limit := self.Int()
-	step := int64(1)
-	if len(args) > 0 && !args[0].IsNil() && args[0].Kind() == KindInt {
-		limit = args[0].Int()
-	}
-	if len(args) > 1 && args[1].Kind() == KindInt {
-		step = args[1].Int()
-	}
-	if step == 0 {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "step can't be 0")}
-	}
-	var values []Value
-	for i := self.Int(); (step > 0 && i <= limit) || (step < 0 && i >= limit); i += step {
-		values = append(values, IntValue(i))
+func (s *State) numericStepMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) > 2 {
+		return Nil, argumentCountError(s, len(args), "0..2")
 	}
 	if block.IsNil() {
-		return ArrayValue(values), nil
+		return s.toEnum(self, "step", args), nil
 	}
-	for _, value := range values {
-		if _, err := s.callBlock(ctx, block, []Value{value}, Nil); err != nil {
-			return Nil, err
+	num := Nil
+	if len(args) > 0 {
+		num = args[0]
+	}
+	step := IntValue(1)
+	if len(args) > 1 && !args[1].IsNil() {
+		step = args[1]
+	}
+	if isNumericZero(step) {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "step can't be 0")}
+	}
+	i := self
+	if step.Kind() == KindFloat {
+		i = FloatValue(valueFloat(self))
+	}
+	stepCmp := 0
+	if cmp, ok := numericCompare(step, IntValue(0)); ok {
+		stepCmp = cmp
+	} else if step.Kind() == KindFloat {
+		stepCmp = 0
+		if step.Float() > 0 {
+			stepCmp = 1
+		} else if step.Float() < 0 {
+			stepCmp = -1
 		}
 	}
+	stepInfinite := step.Kind() == KindFloat && math.IsInf(step.Float(), 0)
+	yield := func(value Value) (bool, error) {
+		_, err := s.callBlock(ctx, block, []Value{value}, Nil)
+		if err == nil {
+			return true, nil
+		}
+		if sig, ok := err.(*unwindSignal); ok && sig.kind == unwindBreak {
+			return false, nil
+		}
+		return false, err
+	}
+	emit := func(value Value) (bool, error) {
+		keep, err := yield(value)
+		if err != nil || !keep {
+			return false, err
+		}
+		return true, nil
+	}
+	equalSelf := false
+	if num.IsNil() {
+		// handled by the branches below
+	} else if cmp, ok := numericCompare(num, self); ok {
+		equalSelf = cmp == 0
+	}
+	if equalSelf || stepInfinite {
+		limit := i
+		if !num.IsNil() {
+			limit = num
+		} else if stepCmp < 0 {
+			limit = IntValue(0)
+			if neg, err := s.numericNegate(i); err == nil {
+				limit = neg
+			}
+		}
+		cmp, _ := numericCompare(i, limit)
+		emitValue := stepCmp > 0 && cmp <= 0 || stepCmp < 0 && cmp >= 0
+		if emitValue {
+			if _, err := emit(i); err != nil {
+				return Nil, err
+			}
+		}
+		return self, nil
+	}
+	iterations := 0
+	for {
+		iterations++
+		if iterations > 1000000 {
+			return self, nil
+		}
+		if !num.IsNil() {
+			cmp, ok := numericCompare(i, num)
+			if !ok {
+				break
+			}
+			if stepCmp > 0 && cmp > 0 {
+				break
+			}
+			if stepCmp < 0 && cmp < 0 {
+				break
+			}
+		}
+		keep, err := emit(i)
+		if err != nil {
+			return Nil, err
+		}
+		if !keep {
+			return self, nil
+		}
+		next, ok := binaryValue(i, "+", step)
+		if !ok {
+			var err error
+			next, err = s.call(ctx, i, "+", []Value{step}, Nil, Nil)
+			if err != nil {
+				return Nil, err
+			}
+		}
+		i = next
+	}
 	return self, nil
+}
+
+func valueFloat(v Value) float64 {
+	if v.Kind() == KindFloat {
+		return v.Float()
+	}
+	if v.Kind() == KindBigInt {
+		n, _ := v.BigInt()
+		f, _ := new(big.Float).SetInt(n).Float64()
+		return f
+	}
+	return float64(v.Int())
 }
 
 func (s *State) objectIsAMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {

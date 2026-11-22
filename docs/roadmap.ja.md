@@ -21,7 +21,7 @@
     両方で成功（`go-mrbc/conformance` パッケージを共有）
   - `Integer` / `Float` の演算子メソッド層、`send` / alias /
     リフレクション、再定義時の opcode フォールバック
-  - 公式テスト **31 ファイル**が成功（`testdata/official.txt`）
+  - 公式テスト **32 ファイル**が成功（`testdata/official.txt`）
   - `Options.LoadMrblib` で 7 ファイルの mrblib subset を opt-in ロード
   - ホスト API（`DefineFunction` / `DefineClass` / `DefineModule` /
     `DefineConst` / `Send` / `Raise`）
@@ -315,16 +315,15 @@
 - `vmbench`（mixed.rb、20 iterations）:
   go-mrbc bytecode 1.256s → 1.216s、公式 mrbc bytecode
   1.307s → 1.279s。演算子メソッド層による退行はない。
-- `integer.rb` / `float.rb` は演算子再定義のブロックが通るようになった。
-  残る失敗は Float 比較の精度、整数の丸め、`__ensure` など
-  演算子 opcode とは独立した互換ギャップ。
+- `integer.rb` / `float.rb` は全項目通過。Float 比較の精度、整数の丸め、
+  `__ensure`、NaN の同一性も解消した。
 
 ### 4.14 コア言語ギャップの解消（2026-11-22）
 
-公式テストを 22 ファイルから 31 ファイルへ拡大した。追加で通したもの:
+公式テストを 22 ファイルから 32 ファイルへ拡大した。追加で通したもの:
 
 `argumenterror` / `basicobject` / `bs_block` / `ensure` / `enumerable` /
-`integer` / `float` / `methods` / `proc` / `shareable_constant` / `symbol`
+`integer` / `float` / `methods` / `numeric` / `proc` / `shareable_constant` / `symbol`
 
 - `Proc#[]` / `arity` / `==` / `hash`、`&obj` の `to_proc` 変換
 - `Symbol#to_sym`、`BasicObject#defined?`
@@ -334,11 +333,13 @@
 - `defined?` がメソッド呼び出し・`yield`・`super` を評価しないこと
 - 定数代入後の `defined?` が `"assignment"` を返すこと
 - Int/Float の厳密比較、Integer の丸め、Float の `to_i`/`round` 境界
+- `Numeric#step`（nil/無限大の limit・step、混合 Int/Float、break）
+- Numeric サブクラスの `to_f` 変換（method_missing 経由を含む）
 - 実行時 NaN に一意の payload を与え、`equal?` / `object_id` を区別
 
 残る失敗は次のカテゴリに限定している:
 
-- `autoload`（`require` 連携）と `numeric#step`
+- `autoload`（`require` 連携）
 - `string` の Encoding byte/char 差
 - Hash の再入・カーソル、GC 内部
 - `env` / `gc` / `range` の GC テスト、`sysfail` / `vformat` の C gem ヘルパ
@@ -380,7 +381,7 @@ go run ./cmd/mrbtest <成功している公式テスト>
 ## 7. マイルストーン目安
 
 - **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
-- **VM-4b**: 公式テスト 31 ファイル（達成）
+- **VM-4b**: 公式テスト 32 ファイル（達成）
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
 - **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 完了、デバッガが残り
