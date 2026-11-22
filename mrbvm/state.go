@@ -45,6 +45,7 @@ type State struct {
 	BasicObjectClass *Class
 	ObjectClass      *Class
 	ModuleClass      *Class
+	KernelClass      *Class
 	ClassClass       *Class
 	NumericClass     *Class
 	NilClass         *Class
@@ -106,9 +107,10 @@ type State struct {
 	currentException Value
 	initErr          error
 
-	arrayIndexBuiltin *method
-	arraySetBuiltin   *method
-	eqSeen            map[objectPair]bool
+	arrayIndexBuiltin   *method
+	arraySetBuiltin     *method
+	eqSeen              map[objectPair]bool
+	immediateSingletons map[Kind]*Class
 
 	frames            []callFrame
 	callDepth         int
@@ -153,12 +155,13 @@ func New(opts Options) *State {
 	}
 
 	s := &State{
-		eqSeen:    make(map[objectPair]bool),
-		globals:   make(map[string]Value),
-		constants: make(map[string]Value),
-		stdin:     stdin,
-		stdout:    stdout,
-		stderr:    stderr,
+		eqSeen:              make(map[objectPair]bool),
+		immediateSingletons: make(map[Kind]*Class),
+		globals:             make(map[string]Value),
+		constants:           make(map[string]Value),
+		stdin:               stdin,
+		stdout:              stdout,
+		stderr:              stderr,
 
 		policy:          opts.Policy,
 		maxInstructions: opts.MaxInstructions,
@@ -181,8 +184,14 @@ func New(opts Options) *State {
 	s.limitsEnabled = s.maxInstructions > 0 || s.maxTime > 0 || s.output != nil
 	s.BasicObjectClass = newClass("BasicObject", nil)
 	s.ObjectClass = newClass("Object", s.BasicObjectClass)
+	s.KernelClass = newClass("Kernel", nil)
+	s.KernelClass.isModule = true
 	s.ModuleClass = newClass("Module", s.ObjectClass)
 	s.ClassClass = newClass("Class", s.ModuleClass)
+	s.ensureClassObject(s.KernelClass)
+	s.ObjectClass.included = append(s.ObjectClass.included, s.KernelClass)
+	s.ObjectClass.constants["Kernel"] = s.classValue(s.KernelClass)
+	s.constants["Kernel"] = s.classValue(s.KernelClass)
 	s.NumericClass = newClass("Numeric", s.ObjectClass)
 	s.NilClass = newClass("NilClass", s.ObjectClass)
 	s.TrueClass = newClass("TrueClass", s.ObjectClass)
@@ -259,7 +268,22 @@ func New(opts Options) *State {
 
 	s.ClassClass.define("new", s.classNewMethod)
 	s.ClassClass.define("superclass", s.classSuperclassMethod)
+	s.ModuleClass.define("name", s.classDisplayNameMethod)
 	s.ClassClass.define("name", s.classNameMethod)
+	s.ModuleClass.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		class, ok := s.asClass(self)
+		if !ok {
+			return StringValue(self.ToS()), nil
+		}
+		return StringValue(classDisplayName(class)), nil
+	})
+	s.ModuleClass.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		class, ok := s.asClass(self)
+		if !ok {
+			return StringValue(self.Inspect()), nil
+		}
+		return StringValue(classDisplayName(class)), nil
+	})
 	s.ClassClass.define("include", s.classIncludeMethod)
 	s.ClassClass.define("include?", s.classIncludePredicateMethod)
 	s.ClassClass.define("class_eval", s.classEvalMethod)
@@ -268,12 +292,27 @@ func New(opts Options) *State {
 	s.ClassClass.define("alias_method", s.classAliasMethod)
 	s.ClassClass.define("remove_method", s.classRemoveMethod)
 	s.ClassClass.define("private", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) > 0 {
+			if err := s.ensureMutable(self); err != nil {
+				return Nil, err
+			}
+		}
 		if class, ok := s.asClass(self); ok {
 			if len(args) == 0 {
 				class.defaultVisibility = "private"
 			}
 			for _, arg := range flattenNames(args) {
+				if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+					return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+				}
 				name := arg.String()
+				if class.singletonOf != nil {
+					if !class.singletonOf.privateClassMethods[name] {
+						class.singletonOf.privateClassMethods[name] = true
+						s.classPrivateCount++
+					}
+					continue
+				}
 				if !class.privateMethods[name] {
 					class.privateMethods[name] = true
 					s.privateMethodCount++
@@ -289,12 +328,23 @@ func New(opts Options) *State {
 		return namesResult(args), nil
 	})
 	s.ClassClass.define("protected", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) > 0 {
+			if err := s.ensureMutable(self); err != nil {
+				return Nil, err
+			}
+		}
 		if class, ok := s.asClass(self); ok {
 			if len(args) == 0 {
 				class.defaultVisibility = "protected"
 			}
 			for _, arg := range flattenNames(args) {
+				if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+					return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+				}
 				name := arg.String()
+				if class.singletonOf != nil {
+					continue
+				}
 				if !class.protectedMethods[name] {
 					class.protectedMethods[name] = true
 					s.protectedCount++
@@ -310,12 +360,29 @@ func New(opts Options) *State {
 		return namesResult(args), nil
 	})
 	s.ClassClass.define("public", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) > 0 {
+			if err := s.ensureMutable(self); err != nil {
+				return Nil, err
+			}
+		}
 		if class, ok := s.asClass(self); ok {
 			if len(args) == 0 {
 				class.defaultVisibility = "public"
 			}
-			for _, arg := range args {
+			for _, arg := range flattenNames(args) {
+				if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+					return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+				}
 				name := arg.String()
+				if class.singletonOf != nil {
+					if class.singletonOf.privateClassMethods[name] {
+						delete(class.singletonOf.privateClassMethods, name)
+						if s.classPrivateCount > 0 {
+							s.classPrivateCount--
+						}
+					}
+					continue
+				}
 				if class.privateMethods[name] {
 					delete(class.privateMethods, name)
 					if s.privateMethodCount > 0 || s.protectedCount > 0 || s.classPrivateCount > 0 {
@@ -339,9 +406,12 @@ func New(opts Options) *State {
 		}
 		if len(args) == 0 {
 			class.moduleFunction = true
-			return self, nil
+			return Nil, nil
 		}
 		for _, arg := range flattenNames(args) {
+			if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+			}
 			name := arg.String()
 			m, ok := class.lookup(name)
 			if !ok {
@@ -381,37 +451,74 @@ func New(opts Options) *State {
 		if !ok {
 			return self, nil
 		}
-		for _, arg := range args {
-			delete(class.methods, arg.String())
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		for _, arg := range flattenNames(args) {
+			if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+			}
+			name := arg.String()
+			if _, found := class.lookup(name); !found {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+name+"'")}
+			}
+			delete(class.methods, name)
+			class.undefMethods[name] = true
 		}
 		return self, nil
 	})
+
 	s.ClassClass.define("private_class_method", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		if class, ok := s.asClass(self); ok {
-			for _, arg := range flattenNames(args) {
-				name := arg.String()
-				if !class.privateClassMethods[name] {
-					class.privateClassMethods[name] = true
-					s.classPrivateCount++
-				}
+		class, ok := s.asClass(self)
+		if !ok {
+			return self, nil
+		}
+		for _, arg := range flattenNames(args) {
+			if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+			}
+			name := arg.String()
+			_, classFound := class.lookupClassMethod(name)
+			if !classFound {
+				_, classFound = s.classOf(s.classValue(class)).lookup(name)
+			}
+			if !classFound {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+name+"' for class")}
+			}
+			if !class.privateClassMethods[name] {
+				class.privateClassMethods[name] = true
+				s.classPrivateCount++
 			}
 		}
-		return namesResult(args), nil
+		return self, nil
 	})
 	s.ClassClass.define("public_class_method", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		if class, ok := s.asClass(self); ok {
-			for _, arg := range flattenNames(args) {
-				name := arg.String()
-				if class.privateClassMethods[name] {
-					delete(class.privateClassMethods, name)
-					if s.classPrivateCount > 0 {
-						s.classPrivateCount--
-					}
+		class, ok := s.asClass(self)
+		if !ok {
+			return self, nil
+		}
+		for _, arg := range flattenNames(args) {
+			if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+			}
+			name := arg.String()
+			_, classFound := class.lookupClassMethod(name)
+			if !classFound {
+				_, classFound = s.classOf(s.classValue(class)).lookup(name)
+			}
+			if !classFound {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+name+"' for class")}
+			}
+			if class.privateClassMethods[name] {
+				delete(class.privateClassMethods, name)
+				if s.classPrivateCount > 0 {
+					s.classPrivateCount--
 				}
 			}
 		}
-		return namesResult(args), nil
+		return self, nil
 	})
+
 	s.ClassClass.define("define_method", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		class, ok := s.asClass(self)
 		if !ok || len(args) < 1 {
@@ -422,8 +529,18 @@ func New(opts Options) *State {
 		if len(args) > 1 {
 			body = args[1]
 		}
-		if body.IsNil() {
+		if len(args) > 1 {
+			if body.Kind() != KindObject || body.obj == nil {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type (expected Proc)")}
+			}
+			if _, ok := body.obj.data.(*blockData); !ok {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type (expected Proc)")}
+			}
+		} else if body.IsNil() {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
+		}
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
 		}
 		class.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 			return s.callBlockWithSelf(ctx, body, self, args, kw)
@@ -431,16 +548,67 @@ func New(opts Options) *State {
 		return SymbolValue(name), nil
 	})
 	s.ClassClass.define("private_constant", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		class, ok := s.asClass(self)
+		if !ok {
+			return self, nil
+		}
 		if err := s.ensureMutable(self); err != nil {
 			return Nil, err
 		}
-		return namesResult(args), nil
+		for _, arg := range flattenNames(args) {
+			if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "constant name must be a Symbol or String")}
+			}
+			name := arg.String()
+			if !validConstSegment(name) {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "wrong constant name "+name)}
+			}
+			if _, found := class.constants[name]; !found {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "constant "+name+" not defined")}
+			}
+			class.privateConstants[name] = true
+		}
+		return self, nil
 	})
 	s.ClassClass.define("public_constant", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return namesResult(args), nil
+		class, ok := s.asClass(self)
+		if !ok {
+			return self, nil
+		}
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		for _, arg := range flattenNames(args) {
+			if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "constant name must be a Symbol or String")}
+			}
+			name := arg.String()
+			if _, found := class.constants[name]; !found {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "constant "+name+" not defined")}
+			}
+			delete(class.privateConstants, name)
+		}
+		return self, nil
 	})
 	s.ClassClass.define("deprecate_constant", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return namesResult(args), nil
+		class, ok := s.asClass(self)
+		if !ok {
+			return self, nil
+		}
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		for _, arg := range flattenNames(args) {
+			if arg.Kind() != KindString && arg.Kind() != KindSymbol {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "constant name must be a Symbol or String")}
+			}
+			name := arg.String()
+			if _, found := class.constants[name]; !found {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "constant "+name+" not defined")}
+			}
+			class.deprecatedConstants[name] = true
+		}
+		return self, nil
 	})
 	s.ClassClass.define("append_features", s.classAppendFeaturesMethod)
 	s.ClassClass.define("prepend_features", s.classPrependFeaturesMethod)
@@ -453,6 +621,7 @@ func New(opts Options) *State {
 		if target.obj.singleton == nil {
 			original := s.classOf(target)
 			target.obj.singleton = newClass("#<Class:"+original.name+">", original)
+			target.obj.singleton.isSingleton = true
 			s.ensureClassObject(target.obj.singleton)
 		}
 		for name, m := range module.methods {
@@ -500,7 +669,11 @@ func New(opts Options) *State {
 		if self.obj.singleton == nil {
 			original := s.classOf(self)
 			self.obj.singleton = newClass("#<Class:"+original.name+">", original)
+			self.obj.singleton.isSingleton = true
 			s.ensureClassObject(self.obj.singleton)
+		}
+		if self.obj.frozen && self.obj.singleton.object != nil {
+			self.obj.singleton.object.frozen = true
 		}
 		return s.classValue(self.obj.singleton), nil
 	})
@@ -524,6 +697,14 @@ func New(opts Options) *State {
 	s.ObjectClass.define("freeze", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if self.obj != nil {
 			self.obj.frozen = true
+			if self.obj.singleton != nil && self.obj.singleton.object != nil {
+				self.obj.singleton.object.frozen = true
+			}
+			if class, ok := self.obj.data.(*Class); ok {
+				if class.object != nil {
+					class.object.frozen = true
+				}
+			}
 		}
 		return self, nil
 	})
@@ -874,6 +1055,12 @@ func (s *State) classConstDefinedMethod(ctx context.Context, self Value, args []
 	if err != nil {
 		return Nil, err
 	}
+	if !found && inherit && !strings.Contains(args[0].String(), "::") {
+		_, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), false)
+		if err != nil {
+			return Nil, err
+		}
+	}
 	return BoolValue(found), nil
 }
 
@@ -985,11 +1172,46 @@ func includeModule(class, module *Class) {
 
 func (s *State) classMethodDefinedMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
-	if !ok || len(args) != 1 {
+	if !ok || len(args) < 1 || len(args) > 2 {
 		return False, nil
 	}
-	_, found := class.lookup(args[0].String())
-	return BoolValue(found), nil
+	if class.singletonOf != nil {
+		if args[0].Kind() != KindString && args[0].Kind() != KindSymbol {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+		}
+		name := args[0].String()
+		if _, found := class.singletonOf.lookupClassMethod(name); !found {
+			return False, nil
+		}
+		return BoolValue(!class.singletonOf.privateClassMethods[name]), nil
+	}
+	if args[0].Kind() != KindString && args[0].Kind() != KindSymbol {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "method name must be a Symbol or String")}
+	}
+	name := args[0].String()
+	inherit := true
+	if len(args) == 2 {
+		inherit = args[1].IsTruthy()
+	}
+	if !inherit {
+		m, found := class.methods[name]
+		if !found {
+			return False, nil
+		}
+		return BoolValue(!class.privateMethods[name] && m != nil), nil
+	}
+	m, found := class.lookup(name)
+	if !found {
+		return False, nil
+	}
+	owner := m.owner
+	if owner == nil {
+		owner = class
+	}
+	if (name == "initialize" || name == "method_missing") && (owner == s.ObjectClass || owner == s.BasicObjectClass) {
+		return False, nil
+	}
+	return BoolValue(!owner.privateMethods[name]), nil
 }
 
 func (s *State) classIncludePredicateMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1169,18 +1391,56 @@ func (s *State) objectMethodsMethod(ctx context.Context, self Value, args []Valu
 
 func (s *State) classConstGetMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
-	if !ok || len(args) != 1 {
+	if !ok || len(args) < 1 || len(args) > 2 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "const_get expects a name")}
 	}
 	if args[0].Kind() != KindString && args[0].Kind() != KindSymbol {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "constant name must be a Symbol or String")}
 	}
-	value, found, err := s.constLookupPath(ctx, class, args[0].String(), true)
+	inherit := true
+	if len(args) == 2 {
+		inherit = args[1].IsTruthy()
+	}
+	if len(args) > 2 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	value, found, err := s.constLookupPath(ctx, class, args[0].String(), inherit)
 	if err != nil {
 		return Nil, err
 	}
+	if !found && inherit {
+		value, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), false)
+		if err != nil {
+			return Nil, err
+		}
+	}
 	if !found {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "uninitialized constant "+args[0].String())}
+		path := args[0].String()
+		if index := strings.Index(path, "::"); index > 0 {
+			first := path[:index]
+			rest := path[index+2:]
+			if hook, hookFound := class.lookupClassMethod("const_missing"); hookFound {
+				missing, err := s.invoke(ctx, hook, self, []Value{SymbolValue(first)}, Nil, Nil)
+				if err != nil {
+					return Nil, err
+				}
+				next, ok := s.asClass(missing)
+				if !ok {
+					return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, missing.Inspect()+" is not a class/module")}
+				}
+				value, found, err = s.constLookupPath(ctx, next, rest, true)
+				if err != nil {
+					return Nil, err
+				}
+				if found {
+					return value, nil
+				}
+			}
+		}
+		if hook, hookFound := class.lookupClassMethod("const_missing"); hookFound {
+			return s.invoke(ctx, hook, self, []Value{SymbolValue(path)}, Nil, Nil)
+		}
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "uninitialized constant "+path)}
 	}
 	return value, nil
 }
@@ -1196,6 +1456,15 @@ func (s *State) classConstSetMethod(ctx context.Context, self Value, args []Valu
 	}
 	if err := s.ensureMutable(self); err != nil {
 		return Nil, err
+	}
+	if target, ok := s.asClass(args[1]); ok {
+		if target.name == "" || target.name == "#<Module>" || target.name == "#<Class>" {
+			path := name
+			if class != s.ObjectClass {
+				path = classDisplayName(class) + "::" + name
+			}
+			s.renameClassConstant(target, path)
+		}
 	}
 	class.constants[name] = args[1]
 	if class == s.ObjectClass {
@@ -1230,6 +1499,9 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: Class#new receiver is not a class")
 	}
+	if class.singletonOf != nil || class.isSingleton {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't create instance of singleton class")}
+	}
 	if class == s.ModuleClass {
 		created := newClass("#<Module>", nil)
 		created.isModule = true
@@ -1262,6 +1534,11 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 		created := newClass("#<Class>", super)
 		s.ensureClassObject(created)
 		createdValue := s.classValue(created)
+		if super != nil {
+			if _, err := s.call(ctx, s.classValue(super), "inherited", []Value{createdValue}, Nil, Nil); err != nil {
+				return Nil, err
+			}
+		}
 		if !block.IsNil() {
 			saved := created.defaultVisibility
 			_, err := s.callBlockWithSelf(ctx, block, createdValue, []Value{createdValue}, Nil)
@@ -1398,8 +1675,19 @@ func (s *State) classAliasMethod(ctx context.Context, self Value, args []Value, 
 	if !ok || len(args) != 2 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "alias_method expects two names")}
 	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	newName := args[0].String()
 	oldName := args[1].String()
+	if class.singletonOf != nil {
+		m, ok := class.singletonOf.lookupClassMethod(oldName)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+oldName+"'")}
+		}
+		class.singletonOf.classMethods[newName] = m
+		return SymbolValue(newName), nil
+	}
 	m, ok := class.lookup(oldName)
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+oldName+"'")}
@@ -1413,6 +1701,9 @@ func (s *State) classRemoveMethod(ctx context.Context, self Value, args []Value,
 	if !ok || len(args) != 1 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "remove_method expects one name")}
 	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	name := args[0].String()
 	if _, ok := class.methods[name]; !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "method '"+name+"' not defined in "+class.name)}
@@ -1422,7 +1713,7 @@ func (s *State) classRemoveMethod(ctx context.Context, self Value, args []Value,
 }
 
 func (s *State) classIsSubclass(class, super *Class) bool {
-	for current := class; current != nil; current = current.super {
+	for _, current := range classAncestors(class) {
 		if current == super {
 			return true
 		}
@@ -1439,6 +1730,31 @@ func (s *State) classSuperclassMethod(ctx context.Context, self Value, args []Va
 		return Nil, nil
 	}
 	return s.classValue(class.super), nil
+}
+
+func classDisplayName(class *Class) string {
+	if class == nil {
+		return ""
+	}
+	if class.name == "#<Module>" || class.name == "#<Class>" || class.name == "" {
+		kind := "Class"
+		if class.isModule {
+			kind = "Module"
+		}
+		return fmt.Sprintf("#<%s:%p>", kind, class)
+	}
+	return class.name
+}
+
+func (s *State) classDisplayNameMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: Class#name receiver is not a class")
+	}
+	if class.name == "#<Module>" || class.name == "#<Class>" || class.name == "" {
+		return Nil, nil
+	}
+	return StringValue(class.name), nil
 }
 
 func (s *State) classNameMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1458,7 +1774,7 @@ func (s *State) classCaseEqMethod(ctx context.Context, self Value, args []Value,
 }
 
 func (s *State) isA(value Value, class *Class) bool {
-	for current := s.classOf(value); current != nil; current = current.super {
+	for _, current := range classAncestors(s.classOf(value)) {
 		if current == class {
 			return true
 		}
@@ -1496,17 +1812,37 @@ func (s *State) classOp(ctx context.Context, outerValue, superValue Value, name 
 	}
 	var class *Class
 	if existing := s.lookupConstant(outer, name); !existing.IsNil() {
-		if c, ok := s.asClass(existing); ok {
-			class = c
+		c, ok := s.asClass(existing)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+				name+" is not a class/module")}
 		}
+		if isClass && c.isModule {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+				name+" is not a class")}
+		}
+		if !isClass && !c.isModule {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+				name+" is not a module")}
+		}
+		class = c
 	}
 	if isClass && class != nil && !superValue.IsNil() {
-		if candidate, ok := s.asClass(superValue); ok && candidate == class {
+		candidate, ok := s.asClass(superValue)
+		if ok && candidate == class {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "superclass must not be the class itself")}
+		}
+		if class.super != super {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+				"superclass mismatch for class "+name)}
 		}
 	}
 	if class == nil {
-		class = newClass(name, super)
+		className := name
+		if outer != s.ObjectClass {
+			className = classDisplayName(outer) + "::" + name
+		}
+		class = newClass(className, super)
 		class.isModule = !isClass
 		s.ensureClassObject(class)
 		outer.constants[name] = s.classValue(class)
@@ -1591,6 +1927,11 @@ func (s *State) classPrependFeaturesMethod(ctx context.Context, self Value, args
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a class")}
 	}
+	for _, ancestor := range classAncestors(module) {
+		if ancestor == base {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "cyclic prepend detected")}
+		}
+	}
 	s.includeFeatures(base, module, true)
 	return args[0], nil
 }
@@ -1620,37 +1961,34 @@ func (s *State) classPrependMethod(ctx context.Context, self Value, args []Value
 }
 
 func (s *State) includeFeatures(base, module *Class, prepend bool) {
-	for name, value := range module.constants {
-		if _, exists := base.constants[name]; !exists {
-			base.constants[name] = value
-		}
-	}
 	for name := range module.privateMethods {
 		base.privateMethods[name] = true
 	}
 	if prepend {
-		found := false
-		for _, current := range base.prepended {
-			if current == module {
-				found = true
-				break
+		for _, included := range base.included {
+			if included == module {
+				return
 			}
 		}
-		if !found {
-			base.prepended = append(base.prepended, module)
+		for _, current := range base.prepended {
+			if current == module {
+				return
+			}
 		}
+		base.prepended = append(base.prepended, module)
 		return
 	}
-	found := false
-	for _, included := range base.included {
-		if included == module {
-			found = true
-			break
+	for _, prepended := range base.prepended {
+		if prepended == module {
+			return
 		}
 	}
-	if !found {
-		base.included = append(base.included, module)
+	for _, included := range base.included {
+		if included == module {
+			return
+		}
 	}
+	base.included = append(base.included, module)
 }
 
 func (s *State) objectClassMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -2725,6 +3063,53 @@ func (s *State) hashSetMethod(ctx context.Context, self Value, args []Value, kw 
 	return s.setIndex(ctx, self, args[0], args[1])
 }
 
+func copyClassMap(source map[string]*method) map[string]*method {
+	target := make(map[string]*method, len(source))
+	for name, m := range source {
+		target[name] = m
+	}
+	return target
+}
+
+func copyBoolMap(source map[string]bool) map[string]bool {
+	target := make(map[string]bool, len(source))
+	for name, value := range source {
+		target[name] = value
+	}
+	return target
+}
+
+func copyConstants(source map[string]Value) map[string]Value {
+	target := make(map[string]Value, len(source))
+	for name, value := range source {
+		target[name] = value
+	}
+	return target
+}
+
+func (s *State) duplicateClass(source *Class) *Class {
+	name := "#<Class>"
+	if source.isModule {
+		name = "#<Module>"
+	}
+	duplicate := newClass(name, source.super)
+	duplicate.isModule = source.isModule
+	duplicate.methods = copyClassMap(source.methods)
+	duplicate.classMethods = copyClassMap(source.classMethods)
+	duplicate.constants = copyConstants(source.constants)
+	duplicate.classVars = copyConstants(source.classVars)
+	duplicate.privateMethods = copyBoolMap(source.privateMethods)
+	duplicate.protectedMethods = copyBoolMap(source.protectedMethods)
+	duplicate.privateClassMethods = copyBoolMap(source.privateClassMethods)
+	duplicate.undefMethods = copyBoolMap(source.undefMethods)
+	duplicate.privateConstants = copyBoolMap(source.privateConstants)
+	duplicate.deprecatedConstants = copyBoolMap(source.deprecatedConstants)
+	duplicate.included = append([]*Class(nil), source.included...)
+	duplicate.prepended = append([]*Class(nil), source.prepended...)
+	s.ensureClassObject(duplicate)
+	return duplicate
+}
+
 func copyObjectIvars(obj *Object) map[string]Value {
 	if len(obj.ivars) == 0 {
 		return nil
@@ -2760,7 +3145,7 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 		copyData.backtrace = append([]string(nil), data.backtrace...)
 		duplicate = ObjectValue(&Object{class: self.obj.class, data: &copyData})
 	case *Class:
-		return self, nil
+		duplicate = s.classValue(s.duplicateClass(data))
 	case *blockData:
 		copyData := *data
 		duplicate = ObjectValue(&Object{data: &copyData})
@@ -2775,19 +3160,48 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 }
 
 func (s *State) objectRespondToMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) != 1 {
+	if len(args) < 1 || len(args) > 2 {
 		return False, nil
 	}
 	name := args[0].String()
+	includePrivate := len(args) == 2 && args[1].IsTruthy()
 	if class, ok := s.asClass(self); ok {
-		if _, ok := class.lookupClassMethod(name); ok {
+		if m, found := class.lookupClassMethod(name); found {
+			if !includePrivate && class.privateClassMethods[name] {
+				return False, nil
+			}
+			_ = m
 			return True, nil
 		}
 	}
-	if _, ok := s.classOf(self).lookup(name); ok {
-		return True, nil
+	class := s.classOf(self)
+	m, found := class.lookup(name)
+	if !found {
+		if hook, hookFound := class.lookup("respond_to_missing?"); hookFound {
+			result, err := s.invoke(ctx, hook, self, []Value{args[0], BoolValue(includePrivate)}, Nil, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			return BoolValue(result.IsTruthy()), nil
+		}
+		if s.methodMissingDefined(class) {
+			return True, nil
+		}
+		return False, nil
 	}
-	return False, nil
+	owner := m.owner
+	if owner == nil {
+		owner = class
+	}
+	if !includePrivate && (owner.privateMethods[name] || owner.protectedMethods[name]) {
+		return False, nil
+	}
+	return True, nil
+}
+
+func (s *State) methodMissingDefined(class *Class) bool {
+	_, found := class.lookup("method_missing")
+	return found
 }
 
 func (s *State) kernelProcMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -2795,6 +3209,18 @@ func (s *State) kernelProcMethod(ctx context.Context, self Value, args []Value, 
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
 	}
 	return block, nil
+}
+
+func (s *State) invokeMethodMissing(ctx context.Context, recv Value, name string, args []Value, kw Value, block Value) (Value, error) {
+	if name != "method_missing" {
+		if m, found := s.classOf(recv).lookup("method_missing"); found {
+			callArgs := make([]Value, 0, len(args)+1)
+			callArgs = append(callArgs, SymbolValue(name))
+			callArgs = append(callArgs, args...)
+			return s.invoke(ctx, m, recv, callArgs, kw, block)
+		}
+	}
+	return Nil, &unwindSignal{kind: unwindException, value: s.newMethodError(name, recv, args)}
 }
 
 func (s *State) newMethodError(name string, recv Value, args []Value) Value {
@@ -2807,6 +3233,62 @@ func (s *State) newMethodError(name string, recv Value, args []Value) Value {
 		data.args = ArrayValue(append([]Value(nil), args...))
 	}
 	s.attachImplicitCause(exception)
+	return exception
+}
+
+func constantOwner(class *Class, name string) *Class {
+	for _, current := range classAncestors(class) {
+		if _, found := current.constants[name]; found {
+			return current
+		}
+	}
+	return nil
+}
+
+func (s *State) renameClassConstant(class *Class, path string) {
+	oldPrefix := classDisplayName(class)
+	class.name = path
+	if !strings.HasPrefix(oldPrefix, "#<") {
+		return
+	}
+	for _, value := range class.constants {
+		child, ok := s.asClass(value)
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(child.name, oldPrefix+"::") {
+			child.name = path + strings.TrimPrefix(child.name, oldPrefix)
+		}
+	}
+}
+
+func (s *State) nameClassConstant(value Value, outer *Class, name string) {
+	class, ok := s.asClass(value)
+	if !ok {
+		return
+	}
+	if class.name != "" && class.name != "#<Module>" && class.name != "#<Class>" {
+		return
+	}
+	path := name
+	if outer != nil && outer != s.ObjectClass {
+		path = classDisplayName(outer) + "::" + name
+	}
+	s.renameClassConstant(class, path)
+}
+
+func (s *State) newPrivateConstError(name string, recv Value) Value {
+	class, _ := s.asClass(recv)
+	path := name
+	if class != nil {
+		path = classDisplayName(class) + "::" + name
+	}
+	exception := newException(s.NameErrorClass, "private constant "+path+" referenced")
+	if data, ok := exception.obj.data.(*exceptionData); ok {
+		data.name = SymbolValue(name)
+		data.receiver = recv
+		data.receiverSet = true
+	}
 	return exception
 }
 
@@ -3320,37 +3802,43 @@ func (s *State) newVisibilityError(kind, name string, recv Value) Value {
 }
 
 func (s *State) privateCallError(recv, self Value, name string) error {
-	if s.privateMethodCount == 0 && s.protectedCount == 0 {
+	if s.privateMethodCount == 0 && s.protectedCount == 0 && s.classPrivateCount == 0 {
 		return nil
 	}
 	if self.obj != nil && recv.obj == self.obj {
 		return nil
 	}
-	if class, ok := s.asClass(recv); ok && class.privateClassMethods[name] {
-		if self.obj == nil || self.obj != recv.obj {
+	if class, ok := s.asClass(recv); ok {
+		for _, current := range classAncestors(class) {
+			if current.privateClassMethods[name] && current.singletonOf == nil {
+				if self.obj == nil || self.obj != recv.obj {
+					return &unwindSignal{kind: unwindException, value: s.newVisibilityError("private", name, recv)}
+				}
+			}
+		}
+		if class.privateClassMethods[name] {
 			return &unwindSignal{kind: unwindException, value: s.newVisibilityError("private", name, recv)}
 		}
 	}
-	callerClass := s.classOf(self)
-	for _, current := range classAncestors(s.classOf(recv)) {
-		if current.privateMethods[name] {
-			return &unwindSignal{kind: unwindException, value: s.newVisibilityError("private", name, recv)}
+	class := s.classOf(recv)
+	m, found := class.lookup(name)
+	if !found {
+		return nil
+	}
+	owner := m.owner
+	if owner == nil {
+		owner = class
+	}
+	if owner.privateMethods[name] {
+		return &unwindSignal{kind: unwindException, value: s.newVisibilityError("private", name, recv)}
+	}
+	if owner.protectedMethods[name] {
+		callerClass := s.classOf(self)
+		allowed := callerClass == owner || s.classIsSubclass(callerClass, owner)
+		if allowed {
+			return nil
 		}
-		if current.protectedMethods[name] {
-			allowed := callerClass == current || s.classIsSubclass(callerClass, current) || s.classIsSubclass(current, callerClass)
-			if !allowed {
-				for _, ancestor := range classAncestors(callerClass) {
-					if ancestor == current {
-						allowed = true
-						break
-					}
-				}
-			}
-			if allowed {
-				return nil
-			}
-			return &unwindSignal{kind: unwindException, value: s.newVisibilityError("protected", name, recv)}
-		}
+		return &unwindSignal{kind: unwindException, value: s.newVisibilityError("protected", name, recv)}
 	}
 	return nil
 }

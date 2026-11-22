@@ -533,12 +533,28 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				if class.singleton == nil {
 					class.singleton = newClass(class.name, nil)
 					class.singleton.singletonOf = class
+					class.singleton.isSingleton = true
 					s.ensureClassObject(class.singleton)
 				}
 				regs[a] = s.classValue(class.singleton)
 				break
 			}
 			if regs[a].obj == nil {
+				kind := regs[a].Kind()
+				if kind == KindNil || kind == KindTrue || kind == KindFalse {
+					if s.immediateSingletons == nil {
+						s.immediateSingletons = make(map[Kind]*Class)
+					}
+					singleton := s.immediateSingletons[kind]
+					if singleton == nil {
+						singleton = newClass("#<Class:"+s.classOf(regs[a]).name+">", s.classOf(regs[a]))
+						singleton.isSingleton = true
+						s.ensureClassObject(singleton)
+						s.immediateSingletons[kind] = singleton
+					}
+					regs[a] = s.classValue(singleton)
+					break
+				}
 				sig := &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't define singleton")}
 				np, rv, done, fatal := dispatch(sig, in.Offset)
 				if fatal != nil {
@@ -553,8 +569,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			obj := regs[a].obj
 			if obj.singleton == nil {
 				original := s.classOf(regs[a])
-				obj.singleton = newClass("#<Class>", original)
+				obj.singleton = newClass("#<Class:"+original.name+">", original)
+				obj.singleton.isSingleton = true
 				s.ensureClassObject(obj.singleton)
+			}
+			if obj.frozen && obj.singleton.object != nil {
+				obj.singleton.object.frozen = true
 			}
 			regs[a] = s.classValue(obj.singleton)
 		case bytecode.OpTCLASS:
@@ -570,6 +590,17 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			childIndex := int(in.Operands[2])
 			if childIndex < 0 || childIndex >= len(irep.Reps) {
 				return Nil, fmt.Errorf("mrbvm: TDEF child irep %d out of range", childIndex)
+			}
+			if err := s.ensureMutable(s.classValue(targetClass)); err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			targetClass.defineIrep(name, irep.Reps[childIndex])
 			regs[a] = SymbolValue(name)
@@ -650,9 +681,19 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpOCLASS:
 			regs[in.Operands[0]] = s.classValue(s.ObjectClass)
 		case bytecode.OpGETCV:
-			regs[in.Operands[0]] = lookupClassVar(targetClass, irep.Syms[in.Operands[1]])
+			regs[in.Operands[0]] = lookupClassVar(classVarTarget(targetClass), irep.Syms[in.Operands[1]])
 		case bytecode.OpSETCV:
-			targetClass.classVars[irep.Syms[in.Operands[1]]] = regs[in.Operands[0]]
+			if err := s.setClassVar(classVarTarget(targetClass), irep.Syms[in.Operands[1]], regs[in.Operands[0]]); err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
+			}
 		case bytecode.OpGETCONST:
 			name := irep.Syms[in.Operands[1]]
 			if value, ok := s.constants[name]; ok {
@@ -692,6 +733,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 		case bytecode.OpSETCONST:
 			name := irep.Syms[in.Operands[1]]
+			outer := targetClass
+			if outer == nil {
+				outer = s.ObjectClass
+			}
+			s.nameClassConstant(regs[in.Operands[0]], outer, name)
 			s.constants[name] = regs[in.Operands[0]]
 			if targetClass != nil {
 				targetClass.constants[name] = regs[in.Operands[0]]
@@ -703,6 +749,18 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				return Nil, fmt.Errorf("mrbvm: GETMCNST receiver is not a class")
 			}
 			name := irep.Syms[in.Operands[1]]
+			if owner := constantOwner(class, name); owner != nil && owner.privateConstants[name] {
+				sig := &unwindSignal{kind: unwindException, value: s.newPrivateConstError(name, s.classValue(owner))}
+				np, rv, done, fatal := handle(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
+			}
 			value := s.lookupConstant(class, name)
 			if value.IsNil() {
 				sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(class))}
@@ -723,7 +781,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if !ok {
 				return Nil, fmt.Errorf("mrbvm: SETMCNST receiver is not a class")
 			}
-			class.constants[irep.Syms[in.Operands[1]]] = regs[a]
+			name := irep.Syms[in.Operands[1]]
+			s.nameClassConstant(regs[a], class, name)
+			class.constants[name] = regs[a]
 
 		case bytecode.OpMODULE, bytecode.OpCLASS:
 			a := int(in.Operands[0])
@@ -731,7 +791,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpCLASS && a+1 < len(regs) {
 				super = regs[a+1]
 			}
-			value, err := s.classOp(ctx, regs[a], super, irep.Syms[in.Operands[1]], in.Op == bytecode.OpCLASS)
+			outer := regs[a]
+			if outer.IsNil() && targetClass != nil {
+				outer = s.classValue(targetClass)
+			}
+			value, err := s.classOp(ctx, outer, super, irep.Syms[in.Operands[1]], in.Op == bytecode.OpCLASS)
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
@@ -1010,7 +1074,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if err != nil {
 				return Nil, err
 			}
-			if s.privateMethodCount > 0 {
+			if s.privateMethodCount > 0 || s.protectedCount > 0 || s.classPrivateCount > 0 {
 				if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
 					np, rv, done, fatal := dispatch(err, in.Offset)
 					if fatal != nil {
@@ -1126,7 +1190,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				}
 			}
 			if !ok {
-				sig := &unwindSignal{kind: unwindException, value: s.newMethodError(mid, self, args)}
+				missingValue, missingErr := s.invokeMethodMissing(ctx, self, mid, args, kw, block)
+				if missingErr == nil {
+					regs[in.Operands[0]] = missingValue
+					continue
+				}
+				sig, _ := missingErr.(*unwindSignal)
+				if sig == nil {
+					return Nil, missingErr
+				}
 				np, rv, done, fatal := handle(sig, in.Offset)
 				if fatal != nil {
 					return Nil, fatal
@@ -1164,7 +1236,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSEND0 {
 				recv = regs[in.Operands[0]]
 			}
-			if s.privateMethodCount > 0 {
+			if s.privateMethodCount > 0 || s.protectedCount > 0 || s.classPrivateCount > 0 {
 				if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
 					np, rv, done, fatal := dispatch(err, in.Offset)
 					if fatal != nil {
@@ -1233,7 +1305,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					return Nil, err
 				}
 			}
-			if s.privateMethodCount > 0 {
+			if s.privateMethodCount > 0 || s.protectedCount > 0 || s.classPrivateCount > 0 {
 				if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
 					np, rv, done, fatal := dispatch(err, in.Offset)
 					if fatal != nil {
@@ -1823,13 +1895,48 @@ func nearestMethodEnv(env *environment) *environment {
 	return nil
 }
 
-func lookupClassVar(class *Class, name string) Value {
-	for current := class; current != nil; current = current.super {
-		if value, ok := current.classVars[name]; ok {
-			return value
+func classVarTarget(class *Class) *Class {
+	for class != nil && class.singletonOf != nil {
+		class = class.singletonOf
+	}
+	return class
+}
+
+func classVarOwner(class *Class, name string) *Class {
+	if class == nil {
+		return nil
+	}
+	for _, current := range classAncestors(class) {
+		if current == class {
+			continue
+		}
+		if _, ok := current.classVars[name]; ok {
+			return current
 		}
 	}
+	if _, ok := class.classVars[name]; ok {
+		return class
+	}
+	return nil
+}
+
+func lookupClassVar(class *Class, name string) Value {
+	if owner := classVarOwner(class, name); owner != nil {
+		return owner.classVars[name]
+	}
 	return Nil
+}
+
+func (s *State) setClassVar(class *Class, name string, value Value) error {
+	owner := classVarOwner(class, name)
+	if owner == nil {
+		owner = class
+	}
+	if err := s.ensureMutable(s.classValue(owner)); err != nil {
+		return err
+	}
+	owner.classVars[name] = value
+	return nil
 }
 
 func (s *State) lookupConstant(class *Class, name string) Value {
@@ -2035,7 +2142,7 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 	}
 	m, ok := s.classOf(recv).lookup(name)
 	if !ok {
-		return Nil, &unwindSignal{kind: unwindException, value: s.newMethodError(name, recv, args)}
+		return s.invokeMethodMissing(ctx, recv, name, args, kw, block)
 	}
 	return s.invoke(ctx, m, recv, args, kw, block)
 }

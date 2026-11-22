@@ -87,6 +87,10 @@ type Class struct {
 	moduleFunction      bool
 	defaultVisibility   string
 	privateClassMethods map[string]bool
+	undefMethods        map[string]bool
+	isSingleton         bool
+	privateConstants    map[string]bool
+	deprecatedConstants map[string]bool
 	included            []*Class
 	prepended           []*Class
 	privateMethods      map[string]bool
@@ -244,20 +248,24 @@ func newClass(name string, super *Class) *Class {
 		privateMethods:      make(map[string]bool),
 		protectedMethods:    make(map[string]bool),
 		privateClassMethods: make(map[string]bool),
+		undefMethods:        make(map[string]bool),
+		privateConstants:    make(map[string]bool),
+		deprecatedConstants: make(map[string]bool),
 	}
 }
 
 // classAncestors returns the method lookup order: prepended modules, the
 // class itself, included modules (last included first), then the superclass.
 func classAncestors(c *Class) []*Class {
-	seen := make(map[*Class]bool)
-	var result []*Class
+	result := make([]*Class, 0, 8)
+	path := make(map[*Class]bool)
 	var visit func(*Class)
 	visit = func(current *Class) {
-		if current == nil || seen[current] {
+		if current == nil || path[current] {
 			return
 		}
-		seen[current] = true
+		path[current] = true
+		defer delete(path, current)
 		for i := len(current.prepended) - 1; i >= 0; i-- {
 			visit(current.prepended[i])
 		}
@@ -273,6 +281,9 @@ func classAncestors(c *Class) []*Class {
 
 func (c *Class) lookup(name string) (*method, bool) {
 	for _, current := range classAncestors(c) {
+		if current.undefMethods[name] {
+			return nil, false
+		}
 		if m, ok := current.methods[name]; ok {
 			return m, true
 		}
@@ -314,6 +325,7 @@ func (c *Class) define(name string, fn NativeFunc) {
 		return
 	}
 	c.methods[name] = &method{owner: c, name: name, native: fn}
+	delete(c.undefMethods, name)
 	c.applyVisibility(name)
 }
 
@@ -414,10 +426,19 @@ func (s *State) classOf(v Value) *Class {
 	}
 	switch v.kind {
 	case KindNil:
+		if singleton := s.immediateSingletons[KindNil]; singleton != nil {
+			return singleton
+		}
 		return s.NilClass
 	case KindTrue:
+		if singleton := s.immediateSingletons[KindTrue]; singleton != nil {
+			return singleton
+		}
 		return s.TrueClass
 	case KindFalse:
+		if singleton := s.immediateSingletons[KindFalse]; singleton != nil {
+			return singleton
+		}
 		return s.FalseClass
 	case KindInt, KindBigInt:
 		return s.IntegerClass

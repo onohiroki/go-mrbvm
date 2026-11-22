@@ -252,7 +252,13 @@ func (s *State) installAdvancedStringLibrary() {
 			return Nil, err
 		}
 		data, ok := stringDataOf(self)
-		if !ok || len(args) != 1 || args[0].Kind() != KindString {
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "initialize expects a String")}
+		}
+		if len(args) == 0 {
+			return self, nil
+		}
+		if len(args) != 1 || args[0].Kind() != KindString {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "initialize expects a String")}
 		}
 		data.set(args[0].String())
