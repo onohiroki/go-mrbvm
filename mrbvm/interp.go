@@ -539,7 +539,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				break
 			}
 			if regs[a].obj == nil {
-				return Nil, fmt.Errorf("mrbvm: SCLASS on an immediate value is not supported")
+				sig := &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't define singleton")}
+				np, rv, done, fatal := dispatch(sig, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			obj := regs[a].obj
 			if obj.singleton == nil {
@@ -702,7 +711,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpCLASS && a+1 < len(regs) {
 				super = regs[a+1]
 			}
-			value, err := s.classOp(regs[a], super, irep.Syms[in.Operands[1]], in.Op == bytecode.OpCLASS)
+			value, err := s.classOp(ctx, regs[a], super, irep.Syms[in.Operands[1]], in.Op == bytecode.OpCLASS)
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {

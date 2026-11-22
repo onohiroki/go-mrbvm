@@ -1,0 +1,11 @@
+:hi
+true
+Module
+Module
+true
+:f
+42
+7
+:pub
+NoMethodError
+:priv

@@ -74,18 +74,23 @@ func (o *Object) setIvar(name string, value Value) {
 
 // Class is a minimal mruby class or module.
 type Class struct {
-	name           string
-	super          *Class
-	methods        map[string]*method
-	classMethods   map[string]*method
-	constants      map[string]Value
-	classVars      map[string]Value
-	object         *Object
-	singletonOf    *Class
-	singleton      *Class
-	included       []*Class
-	privateMethods map[string]bool
-	state          *State
+	name              string
+	super             *Class
+	methods           map[string]*method
+	classMethods      map[string]*method
+	constants         map[string]Value
+	classVars         map[string]Value
+	object            *Object
+	singletonOf       *Class
+	singleton         *Class
+	isModule          bool
+	moduleFunction    bool
+	defaultVisibility string
+	included          []*Class
+	prepended         []*Class
+	privateMethods    map[string]bool
+	protectedMethods  map[string]bool
+	state             *State
 }
 
 type method struct {
@@ -229,13 +234,14 @@ func asSignal(v Value) (*unwindSignal, bool) {
 
 func newClass(name string, super *Class) *Class {
 	return &Class{
-		name:           name,
-		super:          super,
-		methods:        make(map[string]*method),
-		classMethods:   make(map[string]*method),
-		constants:      make(map[string]Value),
-		classVars:      make(map[string]Value),
-		privateMethods: make(map[string]bool),
+		name:             name,
+		super:            super,
+		methods:          make(map[string]*method),
+		classMethods:     make(map[string]*method),
+		constants:        make(map[string]Value),
+		classVars:        make(map[string]Value),
+		privateMethods:   make(map[string]bool),
+		protectedMethods: make(map[string]bool),
 	}
 }
 
@@ -248,7 +254,34 @@ func (c *Class) lookup(name string) (*method, bool) {
 	return nil, false
 }
 
+func (c *Class) applyVisibility(name string) {
+	if c.defaultVisibility == "" || c.defaultVisibility == "public" {
+		return
+	}
+	if c.defaultVisibility == "private" {
+		if !c.privateMethods[name] {
+			c.privateMethods[name] = true
+			if c.state != nil {
+				c.state.privateMethodCount++
+			}
+		}
+		return
+	}
+	if c.defaultVisibility == "protected" {
+		if !c.protectedMethods[name] {
+			c.protectedMethods[name] = true
+			if c.state != nil {
+				c.state.protectedCount++
+			}
+		}
+	}
+}
+
 func (c *Class) define(name string, fn NativeFunc) {
+	if c.singletonOf != nil {
+		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, native: fn}
+		return
+	}
 	c.methods[name] = &method{owner: c, name: name, native: fn}
 }
 
@@ -257,7 +290,18 @@ func (c *Class) defineIrep(name string, irep *Irep) {
 		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, irep: irep}
 		return
 	}
-	c.methods[name] = &method{owner: c, name: name, irep: irep}
+	m := &method{owner: c, name: name, irep: irep}
+	c.methods[name] = m
+	c.applyVisibility(name)
+	if c.moduleFunction {
+		c.classMethods[name] = m
+		if !c.privateMethods[name] {
+			c.privateMethods[name] = true
+			if c.state != nil {
+				c.state.privateMethodCount++
+			}
+		}
+	}
 }
 
 func (c *Class) defineClassIrep(name string, irep *Irep) {
@@ -300,6 +344,9 @@ func (s *State) classOf(v Value) *Class {
 		return v.obj.singleton
 	}
 	if v.kind == KindObject && v.obj != nil {
+		if c, ok := v.obj.data.(*Class); ok && c.isModule {
+			return s.ModuleClass
+		}
 		if v.obj.class != nil {
 			return v.obj.class
 		}

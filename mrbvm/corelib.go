@@ -653,6 +653,18 @@ func (s *State) installObjectLibrary() {
 	class.define("object_id", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(hashValue(self, map[*Object]bool{})), nil
 	})
+	class.define("instance_eval", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if block.IsNil() {
+			return self, nil
+		}
+		return s.callBlockWithSelf(ctx, block, self, nil, Nil)
+	})
+	class.define("instance_exec", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if block.IsNil() {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
+		}
+		return s.callBlockWithSelf(ctx, block, self, args, kw)
+	})
 	class.define("send", s.objectSendMethod)
 	class.define("__send__", s.objectSendMethod)
 	class.define("tap", s.objectTapMethod)
