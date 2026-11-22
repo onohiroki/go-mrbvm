@@ -269,6 +269,12 @@ func (s *State) classOf(v Value) *Class {
 		}
 	}
 	switch v.kind {
+	case KindNil:
+		return s.NilClass
+	case KindTrue:
+		return s.TrueClass
+	case KindFalse:
+		return s.FalseClass
 	case KindInt, KindBigInt:
 		return s.IntegerClass
 	case KindFloat:

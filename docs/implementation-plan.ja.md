@@ -387,8 +387,17 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - 任意オブジェクトの特異クラス（`class << obj`）、`Array.[]`、
     配列サブクラス、`Module#include?`、rescue splat、Float/Range 添字、
     `RangeError` / `NotImplementedError`、`Exception#backtrace` を追加
+  - `class_eval` / `alias_method` / `remove_method`、任意オブジェクトへの
+    `def obj.name`、`Array#[]=` のスライス代入を実装
+  - 最適化 `GETIDX` / `SETIDX` が `Array#[]` / `[]=` の再定義を尊重
+  - 循環配列の `inspect` / `join` / `==` を安全化
+  - `NilClass` / `TrueClass` / `FalseClass` と論理演算子を追加
+  - `cmd/mrbtest` を追加し、公式テストを `assert.rb` 付きで実行可能に
+  - 公式テスト subset（`nil.rb` / `true.rb` / `false.rb` /
+    `comparable.rb`）が成功
   - 公式 `mruby/test/t/array.rb` を駆動に不足点を洗い出し
   - `core_library` / `core_library_extended` / `enumerable` /
-    `enumerator` / `comparable` / `singleton_classes` conformance を
-    追加し、35 ケースが両コンパイラで成功
+    `enumerator` / `comparable` / `singleton_classes` /
+    `metaprogramming` / `immediate_values` conformance を追加し、
+    37 ケースが両コンパイラで成功
   - 次は mrblib のロードと `Enumerator`

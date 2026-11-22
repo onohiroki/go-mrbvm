@@ -470,8 +470,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			if class, ok := s.asClass(regs[a]); ok {
 				class.defineClassIrep(name, irep.Reps[childIndex])
+			} else if regs[a].obj != nil {
+				obj := regs[a].obj
+				if obj.singleton == nil {
+					original := s.classOf(regs[a])
+					obj.singleton = newClass("#<Class>", original)
+					s.ensureClassObject(obj.singleton)
+				}
+				obj.singleton.defineIrep(name, irep.Reps[childIndex])
 			} else {
-				return Nil, fmt.Errorf("mrbvm: singleton method definition on non-class is not supported yet")
+				return Nil, fmt.Errorf("mrbvm: singleton method definition on an immediate value is not supported")
 			}
 			regs[a] = SymbolValue(name)
 
@@ -961,9 +969,17 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[a] = HashValue(entries)
 		case bytecode.OpGETIDX:
 			a := int(in.Operands[0])
-			value, err := s.index(ctx, regs[a], regs[a+1])
+			value, err := s.indexOp(ctx, regs[a], regs[a+1])
 			if err != nil {
-				return Nil, err
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			regs[a] = value
 		case bytecode.OpARYPUSH:
@@ -988,18 +1004,24 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if regs[a+1].IsNil() {
 				break
 			}
-			if src, ok := regs[a+1].obj.data.(*arrayData); ok {
-				dst.values = append(dst.values, src.values...)
-			} else {
-				dst.values = append(dst.values, regs[a+1])
+			if regs[a+1].obj != nil {
+				if src, ok := regs[a+1].obj.data.(*arrayData); ok {
+					dst.values = append(dst.values, src.values...)
+					break
+				}
 			}
+			dst.values = append(dst.values, regs[a+1])
 		case bytecode.OpARYSPLAT:
 			a := int(in.Operands[0])
-			if data, ok := regs[a].obj.data.(*arrayData); ok {
-				values := make([]Value, len(data.values))
-				copy(values, data.values)
-				regs[a] = ArrayValue(values)
-			} else if regs[a].IsNil() {
+			if regs[a].obj != nil {
+				if data, ok := regs[a].obj.data.(*arrayData); ok {
+					values := make([]Value, len(data.values))
+					copy(values, data.values)
+					regs[a] = ArrayValue(values)
+					break
+				}
+			}
+			if regs[a].IsNil() {
 				regs[a] = ArrayValue(nil)
 			} else {
 				regs[a] = ArrayValue([]Value{regs[a]})
@@ -1103,16 +1125,32 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 
 		case bytecode.OpSETIDX:
 			a := int(in.Operands[0])
-			if _, err := s.setIndex(ctx, regs[a], regs[a+1], regs[a+2]); err != nil {
-				return Nil, err
+			if _, err := s.setIndexOp(ctx, regs[a], regs[a+1], regs[a+2]); err != nil {
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 
 		case bytecode.OpGETIDX0:
 			a := int(in.Operands[0])
 			b := int(in.Operands[1])
-			value, err := s.index(ctx, regs[b], IntValue(0))
+			value, err := s.indexOp(ctx, regs[b], IntValue(0))
 			if err != nil {
-				return Nil, err
+				np, rv, done, fatal := dispatch(err, in.Offset)
+				if fatal != nil {
+					return Nil, fatal
+				}
+				if done {
+					return rv, nil
+				}
+				pc = np - 1
+				continue
 			}
 			regs[a] = value
 
@@ -1523,6 +1561,9 @@ func compareNative(left, right Value) (int, bool) {
 		}
 	}
 	if lf, rf, ok := bothFloats(left, right); ok {
+		if math.IsNaN(lf) || math.IsNaN(rf) {
+			return 0, false
+		}
 		switch {
 		case lf < rf:
 			return -1, true
@@ -1567,7 +1608,16 @@ func numeric(v Value) (int64, float64, bool) {
 	}
 }
 
+type objectPair struct {
+	left  *Object
+	right *Object
+}
+
 func valuesEqual(left, right Value) bool {
+	return valuesEqualSeen(left, right, make(map[objectPair]bool))
+}
+
+func valuesEqualSeen(left, right Value, seen map[objectPair]bool) bool {
 	if left.Kind() != right.Kind() {
 		if li, ri, ok := bothBigInts(left, right); ok {
 			return li.Cmp(ri) == 0
@@ -1600,14 +1650,20 @@ func valuesEqual(left, right Value) bool {
 		if left.obj == nil || right.obj == nil {
 			return left.obj == right.obj
 		}
+		pair := objectPair{left: left.obj, right: right.obj}
+		if seen[pair] {
+			return true
+		}
 		switch ldata := left.obj.data.(type) {
 		case *arrayData:
 			rdata, ok := right.obj.data.(*arrayData)
 			if !ok || len(ldata.values) != len(rdata.values) {
 				return false
 			}
+			seen[pair] = true
+			defer delete(seen, pair)
 			for i := range ldata.values {
-				if !valuesEqual(ldata.values[i], rdata.values[i]) {
+				if !valuesEqualSeen(ldata.values[i], rdata.values[i], seen) {
 					return false
 				}
 			}
@@ -1617,10 +1673,12 @@ func valuesEqual(left, right Value) bool {
 			if !ok || len(ldata.entries) != len(rdata.entries) {
 				return false
 			}
+			seen[pair] = true
+			defer delete(seen, pair)
 			for _, entry := range ldata.entries {
 				found := false
 				for _, other := range rdata.entries {
-					if valuesEqual(entry.key, other.key) && valuesEqual(entry.value, other.value) {
+					if valuesEqualSeen(entry.key, other.key, seen) && valuesEqualSeen(entry.value, other.value, seen) {
 						found = true
 						break
 					}
@@ -1633,7 +1691,7 @@ func valuesEqual(left, right Value) bool {
 		case *rangeData:
 			rdata, ok := right.obj.data.(*rangeData)
 			return ok && ldata.exclusive == rdata.exclusive &&
-				valuesEqual(ldata.low, rdata.low) && valuesEqual(ldata.high, rdata.high)
+				valuesEqualSeen(ldata.low, rdata.low, seen) && valuesEqualSeen(ldata.high, rdata.high, seen)
 		case *stringData:
 			rdata, ok := right.obj.data.(*stringData)
 			return ok && ldata.value == rdata.value

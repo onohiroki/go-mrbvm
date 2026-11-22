@@ -36,19 +36,23 @@ compiler and the reference implementation is always C mruby 4.0.0.
   and friends, including `next`, `peek`, `rewind`, `size`, and `with_index`
 - a native `Comparable` module, `Symbol#to_proc`, and working
   `attr_reader` / `attr_writer` / `attr_accessor`
-- singleton classes for arbitrary objects (`class << obj`), Array class
-  constructors, subclass arrays, `Module#include?`, splat rescue, and
-  Float/Range array indexing
+- singleton classes for arbitrary objects (`class << obj`, `def obj.m`),
+  `class_eval`, `alias_method`, `remove_method`, Array class constructors,
+  subclass arrays, `Module#include?`, splat rescue, and Float/Range
+  indexing
+- redefinition-aware optimized indexing (`GETIDX` / `SETIDX`), array
+  slice assignment, and cycle-safe `inspect`, `join`, and equality
+- `NilClass`, `TrueClass`, and `FalseClass` with their logical operators
 - `cmd/vmcompat` for differential runs against the reference mruby
 
-The following 35 shared conformance cases pass with bytecode from both
+The following 37 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
 `advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
 `blocks`, `case_and_logic`, `classes`, `collections`, `comparable`,
 `control_flow`,
 `core_library`, `core_library_extended`, `destructuring`, `enumerable`,
-`enumerator`, `ensure_control`, `exceptions`, `for_blocks`,
+`enumerator`, `immediate_values`, `metaprogramming`, `ensure_control`, `exceptions`, `for_blocks`,
 `for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,
 `modern_syntax`, `multiple_assignment`, `operator_assignment`,
 `parameters`, `pattern_matching`, `patterns_extended`, `retry_redo`,
@@ -109,6 +113,9 @@ go test ./...
 
 # Differential run against the reference mruby.
 go run ./cmd/vmcompat testdata/conformance/*/main.rb
+
+# Run official mruby test files with assert.rb.
+go run ./cmd/mrbtest mruby/test/t/comparable.rb
 ```
 
 The `testdata/conformance` corpus is copied from `go-mrbc` for bootstrapping.
@@ -118,6 +125,7 @@ It will later move to an importable shared package.
 
 - `gomruby` — run `.mrb` bytecode, or compile `.rb` with `go-mrbc`
 - `vmcompat` — compare go-mrbc/mrbc bytecode against the reference `mruby`
+- `mrbtest` — run official mruby test files with `assert.rb`
 - `gomirb` — planned interactive shell
 
 ## License

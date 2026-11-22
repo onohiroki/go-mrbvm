@@ -147,6 +147,10 @@ func (v Value) String() string {
 
 // Inspect returns a debug representation.
 func (v Value) Inspect() string {
+	return inspectValue(v, make(map[*Object]bool))
+}
+
+func inspectValue(v Value, seen map[*Object]bool) string {
 	switch v.kind {
 	case KindNil:
 		return "nil"
@@ -174,29 +178,41 @@ func (v Value) Inspect() string {
 			}
 			switch data := v.obj.data.(type) {
 			case *arrayData:
+				if seen[v.obj] {
+					return "[...]"
+				}
+				seen[v.obj] = true
 				parts := make([]string, len(data.values))
 				for i, item := range data.values {
-					parts[i] = item.Inspect()
+					parts[i] = inspectValue(item, seen)
 				}
+				delete(seen, v.obj)
 				return "[" + strings.Join(parts, ", ") + "]"
 			case *hashData:
+				if seen[v.obj] {
+					return "{...}"
+				}
+				seen[v.obj] = true
 				parts := make([]string, len(data.entries))
 				for i, entry := range data.entries {
 					if entry.key.Kind() == KindSymbol {
-						parts[i] = entry.key.String() + ": " + entry.value.Inspect()
+						parts[i] = entry.key.String() + ": " + inspectValue(entry.value, seen)
 					} else {
-						parts[i] = entry.key.Inspect() + " => " + entry.value.Inspect()
+						parts[i] = inspectValue(entry.key, seen) + " => " + inspectValue(entry.value, seen)
 					}
 				}
+				delete(seen, v.obj)
 				return "{" + strings.Join(parts, ", ") + "}"
 			case *rangeData:
 				op := ".."
 				if data.exclusive {
 					op = "..."
 				}
-				return data.low.Inspect() + op + data.high.Inspect()
+				return inspectValue(data.low, seen) + op + inspectValue(data.high, seen)
 			case *blockData:
 				return "#<Proc>"
+			case *enumeratorData:
+				return "#<Enumerator>"
 			}
 			if v.obj.class != nil {
 				return fmt.Sprintf("#<%s>", v.obj.class.name)

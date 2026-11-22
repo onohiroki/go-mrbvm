@@ -11,28 +11,40 @@ func (s *State) installComparableLibrary() {
 		if err != nil {
 			return Nil, err
 		}
-		return BoolValue(ok && cmp < 0), nil
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "comparison failed")}
+		}
+		return BoolValue(cmp < 0), nil
 	})
 	class.define("<=", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		cmp, ok, err := s.spaceship(ctx, self, args, "<=")
 		if err != nil {
 			return Nil, err
 		}
-		return BoolValue(ok && cmp <= 0), nil
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "comparison failed")}
+		}
+		return BoolValue(cmp <= 0), nil
 	})
 	class.define(">", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		cmp, ok, err := s.spaceship(ctx, self, args, ">")
 		if err != nil {
 			return Nil, err
 		}
-		return BoolValue(ok && cmp > 0), nil
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "comparison failed")}
+		}
+		return BoolValue(cmp > 0), nil
 	})
 	class.define(">=", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		cmp, ok, err := s.spaceship(ctx, self, args, ">=")
 		if err != nil {
 			return Nil, err
 		}
-		return BoolValue(ok && cmp >= 0), nil
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "comparison failed")}
+		}
+		return BoolValue(cmp >= 0), nil
 	})
 	class.define("==", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 {

@@ -339,6 +339,15 @@ func (s *State) installObjectLibrary() {
 	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.Inspect()), nil
 	})
+	class.define("<=>", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, nil
+		}
+		if cmp, ok := compareNative(self, args[0]); ok {
+			return IntValue(int64(cmp)), nil
+		}
+		return Nil, nil
+	})
 	class.define("send", s.objectSendMethod)
 	class.define("__send__", s.objectSendMethod)
 	class.define("tap", s.objectTapMethod)
@@ -549,7 +558,11 @@ func (s *State) arrayJoinMethod(ctx context.Context, self Value, args []Value, k
 	if len(args) > 0 && !args[0].IsNil() {
 		separator = args[0].ToS()
 	}
-	return StringValue(joinArrayValues(arrayValues(self), separator)), nil
+	joined, err := s.joinArrayValues(arrayValues(self), separator, map[*arrayData]bool{})
+	if err != nil {
+		return Nil, err
+	}
+	return StringValue(joined), nil
 }
 
 func (s *State) arrayDeleteAtMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {

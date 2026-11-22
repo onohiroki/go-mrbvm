@@ -20,6 +20,9 @@ type State struct {
 	ObjectClass     *Class
 	ClassClass      *Class
 	NumericClass    *Class
+	NilClass        *Class
+	TrueClass       *Class
+	FalseClass      *Class
 	IntegerClass    *Class
 	FloatClass      *Class
 	StringClass     *Class
@@ -55,6 +58,9 @@ type State struct {
 	stdout           io.Writer
 	stderr           io.Writer
 	currentException Value
+
+	arrayIndexBuiltin *method
+	arraySetBuiltin   *method
 }
 
 // New creates a VM state with the minimal core needed to execute VM-0
@@ -78,6 +84,9 @@ func New(opts Options) *State {
 	s.ObjectClass = newClass("Object", nil)
 	s.ClassClass = newClass("Class", s.ObjectClass)
 	s.NumericClass = newClass("Numeric", s.ObjectClass)
+	s.NilClass = newClass("NilClass", s.ObjectClass)
+	s.TrueClass = newClass("TrueClass", s.ObjectClass)
+	s.FalseClass = newClass("FalseClass", s.ObjectClass)
 	s.IntegerClass = newClass("Integer", s.NumericClass)
 	s.FloatClass = newClass("Float", s.NumericClass)
 	s.StringClass = newClass("String", s.ObjectClass)
@@ -106,7 +115,8 @@ func New(opts Options) *State {
 	s.RangeErrorClass = newClass("RangeError", s.StandardErrorClass)
 
 	for _, class := range []*Class{
-		s.ObjectClass, s.ClassClass, s.NumericClass, s.IntegerClass, s.FloatClass,
+		s.ObjectClass, s.ClassClass, s.NumericClass, s.NilClass,
+		s.TrueClass, s.FalseClass, s.IntegerClass, s.FloatClass,
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
 		s.RangeClass, s.ProcClass, s.EnumerableClass, s.EnumeratorClass,
 		s.ComparableClass,
@@ -125,12 +135,18 @@ func New(opts Options) *State {
 	s.ClassClass.define("name", s.classNameMethod)
 	s.ClassClass.define("include", s.classIncludeMethod)
 	s.ClassClass.define("include?", s.classIncludePredicateMethod)
+	s.ClassClass.define("class_eval", s.classEvalMethod)
+	s.ClassClass.define("module_eval", s.classEvalMethod)
+	s.ClassClass.define("class_exec", s.classEvalMethod)
+	s.ClassClass.define("alias_method", s.classAliasMethod)
+	s.ClassClass.define("remove_method", s.classRemoveMethod)
 	s.ClassClass.define("===", s.classCaseEqMethod)
 	s.ClassClass.define("attr_reader", s.classAttrReaderMethod)
 	s.ClassClass.define("attr", s.classAttrReaderMethod)
 	s.ClassClass.define("attr_writer", s.classAttrWriterMethod)
 	s.ClassClass.define("attr_accessor", s.classAttrAccessorMethod)
 	s.ClassClass.define("const_defined?", s.classConstDefinedMethod)
+	s.ClassClass.define("method_defined?", s.classMethodDefinedMethod)
 	s.ObjectClass.define("class", s.objectClassMethod)
 	s.ObjectClass.define("initialize", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return Nil, nil
@@ -138,6 +154,7 @@ func New(opts Options) *State {
 
 	for name, class := range map[string]*Class{
 		"Object": s.ObjectClass, "Class": s.ClassClass, "Numeric": s.NumericClass,
+		"NilClass": s.NilClass, "TrueClass": s.TrueClass, "FalseClass": s.FalseClass,
 		"Integer": s.IntegerClass,
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
@@ -181,6 +198,7 @@ func New(opts Options) *State {
 	})
 
 	s.ArrayClass.define("[]", s.arrayIndexMethod)
+	s.arrayIndexBuiltin = s.ArrayClass.methods["[]"]
 	s.ArrayClass.define("+", s.arrayPlusMethod)
 	s.ArrayClass.define("*", s.arrayRepeatMethod)
 	s.ArrayClass.classMethods["[]"] = &method{owner: s.ArrayClass, name: "[]", native: s.arrayClassBracketMethod}
@@ -215,6 +233,7 @@ func New(opts Options) *State {
 	s.ArrayClass.define("<<", s.arrayPushMethod)
 	s.ArrayClass.define("push", s.arrayPushMethod)
 	s.ArrayClass.define("[]=", s.arraySetMethod)
+	s.arraySetBuiltin = s.ArrayClass.methods["[]="]
 	s.HashClass.define("[]=", s.hashSetMethod)
 	s.ProcClass.define("call", s.procCallMethod)
 	s.ObjectClass.define("respond_to?", s.objectRespondToMethod)
@@ -232,6 +251,7 @@ func New(opts Options) *State {
 	for _, class := range []*Class{s.ArrayClass, s.HashClass, s.RangeClass} {
 		includeModule(class, s.EnumerableClass)
 	}
+	s.installImmediateLibrary()
 	s.installCoreLibrary()
 	return s
 }
@@ -320,6 +340,15 @@ func includeModule(class, module *Class) {
 	}
 }
 
+func (s *State) classMethodDefinedMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok || len(args) != 1 {
+		return False, nil
+	}
+	_, found := class.lookup(args[0].String())
+	return BoolValue(found), nil
+}
+
 func (s *State) classIncludePredicateMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	class, ok := s.asClass(self)
 	if !ok || len(args) != 1 {
@@ -373,21 +402,34 @@ func (s *State) arrayRepeatMethod(ctx context.Context, self Value, args []Value,
 		}
 		return ArrayValue(result), nil
 	}
-	return StringValue(joinArrayValues(values, args[0].ToS())), nil
+	joined, err := s.joinArrayValues(values, args[0].ToS(), map[*arrayData]bool{})
+	if err != nil {
+		return Nil, err
+	}
+	return StringValue(joined), nil
 }
 
-func joinArrayValues(values []Value, separator string) string {
+func (s *State) joinArrayValues(values []Value, separator string, seen map[*arrayData]bool) (string, error) {
 	var parts []string
 	for _, value := range values {
 		if value.obj != nil {
 			if data, ok := value.obj.data.(*arrayData); ok {
-				parts = append(parts, joinArrayValues(data.values, separator))
+				if seen[data] {
+					return "", &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "recursive array join")}
+				}
+				seen[data] = true
+				joined, err := s.joinArrayValues(data.values, separator, seen)
+				delete(seen, data)
+				if err != nil {
+					return "", err
+				}
+				parts = append(parts, joined)
 				continue
 			}
 		}
 		parts = append(parts, value.ToS())
 	}
-	return strings.Join(parts, separator)
+	return strings.Join(parts, separator), nil
 }
 
 func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -395,9 +437,72 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: Class#new receiver is not a class")
 	}
-	instance := ObjectValue(&Object{class: class})
-	if s.classIsSubclass(class, s.ExceptionClass) && len(args) > 0 {
+	if class == s.ClassClass {
+		super := s.ObjectClass
+		if len(args) > 0 {
+			if parent, ok := s.asClass(args[0]); ok {
+				super = parent
+			}
+		}
+		created := newClass("#<Class>", super)
+		s.ensureClassObject(created)
+		createdValue := s.classValue(created)
+		if !block.IsNil() {
+			if _, err := s.callBlockWithSelf(ctx, block, createdValue, nil, Nil); err != nil {
+				return Nil, err
+			}
+		}
+		return createdValue, nil
+	}
+
+	var instance Value
+	switch {
+	case s.classIsSubclass(class, s.ArrayClass):
+		values := []Value(nil)
+		if len(args) == 1 {
+			if args[0].Kind() == KindInt {
+				count := args[0].Int()
+				if count < 0 {
+					return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "negative array size")}
+				}
+				values = make([]Value, count)
+				if !block.IsNil() {
+					for i := range values {
+						item, err := s.callBlock(ctx, block, []Value{IntValue(int64(i))}, Nil)
+						if err != nil {
+							return Nil, err
+						}
+						values[i] = item
+					}
+				}
+			} else if argValues := arrayValues(args[0]); args[0].obj != nil {
+				if _, ok := args[0].obj.data.(*arrayData); ok {
+					values = append([]Value(nil), argValues...)
+				}
+			}
+		} else if len(args) >= 2 && args[0].Kind() == KindInt {
+			count := args[0].Int()
+			if count < 0 {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "negative array size")}
+			}
+			values = make([]Value, count)
+			for i := range values {
+				values[i] = args[1]
+			}
+		}
+		instance = ObjectValue(&Object{class: class, data: &arrayData{values: values}})
+	case s.classIsSubclass(class, s.HashClass):
+		instance = ObjectValue(&Object{class: class, data: &hashData{}})
+	case s.classIsSubclass(class, s.StringClass):
+		value := ""
+		if len(args) > 0 {
+			value = args[0].ToS()
+		}
+		instance = ObjectValue(&Object{class: class, data: &stringData{value: value}})
+	case s.classIsSubclass(class, s.ExceptionClass) && len(args) > 0:
 		instance = newException(class, args[0].ToS())
+	default:
+		instance = ObjectValue(&Object{class: class})
 	}
 	if m, ok := class.lookup("initialize"); ok {
 		if _, err := s.invoke(ctx, m, instance, args, kw, block); err != nil {
@@ -405,6 +510,41 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 		}
 	}
 	return instance, nil
+}
+
+func (s *State) classEvalMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return self, nil
+	}
+	return s.callBlockWithSelf(ctx, block, self, nil, Nil)
+}
+
+func (s *State) classAliasMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok || len(args) != 2 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "alias_method expects two names")}
+	}
+	newName := args[0].String()
+	oldName := args[1].String()
+	m, ok := class.lookup(oldName)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "undefined method '"+oldName+"'")}
+	}
+	class.methods[newName] = m
+	return SymbolValue(newName), nil
+}
+
+func (s *State) classRemoveMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok || len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "remove_method expects one name")}
+	}
+	name := args[0].String()
+	if _, ok := class.methods[name]; !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "method '"+name+"' not defined in "+class.name)}
+	}
+	delete(class.methods, name)
+	return self, nil
 }
 
 func (s *State) classIsSubclass(class, super *Class) bool {
@@ -885,7 +1025,8 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 		case *arrayData:
 			if index.Kind() == KindObject && index.obj != nil {
 				if rangeIndex, ok := index.obj.data.(*rangeData); ok {
-					return sliceArray(data.values, rangeIndex), nil
+					start, length := rangeBounds(rangeIndex, len(data.values))
+					return s.arrayAssign(data, start, length, value)
 				}
 			}
 			pos, err := s.indexInteger(index)
@@ -896,7 +1037,7 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 				pos += len(data.values)
 			}
 			if pos < 0 {
-				return Nil, fmt.Errorf("mrbvm: index %d too small for array", pos)
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, fmt.Sprintf("index %d too small for array", pos))}
 			}
 			for len(data.values) <= pos {
 				data.values = append(data.values, Nil)
@@ -972,10 +1113,104 @@ func (s *State) arrayPushMethod(ctx context.Context, self Value, args []Value, k
 }
 
 func (s *State) arraySetMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) != 2 {
-		return Nil, fmt.Errorf("mrbvm: Array#[]= expects two arguments")
+	data, ok := arrayDataOf(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: not an array")
 	}
-	return s.setIndex(ctx, self, args[0], args[1])
+	switch len(args) {
+	case 0:
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments (given 0, expected 2..3)")}
+	case 2:
+		if rangeData, ok := rangeDataOf(args[0]); ok {
+			start, length := rangeBounds(rangeData, len(data.values))
+			return s.arrayAssign(data, start, length, args[1])
+		}
+		return s.setIndex(ctx, self, args[0], args[1])
+	case 3:
+		start, err := s.indexInteger(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		length, err := s.indexInteger(args[1])
+		if err != nil {
+			return Nil, err
+		}
+		return s.arrayAssign(data, start, length, args[2])
+	default:
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, fmt.Sprintf("wrong number of arguments (given %d, expected 2..3)", len(args)))}
+	}
+}
+
+func arrayDataOf(value Value) (*arrayData, bool) {
+	if value.obj == nil {
+		return nil, false
+	}
+	data, ok := value.obj.data.(*arrayData)
+	return data, ok
+}
+
+func rangeBounds(data *rangeData, length int) (int, int) {
+	start := 0
+	end := length - 1
+	if !data.low.IsNil() && data.low.Kind() == KindInt {
+		start = int(data.low.Int())
+		if start < 0 {
+			start += length
+		}
+	}
+	if !data.high.IsNil() && data.high.Kind() == KindInt {
+		end = int(data.high.Int())
+		if end < 0 {
+			end += length
+		}
+		if data.exclusive {
+			end--
+		}
+	}
+	if end >= length {
+		end = length - 1
+	}
+	sliceLength := end - start + 1
+	if sliceLength < 0 {
+		sliceLength = 0
+	}
+	return start, sliceLength
+}
+
+func (s *State) arrayAssign(data *arrayData, start, length int, value Value) (Value, error) {
+	if length < 0 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "negative length")}
+	}
+	if start < 0 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index too small for array")}
+	}
+	var replacement []Value
+	if replacementData, ok := arrayDataOf(value); ok {
+		replacement = append([]Value(nil), replacementData.values...)
+	} else {
+		replacement = []Value{value}
+	}
+	if start > len(data.values) {
+		if start-len(data.values) > 1<<20 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index too big for array")}
+		}
+		for len(data.values) < start {
+			data.values = append(data.values, Nil)
+		}
+	}
+	end := start + length
+	if end > len(data.values) {
+		end = len(data.values)
+	}
+	if end < start {
+		end = start
+	}
+	result := make([]Value, 0, len(data.values)-(end-start)+len(replacement))
+	result = append(result, data.values[:start]...)
+	result = append(result, replacement...)
+	result = append(result, data.values[end:]...)
+	data.values = result
+	return value, nil
 }
 
 func (s *State) hashSetMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1254,6 +1489,17 @@ func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw
 	return s.callBlock(ctx, self, args, kw)
 }
 
+func (s *State) callBlockWithSelf(ctx context.Context, block Value, self Value, args []Value, kw Value) (Value, error) {
+	if block.Kind() == KindObject && block.obj != nil {
+		if data, ok := block.obj.data.(*blockData); ok {
+			copyData := *data
+			copyData.self = self
+			return s.executeFrame(ctx, copyData.irep, self, copyData.targetClass, args, kw, Nil, copyData.env, copyData.mid, copyData.owner, copyData.strict)
+		}
+	}
+	return s.callBlock(ctx, block, args, kw)
+}
+
 func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Value) (Value, error) {
 	if block.Kind() == KindSymbol {
 		proc, err := s.call(ctx, block, "to_proc", nil, Nil, Nil)
@@ -1299,4 +1545,26 @@ func (s *State) kernelPuts(ctx context.Context, self Value, args []Value, kw Val
 		fmt.Fprintln(s.stdout, arg.ToS())
 	}
 	return Nil, nil
+}
+
+func (s *State) usesBuiltinMethod(recv Value, name string, builtin *method) bool {
+	if builtin == nil {
+		return false
+	}
+	m, ok := s.classOf(recv).lookup(name)
+	return ok && m == builtin
+}
+
+func (s *State) indexOp(ctx context.Context, recv, index Value) (Value, error) {
+	if s.usesBuiltinMethod(recv, "[]", s.arrayIndexBuiltin) {
+		return s.index(ctx, recv, index)
+	}
+	return s.call(ctx, recv, "[]", []Value{index}, Nil, Nil)
+}
+
+func (s *State) setIndexOp(ctx context.Context, recv, index, value Value) (Value, error) {
+	if s.usesBuiltinMethod(recv, "[]=", s.arraySetBuiltin) {
+		return s.setIndex(ctx, recv, index, value)
+	}
+	return s.call(ctx, recv, "[]=", []Value{index, value}, Nil, Nil)
 }
