@@ -1115,11 +1115,21 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[in.Operands[0]] = result
 
 		case bytecode.OpSEND, bytecode.OpSSEND:
+			a := int(in.Operands[0])
 			recv := self
 			if in.Op == bytecode.OpSEND {
-				recv = regs[in.Operands[0]]
+				recv = regs[a]
 			}
-			args, kw, block, err := s.sendArguments(irep, regs, int(in.Operands[0]), in.Operands[2], false)
+			// Operators on built-in values are the hottest sends. Evaluate
+			// them directly instead of marshalling a one-element argument
+			// slice; fall through for user-defined behaviour or errors.
+			if argInfo := in.Operands[2]; argInfo&0x0f == 1 && (argInfo>>4)&0x0f == 0 && s.privateMethodCount == 0 {
+				if result, ok := binaryValue(recv, irep.Syms[in.Operands[1]], regs[a+1]); ok {
+					regs[a] = result
+					continue
+				}
+			}
+			args, kw, block, err := s.sendArguments(irep, regs, a, in.Operands[2], false)
 			if err != nil {
 				return Nil, err
 			}
