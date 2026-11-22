@@ -25,6 +25,41 @@ func (s *State) installCoreLibrary() {
 
 func (s *State) installArrayLibrary() {
 	class := s.ArrayClass
+	class.define("==", s.arrayEqualMethod)
+	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return False, nil
+		}
+		other, ok := arrayDataOf(args[0])
+		if !ok {
+			return False, nil
+		}
+		values := arrayValues(self)
+		if len(values) != len(other.values) {
+			return False, nil
+		}
+		if self.obj != nil && args[0].obj != nil {
+			if self.obj == args[0].obj {
+				return True, nil
+			}
+			pair := objectPair{left: self.obj, right: args[0].obj}
+			if s.eqSeen[pair] {
+				return True, nil
+			}
+			s.eqSeen[pair] = true
+			defer delete(s.eqSeen, pair)
+		}
+		for i := range values {
+			equal, err := s.rubyEql(ctx, values[i], other.values[i])
+			if err != nil {
+				return Nil, err
+			}
+			if !equal {
+				return False, nil
+			}
+		}
+		return True, nil
+	})
 	class.define("empty?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return BoolValue(len(arrayValues(self)) == 0), nil
 	})
@@ -182,10 +217,13 @@ func (s *State) installHashLibrary() {
 	class.define("entries", s.hashToAMethod)
 	class.define("merge", s.hashMergeMethod)
 	class.define("compare_by_identity", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := hashDataOf(self)
+		if ok && data.identity {
+			return self, nil
+		}
 		if err := s.ensureMutable(self); err != nil {
 			return Nil, err
 		}
-		data, ok := hashDataOf(self)
 		if !ok {
 			return self, nil
 		}
@@ -200,10 +238,25 @@ func (s *State) installHashLibrary() {
 	})
 	class.define("rehash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		data, ok := hashDataOf(self)
-		if ok {
-			data.index = nil
-			data.indexBuilt = 0
+		if !ok {
+			return self, nil
 		}
+		rebuilt := &hashData{entries: make([]hashEntry, 0, len(data.entries))}
+		for _, entry := range data.entries {
+			index, found, err := s.hashLookupKey(ctx, rebuilt, entry.key)
+			if err != nil {
+				return Nil, err
+			}
+			if found {
+				rebuilt.entries[index] = entry
+				continue
+			}
+			rebuilt.entries = appendHashEntry(rebuilt.entries, entry)
+			addHashIndex(rebuilt, len(rebuilt.entries)-1)
+		}
+		data.entries = rebuilt.entries
+		data.index = nil
+		data.indexBuilt = 0
 		return self, nil
 	})
 	class.define("merge!", s.hashMergeBangMethod)
@@ -214,15 +267,16 @@ func (s *State) installHashLibrary() {
 		if !ok || len(args) != 1 {
 			return Nil, nil
 		}
-		index, found, err := s.hashLookupKey(ctx, data, args[0])
-		if err != nil {
-			return Nil, err
+		for _, entry := range data.entries {
+			equal, err := s.rubyEqual(ctx, entry.key, args[0])
+			if err != nil {
+				return Nil, err
+			}
+			if equal {
+				return ArrayValue([]Value{entry.key, entry.value}), nil
+			}
 		}
-		if !found {
-			return Nil, nil
-		}
-		entry := data.entries[index]
-		return ArrayValue([]Value{entry.key, entry.value}), nil
+		return Nil, nil
 	})
 	class.define("rassoc", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		data, ok := hashDataOf(self)
@@ -230,7 +284,11 @@ func (s *State) installHashLibrary() {
 			return Nil, nil
 		}
 		for _, entry := range data.entries {
-			if valuesEqual(entry.value, args[0]) {
+			equal, err := s.rubyEqual(ctx, entry.value, args[0])
+			if err != nil {
+				return Nil, err
+			}
+			if equal {
 				return ArrayValue([]Value{entry.key, entry.value}), nil
 			}
 		}
@@ -319,6 +377,34 @@ func (s *State) installHashLibrary() {
 
 func (s *State) installStringLibrary() {
 	class := s.StringClass
+	class.define("==", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 || args[0].Kind() == KindSymbol {
+			return False, nil
+		}
+		left, ok := stringPayload(self)
+		if !ok {
+			return False, nil
+		}
+		right, ok := stringPayload(args[0])
+		if !ok {
+			return False, nil
+		}
+		return BoolValue(left == right), nil
+	})
+	class.define("!=", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 || args[0].Kind() == KindSymbol {
+			return True, nil
+		}
+		left, ok := stringPayload(self)
+		if !ok {
+			return True, nil
+		}
+		right, ok := stringPayload(args[0])
+		if !ok {
+			return True, nil
+		}
+		return BoolValue(left != right), nil
+	})
 	class.define("empty?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return BoolValue(self.String() == ""), nil
 	})
@@ -1582,7 +1668,11 @@ func (s *State) hashValueMethod(ctx context.Context, self Value, args []Value, k
 		return False, nil
 	}
 	for _, entry := range hashEntries(self) {
-		if valuesEqual(entry.value, args[0]) {
+		equal, err := s.rubyEqual(ctx, args[0], entry.value)
+		if err != nil {
+			return Nil, err
+		}
+		if equal {
 			return True, nil
 		}
 	}
@@ -1593,9 +1683,17 @@ func (s *State) hashEachMethod(ctx context.Context, self Value, args []Value, kw
 	if block.IsNil() {
 		return s.toEnum(self, "each", nil), nil
 	}
-	for _, entry := range hashEntries(self) {
+	data, ok := hashDataOf(self)
+	if !ok {
+		return self, nil
+	}
+	for i := 0; i < len(data.entries); {
+		entry := data.entries[i]
 		if _, err := s.callHashPairBlock(ctx, block, entry, Nil); err != nil {
 			return Nil, err
+		}
+		if i < len(data.entries) && valuesEqual(data.entries[i].key, entry.key) {
+			i++
 		}
 	}
 	return self, nil
@@ -1605,9 +1703,17 @@ func (s *State) hashEachKeyMethod(ctx context.Context, self Value, args []Value,
 	if block.IsNil() {
 		return s.toEnum(self, "each_key", nil), nil
 	}
-	for _, entry := range hashEntries(self) {
+	data, ok := hashDataOf(self)
+	if !ok {
+		return self, nil
+	}
+	for i := 0; i < len(data.entries); {
+		entry := data.entries[i]
 		if _, err := s.callBlock(ctx, block, []Value{entry.key}, Nil); err != nil {
 			return Nil, err
+		}
+		if i < len(data.entries) && valuesEqual(data.entries[i].key, entry.key) {
+			i++
 		}
 	}
 	return self, nil
@@ -1617,9 +1723,17 @@ func (s *State) hashEachValueMethod(ctx context.Context, self Value, args []Valu
 	if block.IsNil() {
 		return s.toEnum(self, "each_value", nil), nil
 	}
-	for _, entry := range hashEntries(self) {
+	data, ok := hashDataOf(self)
+	if !ok {
+		return self, nil
+	}
+	for i := 0; i < len(data.entries); {
+		entry := data.entries[i]
 		if _, err := s.callBlock(ctx, block, []Value{entry.value}, Nil); err != nil {
 			return Nil, err
+		}
+		if i < len(data.entries) && valuesEqual(data.entries[i].key, entry.key) {
+			i++
 		}
 	}
 	return self, nil
@@ -2621,6 +2735,55 @@ func eqlValuesSeen(left, right Value, seen map[eqlPair]bool) bool {
 		return left.obj == right.obj
 	}
 	return false
+}
+
+func (s *State) arrayEqualMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return False, nil
+	}
+	other, ok := arrayDataOf(args[0])
+	if !ok {
+		return False, nil
+	}
+	values := arrayValues(self)
+	if len(values) != len(other.values) {
+		return False, nil
+	}
+	if self.obj != nil && args[0].obj != nil {
+		if self.obj == args[0].obj {
+			return True, nil
+		}
+		pair := objectPair{left: self.obj, right: args[0].obj}
+		if s.eqSeen[pair] {
+			return True, nil
+		}
+		s.eqSeen[pair] = true
+		defer delete(s.eqSeen, pair)
+	}
+	for i := range values {
+		equal, err := s.rubyEqual(ctx, values[i], other.values[i])
+		if err != nil {
+			return Nil, err
+		}
+		if !equal {
+			return False, nil
+		}
+	}
+	return True, nil
+}
+
+func (s *State) rubyEql(ctx context.Context, left, right Value) (bool, error) {
+	if left.obj != nil && right.obj != nil && left.obj == right.obj {
+		return true, nil
+	}
+	if left.Kind() != KindObject || right.Kind() != KindObject {
+		return eqlValues(left, right), nil
+	}
+	result, err := s.call(ctx, left, "eql?", []Value{right}, Nil, Nil)
+	if err != nil {
+		return false, err
+	}
+	return result.IsTruthy(), nil
 }
 
 func (s *State) rubyEqual(ctx context.Context, left, right Value) (bool, error) {

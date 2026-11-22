@@ -108,6 +108,7 @@ type State struct {
 
 	arrayIndexBuiltin *method
 	arraySetBuiltin   *method
+	eqSeen            map[objectPair]bool
 
 	frames            []callFrame
 	callDepth         int
@@ -152,6 +153,7 @@ func New(opts Options) *State {
 	}
 
 	s := &State{
+		eqSeen:    make(map[objectPair]bool),
 		globals:   make(map[string]Value),
 		constants: make(map[string]Value),
 		stdin:     stdin,
@@ -1319,6 +1321,9 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 		}
 		instance = ObjectValue(&Object{class: class, data: &arrayData{values: values}})
 	case s.classIsSubclass(class, s.HashClass):
+		if len(args) > 1 || (!block.IsNil() && len(args) > 0) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+		}
 		data := &hashData{}
 		if !block.IsNil() {
 			data.defaultProc = block
@@ -2284,6 +2289,13 @@ func hashLookup(data *hashData, key Value) (int, bool) {
 	return -1, false
 }
 
+func hashPrimitiveEqual(left, right Value) bool {
+	if left.Kind() != right.Kind() {
+		return false
+	}
+	return valuesEqual(left, right)
+}
+
 func identityEqual(left, right Value) bool {
 	if left.Kind() != right.Kind() {
 		return false
@@ -2315,6 +2327,20 @@ func (s *State) hashCompare(ctx context.Context, left, right Value, strict bool)
 	if !leftOK || !rightOK || len(leftData.entries) != len(rightData.entries) {
 		return false, nil
 	}
+	if leftData.identity != rightData.identity && len(leftData.entries) > 0 {
+		return false, nil
+	}
+	if left.obj != nil && right.obj != nil {
+		if left.obj == right.obj {
+			return true, nil
+		}
+		pair := objectPair{left: left.obj, right: right.obj}
+		if s.eqSeen[pair] {
+			return true, nil
+		}
+		s.eqSeen[pair] = true
+		defer delete(s.eqSeen, pair)
+	}
 	for _, entry := range leftData.entries {
 		index, found, err := s.hashLookupKey(ctx, rightData, entry.key)
 		if err != nil {
@@ -2324,11 +2350,16 @@ func (s *State) hashCompare(ctx context.Context, left, right Value, strict bool)
 			return false, nil
 		}
 		other := rightData.entries[index].value
+		var equal bool
 		if strict {
-			if !eqlValues(entry.value, other) {
-				return false, nil
-			}
-		} else if !valuesEqual(entry.value, other) {
+			equal, err = s.rubyEql(ctx, entry.value, other)
+		} else {
+			equal, err = s.rubyEqual(ctx, entry.value, other)
+		}
+		if err != nil {
+			return false, err
+		}
+		if !equal {
 			return false, nil
 		}
 	}
@@ -2353,7 +2384,7 @@ func (s *State) hashLookupObject(ctx context.Context, data *hashData, key Value)
 		if storedHash != keyHash {
 			continue
 		}
-		equal, err := s.call(ctx, stored, "eql?", []Value{key}, Nil, Nil)
+		equal, err := s.call(ctx, key, "eql?", []Value{stored}, Nil, Nil)
 		if err != nil {
 			return -1, false, err
 		}
@@ -2387,7 +2418,7 @@ func (s *State) hashLookupKey(ctx context.Context, data *hashData, key Value) (i
 			if index < 0 {
 				return -1, false, nil
 			}
-			if valuesEqual(data.entries[index].key, key) {
+			if hashPrimitiveEqual(data.entries[index].key, key) {
 				return int(index), true, nil
 			}
 			position = (position + 1) & mask
@@ -2437,10 +2468,12 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 			if err := s.checkHashSize(len(data.entries) + 1); err != nil {
 				return Nil, err
 			}
-			if index.Kind() == KindString {
-				copied := StringValue(index.String())
-				copied.obj.frozen = true
-				index = copied
+			if index.Kind() == KindString && !data.identity {
+				if index.obj == nil || !index.obj.frozen {
+					copied := StringValue(index.String())
+					copied.obj.frozen = true
+					index = copied
+				}
 			}
 			ensureHashIndex(data)
 			data.entries = appendHashEntry(data.entries, hashEntry{key: index, value: value})
@@ -2704,7 +2737,7 @@ func copyObjectIvars(obj *Object) map[string]Value {
 }
 
 func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if self.obj == nil {
+	if self.obj == nil || self.Kind() == KindSymbol || self.Kind() == KindBigInt {
 		return self, nil
 	}
 	var duplicate Value

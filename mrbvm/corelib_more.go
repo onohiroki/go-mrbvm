@@ -1063,6 +1063,7 @@ func (s *State) hashSelectMethod(ctx context.Context, self Value, args []Value, 
 	if block.IsNil() {
 		return s.toEnum(self, "select", nil), nil
 	}
+	source, sourceOK := hashDataOf(self)
 	var result []hashEntry
 	for _, entry := range hashEntries(self) {
 		matched := true
@@ -1077,13 +1078,14 @@ func (s *State) hashSelectMethod(ctx context.Context, self Value, args []Value, 
 			result = append(result, entry)
 		}
 	}
-	return HashValue(result), nil
+	return hashResultLike(self, source, sourceOK, result), nil
 }
 
 func (s *State) hashRejectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
 		return s.toEnum(self, "reject", nil), nil
 	}
+	source, sourceOK := hashDataOf(self)
 	var result []hashEntry
 	for _, entry := range hashEntries(self) {
 		matched := false
@@ -1098,7 +1100,7 @@ func (s *State) hashRejectMethod(ctx context.Context, self Value, args []Value, 
 			result = append(result, entry)
 		}
 	}
-	return HashValue(result), nil
+	return hashResultLike(self, source, sourceOK, result), nil
 }
 
 func (s *State) hashFindMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1290,6 +1292,16 @@ func (s *State) hashRejectBangMethod(ctx context.Context, self Value, args []Val
 	data.index = nil
 	data.indexBuilt = 0
 	return self, nil
+}
+
+func hashResultLike(self Value, source *hashData, sourceOK bool, entries []hashEntry) Value {
+	result := HashValue(entries)
+	if sourceOK && result.obj != nil {
+		if data, ok := result.obj.data.(*hashData); ok {
+			data.identity = source.identity
+		}
+	}
+	return result
 }
 
 func hashEntriesEquivalent(left, right []hashEntry) bool {
