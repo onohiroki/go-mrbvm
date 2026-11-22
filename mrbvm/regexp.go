@@ -49,6 +49,22 @@ func (s *State) installRegexpClass() {
 		}
 		return Nil, nil
 	})
+	class.define("options", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if data, ok := regexpOf(self); ok {
+			options := int64(0)
+			if strings.Contains(data.flags, "i") {
+				options |= 1
+			}
+			if strings.Contains(data.flags, "x") {
+				options |= 2
+			}
+			if strings.Contains(data.flags, "m") {
+				options |= 4
+			}
+			return IntValue(options), nil
+		}
+		return IntValue(0), nil
+	})
 	class.define("match?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 {
 			return False, nil
@@ -99,6 +115,9 @@ func (s *State) regexpCompileMethod(ctx context.Context, self Value, args []Valu
 		flags = args[1].ToS()
 	}
 	pattern := source
+	if strings.Contains(flags, "x") {
+		pattern = extendedPattern(pattern)
+	}
 	if strings.Contains(flags, "i") {
 		pattern = "(?i)" + pattern
 	}
@@ -110,6 +129,47 @@ func (s *State) regexpCompileMethod(ctx context.Context, self Value, args []Valu
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.RegexpErrorClass, err.Error())}
 	}
 	return ObjectValue(&Object{class: s.RegexpClass, data: &regexpData{regexp: compiled, source: source, flags: flags}}), nil
+}
+
+func extendedPattern(pattern string) string {
+	var builder strings.Builder
+	inClass := false
+	escaped := false
+	comment := false
+	for _, char := range pattern {
+		if comment {
+			if char == '\n' {
+				comment = false
+			}
+			continue
+		}
+		if escaped {
+			builder.WriteRune(char)
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			builder.WriteRune(char)
+			escaped = true
+			continue
+		}
+		if char == '[' {
+			inClass = true
+		} else if char == ']' {
+			inClass = false
+		}
+		if !inClass {
+			if char == '#' {
+				comment = true
+				continue
+			}
+			if char == ' ' || char == '\t' || char == '\n' || char == '\r' {
+				continue
+			}
+		}
+		builder.WriteRune(char)
+	}
+	return builder.String()
 }
 
 func regexpOf(value Value) (*regexpData, bool) {
@@ -184,6 +244,33 @@ func (s *State) installMatchDataClass() {
 			values[i] = StringValue(group)
 		}
 		return ArrayValue(values), nil
+	})
+	class.define("names", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := matchDataOf(self)
+		if !ok {
+			return ArrayValue(nil), nil
+		}
+		var values []Value
+		for _, name := range data.regexp.SubexpNames() {
+			if name != "" {
+				values = append(values, SymbolValue(name))
+			}
+		}
+		return ArrayValue(values), nil
+	})
+	class.define("named_captures", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := matchDataOf(self)
+		if !ok {
+			return HashValue(nil), nil
+		}
+		var entries []hashEntry
+		for index, name := range data.regexp.SubexpNames() {
+			if name == "" || index >= len(data.groups) {
+				continue
+			}
+			entries = append(entries, hashEntry{key: StringValue(name), value: StringValue(data.groups[index])})
+		}
+		return HashValue(entries), nil
 	})
 	class.define("captures", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		data, ok := matchDataOf(self)
