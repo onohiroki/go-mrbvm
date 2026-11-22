@@ -285,16 +285,25 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 
 		case bytecode.OpSCLASS:
 			a := int(in.Operands[0])
-			class, ok := s.asClass(regs[a])
-			if !ok {
-				return Nil, fmt.Errorf("mrbvm: SCLASS on non-class is not supported yet")
+			if class, ok := s.asClass(regs[a]); ok {
+				if class.singleton == nil {
+					class.singleton = newClass(class.name, nil)
+					class.singleton.singletonOf = class
+					s.ensureClassObject(class.singleton)
+				}
+				regs[a] = s.classValue(class.singleton)
+				break
 			}
-			if class.singleton == nil {
-				class.singleton = newClass(class.name, nil)
-				class.singleton.singletonOf = class
-				s.ensureClassObject(class.singleton)
+			if regs[a].obj == nil {
+				return Nil, fmt.Errorf("mrbvm: SCLASS on an immediate value is not supported")
 			}
-			regs[a] = s.classValue(class.singleton)
+			obj := regs[a].obj
+			if obj.singleton == nil {
+				original := s.classOf(regs[a])
+				obj.singleton = newClass("#<Class>", original)
+				s.ensureClassObject(obj.singleton)
+			}
+			regs[a] = s.classValue(obj.singleton)
 		case bytecode.OpTCLASS:
 			a := int(in.Operands[0])
 			if targetClass == nil {
@@ -979,11 +988,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if regs[a+1].IsNil() {
 				break
 			}
-			src, ok := regs[a+1].obj.data.(*arrayData)
-			if !ok {
-				return Nil, fmt.Errorf("mrbvm: ARYCAT source is not an array")
+			if src, ok := regs[a+1].obj.data.(*arrayData); ok {
+				dst.values = append(dst.values, src.values...)
+			} else {
+				dst.values = append(dst.values, regs[a+1])
 			}
-			dst.values = append(dst.values, src.values...)
 		case bytecode.OpARYSPLAT:
 			a := int(in.Operands[0])
 			if data, ok := regs[a].obj.data.(*arrayData); ok {

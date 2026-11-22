@@ -30,9 +30,10 @@ type rangeData struct {
 
 // Object is the base representation of a heap-allocated Ruby object.
 type Object struct {
-	class *Class
-	data  any
-	ivars map[string]Value
+	class     *Class
+	singleton *Class
+	data      any
+	ivars     map[string]Value
 }
 
 func (o *Object) ivar(name string) Value {
@@ -60,6 +61,7 @@ type Class struct {
 	object       *Object
 	singletonOf  *Class
 	singleton    *Class
+	included     []*Class
 }
 
 type method struct {
@@ -244,7 +246,13 @@ func (s *State) asClass(v Value) (*Class, bool) {
 }
 
 func (s *State) classOf(v Value) *Class {
+	if v.obj != nil && v.obj.singleton != nil {
+		return v.obj.singleton
+	}
 	if v.kind == KindObject && v.obj != nil {
+		if v.obj.class != nil {
+			return v.obj.class
+		}
 		switch v.obj.data.(type) {
 		case *arrayData:
 			return s.ArrayClass
@@ -258,9 +266,6 @@ func (s *State) classOf(v Value) *Class {
 			return s.ProcClass
 		case *enumeratorData:
 			return s.EnumeratorClass
-		}
-		if v.obj.class != nil {
-			return v.obj.class
 		}
 	}
 	switch v.kind {

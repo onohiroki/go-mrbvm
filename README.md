@@ -36,9 +36,12 @@ compiler and the reference implementation is always C mruby 4.0.0.
   and friends, including `next`, `peek`, `rewind`, `size`, and `with_index`
 - a native `Comparable` module, `Symbol#to_proc`, and working
   `attr_reader` / `attr_writer` / `attr_accessor`
+- singleton classes for arbitrary objects (`class << obj`), Array class
+  constructors, subclass arrays, `Module#include?`, splat rescue, and
+  Float/Range array indexing
 - `cmd/vmcompat` for differential runs against the reference mruby
 
-The following 34 shared conformance cases pass with bytecode from both
+The following 35 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
 `advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
@@ -49,7 +52,7 @@ The following 34 shared conformance cases pass with bytecode from both
 `for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,
 `modern_syntax`, `multiple_assignment`, `operator_assignment`,
 `parameters`, `pattern_matching`, `patterns_extended`, `retry_redo`,
-`runtime_edges`, `scalars`, `semantic_edges`, `splat`.
+`runtime_edges`, `scalars`, `semantic_edges`, `singleton_classes`, `splat`.
 
 VM-3 leftovers are backtraces and richer exception introspection. VM-4 has
 started with the native core library and the differential runner; the next

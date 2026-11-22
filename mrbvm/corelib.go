@@ -549,18 +549,7 @@ func (s *State) arrayJoinMethod(ctx context.Context, self Value, args []Value, k
 	if len(args) > 0 && !args[0].IsNil() {
 		separator = args[0].ToS()
 	}
-	values := arrayValues(self)
-	parts := make([]string, len(values))
-	for i, value := range values {
-		if value.obj != nil {
-			if arr, ok := value.obj.data.(*arrayData); ok && len(args) == 0 {
-				parts[i] = ArrayValue(arr.values).Inspect()
-				continue
-			}
-		}
-		parts[i] = value.ToS()
-	}
-	return StringValue(strings.Join(parts, separator)), nil
+	return StringValue(joinArrayValues(arrayValues(self), separator)), nil
 }
 
 func (s *State) arrayDeleteAtMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -732,29 +721,7 @@ func (s *State) arrayEachIndexMethod(ctx context.Context, self Value, args []Val
 }
 
 func (s *State) arraySliceMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) == 1 {
-		return s.index(ctx, self, args[0])
-	}
-	if len(args) == 2 && args[0].Kind() == KindInt && args[1].Kind() == KindInt {
-		start := int(args[0].Int())
-		length := int(args[1].Int())
-		values := arrayValues(self)
-		if start < 0 {
-			start += len(values)
-		}
-		if start < 0 || start > len(values) {
-			return Nil, nil
-		}
-		end := start + length
-		if end > len(values) {
-			end = len(values)
-		}
-		if end < start {
-			end = start
-		}
-		return ArrayValue(append([]Value(nil), values[start:end]...)), nil
-	}
-	return Nil, nil
+	return s.arrayIndexMethod(ctx, self, args, kw, block)
 }
 
 func (s *State) arraySelectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {

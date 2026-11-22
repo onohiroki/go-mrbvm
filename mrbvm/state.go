@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 )
@@ -44,6 +45,8 @@ type State struct {
 	IndexErrorClass             *Class
 	StopIterationClass          *Class
 	KeyErrorClass               *Class
+	NotImplementedErrorClass    *Class
+	RangeErrorClass             *Class
 
 	TopSelf Value
 
@@ -99,6 +102,8 @@ func New(opts Options) *State {
 	s.IndexErrorClass = newClass("IndexError", s.StandardErrorClass)
 	s.StopIterationClass = newClass("StopIteration", s.IndexErrorClass)
 	s.KeyErrorClass = newClass("KeyError", s.IndexErrorClass)
+	s.NotImplementedErrorClass = newClass("NotImplementedError", s.StandardErrorClass)
+	s.RangeErrorClass = newClass("RangeError", s.StandardErrorClass)
 
 	for _, class := range []*Class{
 		s.ObjectClass, s.ClassClass, s.NumericClass, s.IntegerClass, s.FloatClass,
@@ -110,6 +115,7 @@ func New(opts Options) *State {
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
 		s.NoMatchingPatternErrorClass,
 		s.IndexErrorClass, s.StopIterationClass, s.KeyErrorClass,
+		s.NotImplementedErrorClass, s.RangeErrorClass,
 	} {
 		s.ensureClassObject(class)
 	}
@@ -118,6 +124,7 @@ func New(opts Options) *State {
 	s.ClassClass.define("superclass", s.classSuperclassMethod)
 	s.ClassClass.define("name", s.classNameMethod)
 	s.ClassClass.define("include", s.classIncludeMethod)
+	s.ClassClass.define("include?", s.classIncludePredicateMethod)
 	s.ClassClass.define("===", s.classCaseEqMethod)
 	s.ClassClass.define("attr_reader", s.classAttrReaderMethod)
 	s.ClassClass.define("attr", s.classAttrReaderMethod)
@@ -147,12 +154,16 @@ func New(opts Options) *State {
 		"IndexError":             s.IndexErrorClass,
 		"StopIteration":          s.StopIterationClass,
 		"KeyError":               s.KeyErrorClass,
+		"NotImplementedError":    s.NotImplementedErrorClass,
+		"RangeError":             s.RangeErrorClass,
 	} {
 		value := s.classValue(class)
 		s.constants[name] = value
 		s.ObjectClass.constants[name] = value
 	}
 
+	s.FloatClass.constants["INFINITY"] = FloatValue(math.Inf(1))
+	s.FloatClass.constants["NAN"] = FloatValue(math.NaN())
 	s.TopSelf = ObjectValue(&Object{class: s.ObjectClass})
 	s.ObjectClass.define("puts", s.kernelPuts)
 	s.ObjectClass.define("print", s.kernelPrint)
@@ -162,8 +173,17 @@ func New(opts Options) *State {
 	s.ExceptionClass.define("message", s.exceptionMessageMethod)
 	s.ExceptionClass.define("to_s", s.exceptionMessageMethod)
 	s.ExceptionClass.define("inspect", s.exceptionInspectMethod)
+	s.ExceptionClass.define("backtrace", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return ArrayValue(nil), nil
+	})
+	s.ExceptionClass.define("cause", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return Nil, nil
+	})
 
 	s.ArrayClass.define("[]", s.arrayIndexMethod)
+	s.ArrayClass.define("+", s.arrayPlusMethod)
+	s.ArrayClass.define("*", s.arrayRepeatMethod)
+	s.ArrayClass.classMethods["[]"] = &method{owner: s.ArrayClass, name: "[]", native: s.arrayClassBracketMethod}
 	s.ArrayClass.define("length", s.arrayLengthMethod)
 	s.ArrayClass.define("size", s.arrayLengthMethod)
 	s.ArrayClass.define("to_a", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -288,6 +308,86 @@ func includeModule(class, module *Class) {
 			class.constants[name] = value
 		}
 	}
+	found := false
+	for _, included := range class.included {
+		if included == module {
+			found = true
+			break
+		}
+	}
+	if !found {
+		class.included = append(class.included, module)
+	}
+}
+
+func (s *State) classIncludePredicateMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	class, ok := s.asClass(self)
+	if !ok || len(args) != 1 {
+		return False, nil
+	}
+	module, ok := s.asClass(args[0])
+	if !ok {
+		return False, nil
+	}
+	for current := class; current != nil; current = current.super {
+		for _, included := range current.included {
+			if included == module {
+				return True, nil
+			}
+		}
+	}
+	return False, nil
+}
+
+func (s *State) arrayClassBracketMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	values := append([]Value(nil), args...)
+	class, ok := s.asClass(self)
+	if ok && class != s.ArrayClass {
+		return ObjectValue(&Object{class: class, data: &arrayData{values: values}}), nil
+	}
+	return ArrayValue(values), nil
+}
+
+func (s *State) arrayPlusMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "Array#+ expects one argument")}
+	}
+	values := append([]Value(nil), arrayValues(self)...)
+	values = append(values, arrayValues(args[0])...)
+	return ArrayValue(values), nil
+}
+
+func (s *State) arrayRepeatMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "Array#* expects one argument")}
+	}
+	values := arrayValues(self)
+	if args[0].Kind() == KindInt {
+		count := args[0].Int()
+		if count < 0 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "negative argument")}
+		}
+		result := make([]Value, 0, len(values)*int(count))
+		for i := int64(0); i < count; i++ {
+			result = append(result, values...)
+		}
+		return ArrayValue(result), nil
+	}
+	return StringValue(joinArrayValues(values, args[0].ToS())), nil
+}
+
+func joinArrayValues(values []Value, separator string) string {
+	var parts []string
+	for _, value := range values {
+		if value.obj != nil {
+			if data, ok := value.obj.data.(*arrayData); ok {
+				parts = append(parts, joinArrayValues(data.values, separator))
+				continue
+			}
+		}
+		parts = append(parts, value.ToS())
+	}
+	return strings.Join(parts, separator)
 }
 
 func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -369,6 +469,16 @@ func (s *State) classIncludeMethod(ctx context.Context, self Value, args []Value
 			class.methods[name] = m
 		}
 	}
+	found := false
+	for _, included := range class.included {
+		if included == module {
+			found = true
+			break
+		}
+	}
+	if !found {
+		class.included = append(class.included, module)
+	}
 	for name, value := range module.constants {
 		if _, exists := class.constants[name]; !exists {
 			class.constants[name] = value
@@ -390,10 +500,10 @@ func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
 					return sliceArray(data.values, rangeIndex), nil
 				}
 			}
-			if index.Kind() != KindInt {
-				return Nil, fmt.Errorf("mrbvm: array index must be an integer")
+			pos, err := s.indexInteger(index)
+			if err != nil {
+				return Nil, err
 			}
-			pos := int(index.Int())
 			if pos < 0 {
 				pos += len(data.values)
 			}
@@ -468,11 +578,61 @@ func sliceArray(values []Value, data *rangeData) Value {
 	return ArrayValue(result)
 }
 
-func (s *State) arrayIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) != 1 {
-		return Nil, fmt.Errorf("mrbvm: Array#[] expects one argument")
+func (s *State) indexInteger(index Value) (int, error) {
+	switch index.Kind() {
+	case KindInt:
+		return int(index.Int()), nil
+	case KindFloat:
+		f := index.Float()
+		if math.IsNaN(f) || math.IsInf(f, 0) || f >= math.MaxInt64 || f <= math.MinInt64 {
+			return 0, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "float out of range")}
+		}
+		return int(f), nil
+	default:
+		return 0, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "index must be an integer")}
 	}
-	return s.index(ctx, self, args[0])
+}
+
+func (s *State) arrayIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	switch len(args) {
+	case 0:
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments (given 0, expected 1..2)")}
+	case 1:
+		return s.index(ctx, self, args[0])
+	case 2:
+		start, err := s.indexInteger(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		length, err := s.indexInteger(args[1])
+		if err != nil {
+			return Nil, err
+		}
+		return s.arraySliceAt(self, start, length)
+	default:
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, fmt.Sprintf("wrong number of arguments (given %d, expected 1..2)", len(args)))}
+	}
+}
+
+func (s *State) arraySliceAt(self Value, start, length int) (Value, error) {
+	values := arrayValues(self)
+	if length < 0 {
+		return Nil, nil
+	}
+	if start < 0 {
+		start += len(values)
+	}
+	if start < 0 || start > len(values) {
+		return Nil, nil
+	}
+	end := start + length
+	if end > len(values) {
+		end = len(values)
+	}
+	if end < start {
+		end = start
+	}
+	return ArrayValue(append([]Value(nil), values[start:end]...)), nil
 }
 
 func (s *State) hashIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -728,10 +888,10 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 					return sliceArray(data.values, rangeIndex), nil
 				}
 			}
-			if index.Kind() != KindInt {
-				return Nil, fmt.Errorf("mrbvm: array index must be an integer")
+			pos, err := s.indexInteger(index)
+			if err != nil {
+				return Nil, err
 			}
-			pos := int(index.Int())
 			if pos < 0 {
 				pos += len(data.values)
 			}

@@ -50,6 +50,7 @@ func TestConformance(t *testing.T) {
 		"runtime_edges",
 		"scalars",
 		"semantic_edges",
+		"singleton_classes",
 		"splat",
 	}
 

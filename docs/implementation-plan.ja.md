@@ -384,7 +384,11 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - ネイティブ `Comparable` モジュールを追加し、ユーザー定義クラスの
     `<` / `<=` / `==` / `>` / `>=` / `between?` / `clamp` を実装
   - `Symbol#to_proc`、`&:symbol` ブロック、`attr_reader` の ivar 参照を修正
+  - 任意オブジェクトの特異クラス（`class << obj`）、`Array.[]`、
+    配列サブクラス、`Module#include?`、rescue splat、Float/Range 添字、
+    `RangeError` / `NotImplementedError`、`Exception#backtrace` を追加
+  - 公式 `mruby/test/t/array.rb` を駆動に不足点を洗い出し
   - `core_library` / `core_library_extended` / `enumerable` /
-    `enumerator` / `comparable` conformance を追加し、34 ケースが
-    両コンパイラで成功
+    `enumerator` / `comparable` / `singleton_classes` conformance を
+    追加し、35 ケースが両コンパイラで成功
   - 次は mrblib のロードと `Enumerator`
