@@ -629,7 +629,7 @@ func (s *State) hashMapMethod(ctx context.Context, self Value, args []Value, kw 
 			result = append(result, ArrayValue([]Value{entry.key, entry.value}))
 			continue
 		}
-		value, err := s.callBlock2(ctx, block, entry.key, entry.value, Nil)
+		value, err := s.callHashPairBlock(ctx, block, entry, Nil)
 		if err != nil {
 			return Nil, err
 		}
@@ -646,7 +646,7 @@ func (s *State) hashSelectMethod(ctx context.Context, self Value, args []Value, 
 	for _, entry := range hashEntries(self) {
 		matched := true
 		if !block.IsNil() {
-			match, err := s.callBlock2(ctx, block, entry.key, entry.value, Nil)
+			match, err := s.callHashPairBlock(ctx, block, entry, Nil)
 			if err != nil {
 				return Nil, err
 			}
@@ -667,7 +667,7 @@ func (s *State) hashRejectMethod(ctx context.Context, self Value, args []Value, 
 	for _, entry := range hashEntries(self) {
 		matched := false
 		if !block.IsNil() {
-			match, err := s.callBlock2(ctx, block, entry.key, entry.value, Nil)
+			match, err := s.callHashPairBlock(ctx, block, entry, Nil)
 			if err != nil {
 				return Nil, err
 			}
@@ -685,7 +685,7 @@ func (s *State) hashFindMethod(ctx context.Context, self Value, args []Value, kw
 		return s.toEnum(self, "find", nil), nil
 	}
 	for _, entry := range hashEntries(self) {
-		match, err := s.callBlock2(ctx, block, entry.key, entry.value, Nil)
+		match, err := s.callHashPairBlock(ctx, block, entry, Nil)
 		if err != nil {
 			return Nil, err
 		}
@@ -709,7 +709,7 @@ func (s *State) hashSortByMethod(ctx context.Context, self Value, args []Value, 
 	for i, entry := range entries {
 		key := ArrayValue([]Value{entry.key, entry.value})
 		if !block.IsNil() {
-			k, err := s.callBlock2(ctx, block, entry.key, entry.value, Nil)
+			k, err := s.callHashPairBlock(ctx, block, entry, Nil)
 			if err != nil {
 				return Nil, err
 			}
@@ -744,7 +744,7 @@ func (s *State) hashGroupByMethod(ctx context.Context, self Value, args []Value,
 	for _, entry := range hashEntries(self) {
 		key := ArrayValue([]Value{entry.key, entry.value})
 		if !block.IsNil() {
-			k, err := s.callBlock2(ctx, block, entry.key, entry.value, Nil)
+			k, err := s.callHashPairBlock(ctx, block, entry, Nil)
 			if err != nil {
 				return Nil, err
 			}
@@ -863,7 +863,7 @@ func (s *State) hashAnyMethod(ctx context.Context, self Value, args []Value, kw 
 	for _, entry := range hashEntries(self) {
 		matched := true
 		if !block.IsNil() {
-			match, err := s.callBlock2(ctx, block, entry.key, entry.value, Nil)
+			match, err := s.callHashPairBlock(ctx, block, entry, Nil)
 			if err != nil {
 				return Nil, err
 			}
@@ -880,7 +880,7 @@ func (s *State) hashAllMethod(ctx context.Context, self Value, args []Value, kw 
 	for _, entry := range hashEntries(self) {
 		matched := true
 		if !block.IsNil() {
-			match, err := s.callBlock2(ctx, block, entry.key, entry.value, Nil)
+			match, err := s.callHashPairBlock(ctx, block, entry, Nil)
 			if err != nil {
 				return Nil, err
 			}

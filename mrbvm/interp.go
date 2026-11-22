@@ -2325,7 +2325,7 @@ func builtinComparable(v Value) bool {
 		return true
 	}
 	switch v.obj.data.(type) {
-	case *arrayData, *hashData, *rangeData, *stringData:
+	case *arrayData, *rangeData, *stringData:
 		return true
 	}
 	return false

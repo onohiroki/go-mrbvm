@@ -962,7 +962,9 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 		instance = ObjectValue(&Object{class: class, data: &arrayData{values: values}})
 	case s.classIsSubclass(class, s.HashClass):
 		data := &hashData{}
-		if len(args) > 0 {
+		if !block.IsNil() {
+			data.defaultProc = block
+		} else if len(args) > 0 {
 			data.defaultValue = args[0]
 		}
 		instance = ObjectValue(&Object{class: class, data: data})
@@ -1188,10 +1190,12 @@ func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
 			}
 			return data.values[pos], nil
 		case *hashData:
-			if i, ok := hashLookup(data, index); ok {
+			if i, ok, err := s.hashLookupKey(ctx, data, index); err != nil {
+				return Nil, err
+			} else if ok {
 				return data.entries[i].value, nil
 			}
-			return data.defaultValue, nil
+			return s.call(ctx, recv, "default", []Value{index}, Nil, Nil)
 		case *stringData:
 			if index.Kind() == KindObject && index.obj != nil {
 				if rangeIndex, ok := index.obj.data.(*rangeData); ok {
@@ -1382,6 +1386,14 @@ func hashDeleteKey(hash Value, name string) (Value, bool) {
 	return Nil, false
 }
 
+func hashDataOf(self Value) (*hashData, bool) {
+	if self.Kind() != KindObject || self.obj == nil {
+		return nil, false
+	}
+	data, ok := self.obj.data.(*hashData)
+	return data, ok
+}
+
 func (s *State) hashEntries(self Value) ([]hashEntry, bool) {
 	if self.Kind() != KindObject || self.obj == nil {
 		return nil, false
@@ -1411,21 +1423,23 @@ func (s *State) hashDeconstructKeysMethod(ctx context.Context, self Value, args 
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: deconstruct_keys expects an array or nil")
 	}
+	data, ok := hashDataOf(self)
+	if !ok {
+		return HashValue(nil), nil
+	}
 	result := make([]hashEntry, 0, len(keys.values))
 	for _, key := range keys.values {
-		for _, entry := range entries {
-			if valuesEqual(entry.key, key) {
-				result = append(result, entry)
-				break
-			}
+		if index, found, err := s.hashLookupKey(ctx, data, key); err != nil {
+			return Nil, err
+		} else if found {
+			result = append(result, data.entries[index])
 		}
 	}
 	return HashValue(result), nil
 }
 
 func (s *State) hashPatValuesMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	entries, ok := s.hashEntries(self)
-	if !ok {
+	if _, ok := s.hashEntries(self); !ok {
 		return Nil, fmt.Errorf("mrbvm: not a hash")
 	}
 	if len(args) != 1 || args[0].Kind() != KindObject || args[0].obj == nil {
@@ -1435,19 +1449,20 @@ func (s *State) hashPatValuesMethod(ctx context.Context, self Value, args []Valu
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: __pat_values expects an array")
 	}
+	data, ok := hashDataOf(self)
+	if !ok {
+		return False, nil
+	}
 	values := make([]Value, 0, len(keys.values))
 	for _, key := range keys.values {
-		found := false
-		for _, entry := range entries {
-			if valuesEqual(entry.key, key) {
-				values = append(values, entry.value)
-				found = true
-				break
-			}
+		index, found, err := s.hashLookupKey(ctx, data, key)
+		if err != nil {
+			return Nil, err
 		}
 		if !found {
 			return False, nil
 		}
+		values = append(values, data.entries[index].value)
 	}
 	return ArrayValue(values), nil
 }
@@ -1468,7 +1483,11 @@ func (s *State) hashExceptMethod(ctx context.Context, self Value, args []Value, 
 	for _, entry := range entries {
 		excluded := false
 		for _, key := range keys.values {
-			if valuesEqual(entry.key, key) {
+			equal, err := s.call(ctx, entry.key, "eql?", []Value{key}, Nil, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			if equal.IsTruthy() {
 				excluded = true
 				break
 			}
@@ -1703,6 +1722,118 @@ func hashLookup(data *hashData, key Value) (int, bool) {
 	return -1, false
 }
 
+func identityEqual(left, right Value) bool {
+	if left.Kind() != right.Kind() {
+		return false
+	}
+	switch left.Kind() {
+	case KindObject, KindString, KindBigInt:
+		return left.obj == right.obj
+	case KindSymbol:
+		return left.String() == right.String()
+	default:
+		return valuesEqual(left, right)
+	}
+}
+
+func (s *State) hashCode(ctx context.Context, value Value) (int64, error) {
+	result, err := s.call(ctx, value, "hash", nil, Nil, Nil)
+	if err != nil {
+		return 0, err
+	}
+	if result.Kind() != KindInt {
+		return 0, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "hash must return an Integer")}
+	}
+	return result.Int(), nil
+}
+
+func (s *State) hashCompare(ctx context.Context, left, right Value, strict bool) (bool, error) {
+	leftData, leftOK := hashDataOf(left)
+	rightData, rightOK := hashDataOf(right)
+	if !leftOK || !rightOK || len(leftData.entries) != len(rightData.entries) {
+		return false, nil
+	}
+	for _, entry := range leftData.entries {
+		index, found, err := s.hashLookupKey(ctx, rightData, entry.key)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, nil
+		}
+		other := rightData.entries[index].value
+		if strict {
+			if !eqlValues(entry.value, other) {
+				return false, nil
+			}
+		} else if !valuesEqual(entry.value, other) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *State) hashLookupObject(ctx context.Context, data *hashData, key Value) (int, bool, error) {
+	keyHash, err := s.hashCode(ctx, key)
+	if err != nil {
+		return -1, false, err
+	}
+	limit := len(data.entries)
+	for i := 0; i < limit && i < len(data.entries); i++ {
+		stored := data.entries[i].key
+		if stored.Kind() != KindObject && stored.Kind() != KindBigInt {
+			continue
+		}
+		storedHash, err := s.hashCode(ctx, stored)
+		if err != nil {
+			return -1, false, err
+		}
+		if storedHash != keyHash {
+			continue
+		}
+		equal, err := s.call(ctx, stored, "eql?", []Value{key}, Nil, Nil)
+		if err != nil {
+			return -1, false, err
+		}
+		if equal.IsTruthy() {
+			if i >= len(data.entries) {
+				return -1, false, nil
+			}
+			return i, true, nil
+		}
+	}
+	return -1, false, nil
+}
+
+// hashLookupKey resolves a hash key. Primitive keys use the open-addressed
+// index; object keys call Ruby hash/eql? so user-defined key semantics work.
+func (s *State) hashLookupKey(ctx context.Context, data *hashData, key Value) (int, bool, error) {
+	if data.identity {
+		for i := range data.entries {
+			if identityEqual(data.entries[i].key, key) {
+				return i, true, nil
+			}
+		}
+		return -1, false, nil
+	}
+	if tableKey, ok := indexableHashKey(key); ok {
+		ensureHashIndex(data)
+		mask := len(data.index) - 1
+		position := int(tableKey.hash()) & mask
+		for {
+			index := data.index[position]
+			if index < 0 {
+				return -1, false, nil
+			}
+			if valuesEqual(data.entries[index].key, key) {
+				return int(index), true, nil
+			}
+			position = (position + 1) & mask
+		}
+	}
+	return s.hashLookupObject(ctx, data, key)
+}
+
 func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, error) {
 	if recv.kind == KindObject && recv.obj != nil {
 		switch data := recv.obj.data.(type) {
@@ -1732,12 +1863,19 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 			data.values[pos] = value
 			return value, nil
 		case *hashData:
-			if i, ok := hashLookup(data, index); ok {
+			if i, ok, err := s.hashLookupKey(ctx, data, index); err != nil {
+				return Nil, err
+			} else if ok {
 				data.entries[i].value = value
 				return value, nil
 			}
 			if err := s.checkHashSize(len(data.entries) + 1); err != nil {
 				return Nil, err
+			}
+			if index.Kind() == KindString {
+				copied := StringValue(index.String())
+				copied.obj.frozen = true
+				index = copied
 			}
 			ensureHashIndex(data)
 			data.entries = appendHashEntry(data.entries, hashEntry{key: index, value: value})
@@ -1949,6 +2087,11 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 		duplicate = ArrayValue(append([]Value(nil), data.values...))
 	case *hashData:
 		duplicate = HashValue(append([]hashEntry(nil), data.entries...))
+		if copyData, ok := duplicate.obj.data.(*hashData); ok {
+			copyData.defaultValue = data.defaultValue
+			copyData.defaultProc = data.defaultProc
+			copyData.identity = data.identity
+		}
 	case *rangeData:
 		duplicate = RangeValue(data.low, data.high, data.exclusive)
 	case *exceptionData:
@@ -2430,6 +2573,14 @@ func (s *State) callBlockWithSelf(ctx context.Context, block Value, self Value, 
 
 // callBlock1 invokes a block with one argument without heap-allocating an
 // argument slice for the common case.
+// callHashPairBlock invokes a block for a Hash entry. Hash iteration yields
+// a single [key, value] pair; a block with |k, v| destructures it.
+func (s *State) callHashPairBlock(ctx context.Context, block Value, entry hashEntry, kw Value) (Value, error) {
+	var buffer [1]Value
+	buffer[0] = ArrayValue([]Value{entry.key, entry.value})
+	return s.callBlock(ctx, block, buffer[:], kw)
+}
+
 func (s *State) callBlock1(ctx context.Context, block Value, arg Value, kw Value) (Value, error) {
 	var buffer [1]Value
 	buffer[0] = arg

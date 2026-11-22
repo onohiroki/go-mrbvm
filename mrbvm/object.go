@@ -31,6 +31,9 @@ type hashData struct {
 	// describes so length-changing mutations can trigger a rebuild.
 	index      []int32
 	indexBuilt int
+	// identity selects compare_by_identity semantics for object keys.
+	identity    bool
+	defaultProc Value
 }
 
 type hashKey struct {

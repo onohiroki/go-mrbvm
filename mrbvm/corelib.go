@@ -90,9 +90,6 @@ func (s *State) installArrayLibrary() {
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.Inspect()), nil
 	})
-	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return BoolValue(len(args) == 1 && eqlValues(self, args[0])), nil
-	})
 	class.define("hash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(hashValue(self, map[*Object]bool{})), nil
 	})
@@ -125,10 +122,35 @@ func (s *State) installHashLibrary() {
 	})
 	class.define("fetch", s.hashFetchMethod)
 	class.define("default", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		if self.obj != nil {
-			if data, ok := self.obj.data.(*hashData); ok {
-				return data.defaultValue, nil
+		if len(args) > 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+		}
+		data, ok := hashDataOf(self)
+		if !ok {
+			return Nil, nil
+		}
+		if !data.defaultProc.IsNil() {
+			if len(args) == 0 {
+				return Nil, nil
 			}
+			return s.callBlock(ctx, data.defaultProc, []Value{self, args[0]}, Nil)
+		}
+		return data.defaultValue, nil
+	})
+	class.define("default_proc", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := hashDataOf(self)
+		if !ok || data.defaultProc.IsNil() {
+			return Nil, nil
+		}
+		return data.defaultProc, nil
+	})
+	class.define("default_proc=", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := hashDataOf(self)
+		if ok && len(args) == 1 {
+			data.defaultProc = args[0]
+		}
+		if len(args) == 1 {
+			return args[0], nil
 		}
 		return Nil, nil
 	})
@@ -156,8 +178,113 @@ func (s *State) installHashLibrary() {
 	class.define("to_a", s.hashToAMethod)
 	class.define("entries", s.hashToAMethod)
 	class.define("merge", s.hashMergeMethod)
+	class.define("compare_by_identity", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		data, ok := hashDataOf(self)
+		if !ok {
+			return self, nil
+		}
+		data.identity = true
+		data.index = nil
+		data.indexBuilt = 0
+		return self, nil
+	})
+	class.define("compare_by_identity?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := hashDataOf(self)
+		return BoolValue(ok && data.identity), nil
+	})
+	class.define("rehash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := hashDataOf(self)
+		if ok {
+			data.index = nil
+			data.indexBuilt = 0
+		}
+		return self, nil
+	})
 	class.define("merge!", s.hashMergeBangMethod)
 	class.define("update", s.hashMergeBangMethod)
+	class.define("store", s.hashSetMethod)
+	class.define("assoc", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := hashDataOf(self)
+		if !ok || len(args) != 1 {
+			return Nil, nil
+		}
+		index, found, err := s.hashLookupKey(ctx, data, args[0])
+		if err != nil {
+			return Nil, err
+		}
+		if !found {
+			return Nil, nil
+		}
+		entry := data.entries[index]
+		return ArrayValue([]Value{entry.key, entry.value}), nil
+	})
+	class.define("rassoc", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := hashDataOf(self)
+		if !ok || len(args) != 1 {
+			return Nil, nil
+		}
+		for _, entry := range data.entries {
+			if valuesEqual(entry.value, args[0]) {
+				return ArrayValue([]Value{entry.key, entry.value}), nil
+			}
+		}
+		return Nil, nil
+	})
+	class.define("shift", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		data, ok := hashDataOf(self)
+		if !ok || len(data.entries) == 0 {
+			return Nil, nil
+		}
+		entry := data.entries[0]
+		data.entries = data.entries[1:]
+		data.index = nil
+		data.indexBuilt = 0
+		return ArrayValue([]Value{entry.key, entry.value}), nil
+	})
+	class.define("replace", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "replace expects one argument")}
+		}
+		data, ok := hashDataOf(self)
+		other, otherOK := hashDataOf(args[0])
+		if !ok || !otherOK {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a hash")}
+		}
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		data.entries = append([]hashEntry(nil), other.entries...)
+		data.defaultValue = other.defaultValue
+		data.defaultProc = other.defaultProc
+		data.identity = other.identity
+		data.index = nil
+		data.indexBuilt = 0
+		return self, nil
+	})
+	class.define("clear", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
+		if data, ok := hashDataOf(self); ok {
+			data.entries = nil
+			data.index = nil
+			data.indexBuilt = 0
+		}
+		return self, nil
+	})
+	class.define("==", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return False, nil
+		}
+		equal, err := s.hashCompare(ctx, self, args[0], false)
+		if err != nil {
+			return Nil, err
+		}
+		return BoolValue(equal), nil
+	})
 	class.define("delete", s.hashDeleteMethod)
 	class.define("__delete", s.hashDeleteMethod)
 	class.define("invert", s.hashInvertMethod)
@@ -166,7 +293,14 @@ func (s *State) installHashLibrary() {
 		return StringValue(self.Inspect()), nil
 	})
 	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return BoolValue(len(args) == 1 && eqlValues(self, args[0])), nil
+		if len(args) != 1 {
+			return False, nil
+		}
+		equal, err := s.hashCompare(ctx, self, args[0], true)
+		if err != nil {
+			return Nil, err
+		}
+		return BoolValue(equal), nil
 	})
 	class.define("hash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(hashValue(self, map[*Object]bool{})), nil
@@ -469,7 +603,7 @@ func (s *State) installObjectLibrary() {
 		if len(args) != 1 {
 			return False, nil
 		}
-		if self.Kind() == KindObject && args[0].Kind() == KindObject {
+		if self.obj != nil && args[0].obj != nil {
 			return BoolValue(self.obj == args[0].obj), nil
 		}
 		return BoolValue(valuesEqual(self, args[0])), nil
@@ -512,6 +646,12 @@ func (s *State) installObjectLibrary() {
 			return IntValue(int64(cmp)), nil
 		}
 		return Nil, nil
+	})
+	class.define("__id__", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return IntValue(hashValue(self, map[*Object]bool{})), nil
+	})
+	class.define("object_id", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return IntValue(hashValue(self, map[*Object]bool{})), nil
 	})
 	class.define("send", s.objectSendMethod)
 	class.define("__send__", s.objectSendMethod)
@@ -583,7 +723,14 @@ func (s *State) installRangeLibrary() {
 		return StringValue(self.Inspect()), nil
 	})
 	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return BoolValue(len(args) == 1 && eqlValues(self, args[0])), nil
+		if len(args) != 1 {
+			return False, nil
+		}
+		equal, err := s.hashCompare(ctx, self, args[0], true)
+		if err != nil {
+			return Nil, err
+		}
+		return BoolValue(equal), nil
 	})
 	class.define("hash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(hashValue(self, map[*Object]bool{})), nil
@@ -1343,10 +1490,14 @@ func (s *State) hashFetchMethod(ctx context.Context, self Value, args []Value, k
 	if len(args) < 1 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "fetch expects a key")}
 	}
-	for _, entry := range hashEntries(self) {
-		if valuesEqual(entry.key, args[0]) {
-			return entry.value, nil
-		}
+	data, ok := hashDataOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a hash")}
+	}
+	if index, found, err := s.hashLookupKey(ctx, data, args[0]); err != nil {
+		return Nil, err
+	} else if found {
+		return data.entries[index].value, nil
 	}
 	if len(args) > 1 {
 		return args[1], nil
@@ -1361,12 +1512,15 @@ func (s *State) hashKeyMethod(ctx context.Context, self Value, args []Value, kw 
 	if len(args) != 1 {
 		return False, nil
 	}
-	for _, entry := range hashEntries(self) {
-		if valuesEqual(entry.key, args[0]) {
-			return True, nil
-		}
+	data, ok := hashDataOf(self)
+	if !ok {
+		return False, nil
 	}
-	return False, nil
+	_, found, err := s.hashLookupKey(ctx, data, args[0])
+	if err != nil {
+		return Nil, err
+	}
+	return BoolValue(found), nil
 }
 
 func (s *State) hashValueMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1386,7 +1540,7 @@ func (s *State) hashEachMethod(ctx context.Context, self Value, args []Value, kw
 		return s.toEnum(self, "each", nil), nil
 	}
 	for _, entry := range hashEntries(self) {
-		if _, err := s.callBlock(ctx, block, []Value{entry.key, entry.value}, Nil); err != nil {
+		if _, err := s.callHashPairBlock(ctx, block, entry, Nil); err != nil {
 			return Nil, err
 		}
 	}
@@ -1427,59 +1581,83 @@ func (s *State) hashToAMethod(ctx context.Context, self Value, args []Value, kw 
 }
 
 func (s *State) hashMergeMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	entries := append([]hashEntry(nil), hashEntries(self)...)
+	source, ok := hashDataOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a hash")}
+	}
+	entries := append([]hashEntry(nil), source.entries...)
 	for _, arg := range args {
+		other, ok := hashDataOf(arg)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a hash")}
+		}
 		var err error
-		entries, err = s.mergeHashEntries(ctx, entries, hashEntries(arg), block)
+		entries, err = s.mergeHashEntries(ctx, entries, other, block)
 		if err != nil {
 			return Nil, err
 		}
 	}
-	return HashValue(entries), nil
+	result := HashValue(entries)
+	if result.obj != nil {
+		result.obj.class = self.obj.class
+		result.obj.ivars = copyObjectIvars(self.obj)
+		if data, ok := result.obj.data.(*hashData); ok {
+			data.defaultValue = source.defaultValue
+			data.defaultProc = source.defaultProc
+			data.identity = source.identity
+		}
+	}
+	return result, nil
 }
 
 func (s *State) hashMergeBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if self.obj == nil {
-		return Nil, fmt.Errorf("mrbvm: not a hash")
-	}
-	data, ok := self.obj.data.(*hashData)
+	data, ok := hashDataOf(self)
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a hash")
 	}
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	for _, arg := range args {
-		var err error
-		data.entries, err = s.mergeHashEntries(ctx, data.entries, hashEntries(arg), block)
+		other, ok := hashDataOf(arg)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a hash")}
+		}
+		entries, err := s.mergeHashEntries(ctx, data.entries, other, block)
 		if err != nil {
 			return Nil, err
 		}
+		data.entries = entries
+		data.index = nil
+		data.indexBuilt = 0
 	}
 	return self, nil
 }
 
-func (s *State) mergeHashEntries(ctx context.Context, left, right []hashEntry, block Value) ([]hashEntry, error) {
+func (s *State) mergeHashEntries(ctx context.Context, left []hashEntry, right *hashData, block Value) ([]hashEntry, error) {
 	result := append([]hashEntry(nil), left...)
-	for _, entry := range right {
-		replaced := false
-		for i := range result {
-			if valuesEqual(result[i].key, entry.key) {
-				if !block.IsNil() {
-					value, err := s.callBlock(ctx, block, []Value{entry.key, result[i].value, entry.value}, Nil)
-					if err != nil {
-						return nil, err
-					}
-					result[i].value = value
-				} else {
-					result[i].value = entry.value
+	merged := &hashData{entries: result}
+	for _, entry := range right.entries {
+		index, found, err := s.hashLookupKey(ctx, merged, entry.key)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			if !block.IsNil() {
+				value, err := s.callBlock(ctx, block, []Value{entry.key, merged.entries[index].value, entry.value}, Nil)
+				if err != nil {
+					return nil, err
 				}
-				replaced = true
-				break
+				merged.entries[index].value = value
+			} else {
+				merged.entries[index].value = entry.value
 			}
+			continue
 		}
-		if !replaced {
-			result = append(result, entry)
-		}
+		merged.entries = appendHashEntry(merged.entries, entry)
+		addHashIndex(merged, len(merged.entries)-1)
 	}
-	return result, nil
+	return merged.entries, nil
 }
 
 func (s *State) hashDeleteMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1493,11 +1671,15 @@ func (s *State) hashDeleteMethod(ctx context.Context, self Value, args []Value, 
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: not a hash")
 	}
-	for i, entry := range data.entries {
-		if valuesEqual(entry.key, args[0]) {
-			data.entries = append(data.entries[:i], data.entries[i+1:]...)
-			return entry.value, nil
-		}
+	index, found, err := s.hashLookupKey(ctx, data, args[0])
+	if err != nil {
+		return Nil, err
+	}
+	if found {
+		value := data.entries[index].value
+		data.entries = append(data.entries[:index], data.entries[index+1:]...)
+		data.index = nil
+		return value, nil
 	}
 	if !block.IsNil() {
 		return s.callBlock(ctx, block, []Value{args[0]}, Nil)
@@ -1515,14 +1697,17 @@ func (s *State) hashInvertMethod(ctx context.Context, self Value, args []Value, 
 }
 
 func (s *State) hashValuesAtMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := hashDataOf(self)
+	if !ok {
+		return ArrayValue(nil), nil
+	}
 	values := make([]Value, len(args))
 	for i, key := range args {
 		values[i] = Nil
-		for _, entry := range hashEntries(self) {
-			if valuesEqual(entry.key, key) {
-				values[i] = entry.value
-				break
-			}
+		if index, found, err := s.hashLookupKey(ctx, data, key); err != nil {
+			return Nil, err
+		} else if found {
+			values[i] = data.entries[index].value
 		}
 	}
 	return ArrayValue(values), nil
