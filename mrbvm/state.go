@@ -132,6 +132,7 @@ type State struct {
 	privateMethodCount int
 	protectedCount     int
 	classPrivateCount  int
+	strictDepth        int
 	maxArraySize       int
 	maxHashSize        int
 	maxStringSize      int
@@ -300,6 +301,7 @@ func New(opts Options) *State {
 		if class, ok := s.asClass(self); ok {
 			if len(args) == 0 {
 				class.defaultVisibility = "private"
+				class.moduleFunction = false
 			}
 			for _, arg := range flattenNames(args) {
 				if arg.Kind() != KindString && arg.Kind() != KindSymbol {
@@ -336,6 +338,7 @@ func New(opts Options) *State {
 		if class, ok := s.asClass(self); ok {
 			if len(args) == 0 {
 				class.defaultVisibility = "protected"
+				class.moduleFunction = false
 			}
 			for _, arg := range flattenNames(args) {
 				if arg.Kind() != KindString && arg.Kind() != KindSymbol {
@@ -343,6 +346,8 @@ func New(opts Options) *State {
 				}
 				name := arg.String()
 				if class.singletonOf != nil {
+					class.singletonOf.protectedClassMethods[name] = true
+					delete(class.singletonOf.privateClassMethods, name)
 					continue
 				}
 				if !class.protectedMethods[name] {
@@ -368,6 +373,7 @@ func New(opts Options) *State {
 		if class, ok := s.asClass(self); ok {
 			if len(args) == 0 {
 				class.defaultVisibility = "public"
+				class.moduleFunction = false
 			}
 			for _, arg := range flattenNames(args) {
 				if arg.Kind() != KindString && arg.Kind() != KindSymbol {
@@ -381,6 +387,7 @@ func New(opts Options) *State {
 							s.classPrivateCount--
 						}
 					}
+					delete(class.singletonOf.protectedClassMethods, name)
 					continue
 				}
 				if class.privateMethods[name] {
@@ -1055,8 +1062,9 @@ func (s *State) classConstDefinedMethod(ctx context.Context, self Value, args []
 	if err != nil {
 		return Nil, err
 	}
-	if !found && inherit && !strings.Contains(args[0].String(), "::") {
-		_, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), false)
+	if !found && inherit && !strings.Contains(args[0].String(), "::") &&
+		(class.isModule || class.singletonOf != nil || s.classIsSubclass(class, s.ObjectClass)) {
+		_, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), true)
 		if err != nil {
 			return Nil, err
 		}
@@ -1098,6 +1106,9 @@ func (s *State) classAttrReaderMethod(ctx context.Context, self Value, args []Va
 			}
 			return self.obj.ivar(ivar), nil
 		})
+		if class.moduleFunction {
+			delete(class.classMethods, name)
+		}
 		names = append(names, SymbolValue(name))
 	}
 	return ArrayValue(names), nil
@@ -1125,6 +1136,9 @@ func (s *State) classAttrWriterMethod(ctx context.Context, self Value, args []Va
 			}
 			return args[0], nil
 		})
+		if class.moduleFunction {
+			delete(class.classMethods, setter)
+		}
 		names = append(names, SymbolValue(setter))
 	}
 	return ArrayValue(names), nil
@@ -1408,8 +1422,8 @@ func (s *State) classConstGetMethod(ctx context.Context, self Value, args []Valu
 	if err != nil {
 		return Nil, err
 	}
-	if !found && inherit {
-		value, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), false)
+	if !found && inherit && (class.isModule || class.singletonOf != nil || s.classIsSubclass(class, s.ObjectClass)) {
+		value, found, err = s.constLookupPath(ctx, s.ObjectClass, args[0].String(), true)
 		if err != nil {
 			return Nil, err
 		}
@@ -1665,7 +1679,13 @@ func (s *State) classEvalMethod(ctx context.Context, self Value, args []Value, k
 	}
 	if class, ok := s.asClass(self); ok {
 		saved := class.defaultVisibility
-		defer func() { class.defaultVisibility = saved }()
+		savedModuleFunction := class.moduleFunction
+		class.defaultVisibility = ""
+		class.moduleFunction = false
+		defer func() {
+			class.defaultVisibility = saved
+			class.moduleFunction = savedModuleFunction
+		}()
 	}
 	return s.callBlockWithSelf(ctx, block, self, nil, Nil)
 }
@@ -3071,6 +3091,16 @@ func copyClassMap(source map[string]*method) map[string]*method {
 	return target
 }
 
+func copyOwnedClassMap(source map[string]*method, owner *Class) map[string]*method {
+	target := make(map[string]*method, len(source))
+	for name, m := range source {
+		copied := *m
+		copied.owner = owner
+		target[name] = &copied
+	}
+	return target
+}
+
 func copyBoolMap(source map[string]bool) map[string]bool {
 	target := make(map[string]bool, len(source))
 	for name, value := range source {
@@ -3094,13 +3124,14 @@ func (s *State) duplicateClass(source *Class) *Class {
 	}
 	duplicate := newClass(name, source.super)
 	duplicate.isModule = source.isModule
-	duplicate.methods = copyClassMap(source.methods)
-	duplicate.classMethods = copyClassMap(source.classMethods)
+	duplicate.methods = copyOwnedClassMap(source.methods, duplicate)
+	duplicate.classMethods = copyOwnedClassMap(source.classMethods, duplicate)
 	duplicate.constants = copyConstants(source.constants)
 	duplicate.classVars = copyConstants(source.classVars)
 	duplicate.privateMethods = copyBoolMap(source.privateMethods)
 	duplicate.protectedMethods = copyBoolMap(source.protectedMethods)
 	duplicate.privateClassMethods = copyBoolMap(source.privateClassMethods)
+	duplicate.protectedClassMethods = copyBoolMap(source.protectedClassMethods)
 	duplicate.undefMethods = copyBoolMap(source.undefMethods)
 	duplicate.privateConstants = copyBoolMap(source.privateConstants)
 	duplicate.deprecatedConstants = copyBoolMap(source.deprecatedConstants)
@@ -3167,7 +3198,7 @@ func (s *State) objectRespondToMethod(ctx context.Context, self Value, args []Va
 	includePrivate := len(args) == 2 && args[1].IsTruthy()
 	if class, ok := s.asClass(self); ok {
 		if m, found := class.lookupClassMethod(name); found {
-			if !includePrivate && class.privateClassMethods[name] {
+			if !includePrivate && (class.privateClassMethods[name] || class.protectedClassMethods[name]) {
 				return False, nil
 			}
 			_ = m
@@ -3690,6 +3721,16 @@ func (s *State) arrayEachMethod(ctx context.Context, self Value, args []Value, k
 }
 
 func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.Kind() == KindObject && self.obj != nil {
+		if data, ok := self.obj.data.(*blockData); ok {
+			if data.strict && data.targetClass != nil && data.visibility != "" {
+				saved := data.targetClass.defaultVisibility
+				data.targetClass.defaultVisibility = data.visibility
+				defer func() { data.targetClass.defaultVisibility = saved }()
+			}
+			return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, block, data.env, data.mid, data.owner, data.strict)
+		}
+	}
 	return s.callBlock(ctx, self, args, kw)
 }
 
@@ -3809,10 +3850,19 @@ func (s *State) privateCallError(recv, self Value, name string) error {
 		return nil
 	}
 	if class, ok := s.asClass(recv); ok {
+		callerClass, _ := s.asClass(self)
+		class = attachedClass(class)
+		callerClass = attachedClass(callerClass)
 		for _, current := range classAncestors(class) {
 			if current.privateClassMethods[name] && current.singletonOf == nil {
 				if self.obj == nil || self.obj != recv.obj {
 					return &unwindSignal{kind: unwindException, value: s.newVisibilityError("private", name, recv)}
+				}
+			}
+			if current.protectedClassMethods[name] {
+				allowed := callerClass != nil && (callerClass == current || s.classIsSubclass(callerClass, current))
+				if !allowed {
+					return &unwindSignal{kind: unwindException, value: s.newVisibilityError("protected", name, recv)}
 				}
 			}
 		}
@@ -3841,6 +3891,13 @@ func (s *State) privateCallError(recv, self Value, name string) error {
 		return &unwindSignal{kind: unwindException, value: s.newVisibilityError("protected", name, recv)}
 	}
 	return nil
+}
+
+func attachedClass(class *Class) *Class {
+	for class != nil && class.singletonOf != nil {
+		class = class.singletonOf
+	}
+	return class
 }
 
 func (s *State) ensureMutable(value Value) error {

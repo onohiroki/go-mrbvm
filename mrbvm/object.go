@@ -74,28 +74,29 @@ func (o *Object) setIvar(name string, value Value) {
 
 // Class is a minimal mruby class or module.
 type Class struct {
-	name                string
-	super               *Class
-	methods             map[string]*method
-	classMethods        map[string]*method
-	constants           map[string]Value
-	classVars           map[string]Value
-	object              *Object
-	singletonOf         *Class
-	singleton           *Class
-	isModule            bool
-	moduleFunction      bool
-	defaultVisibility   string
-	privateClassMethods map[string]bool
-	undefMethods        map[string]bool
-	isSingleton         bool
-	privateConstants    map[string]bool
-	deprecatedConstants map[string]bool
-	included            []*Class
-	prepended           []*Class
-	privateMethods      map[string]bool
-	protectedMethods    map[string]bool
-	state               *State
+	name                  string
+	super                 *Class
+	methods               map[string]*method
+	classMethods          map[string]*method
+	constants             map[string]Value
+	classVars             map[string]Value
+	object                *Object
+	singletonOf           *Class
+	singleton             *Class
+	isModule              bool
+	moduleFunction        bool
+	defaultVisibility     string
+	privateClassMethods   map[string]bool
+	protectedClassMethods map[string]bool
+	undefMethods          map[string]bool
+	isSingleton           bool
+	privateConstants      map[string]bool
+	deprecatedConstants   map[string]bool
+	included              []*Class
+	prepended             []*Class
+	privateMethods        map[string]bool
+	protectedMethods      map[string]bool
+	state                 *State
 }
 
 type method struct {
@@ -126,6 +127,7 @@ type blockData struct {
 	strict      bool
 	mid         string
 	owner       *Class
+	visibility  string
 }
 
 // exceptionData is the payload of a Ruby exception object.
@@ -239,18 +241,19 @@ func asSignal(v Value) (*unwindSignal, bool) {
 
 func newClass(name string, super *Class) *Class {
 	return &Class{
-		name:                name,
-		super:               super,
-		methods:             make(map[string]*method),
-		classMethods:        make(map[string]*method),
-		constants:           make(map[string]Value),
-		classVars:           make(map[string]Value),
-		privateMethods:      make(map[string]bool),
-		protectedMethods:    make(map[string]bool),
-		privateClassMethods: make(map[string]bool),
-		undefMethods:        make(map[string]bool),
-		privateConstants:    make(map[string]bool),
-		deprecatedConstants: make(map[string]bool),
+		name:                  name,
+		super:                 super,
+		methods:               make(map[string]*method),
+		classMethods:          make(map[string]*method),
+		constants:             make(map[string]Value),
+		classVars:             make(map[string]Value),
+		privateMethods:        make(map[string]bool),
+		protectedMethods:      make(map[string]bool),
+		privateClassMethods:   make(map[string]bool),
+		protectedClassMethods: make(map[string]bool),
+		undefMethods:          make(map[string]bool),
+		privateConstants:      make(map[string]bool),
+		deprecatedConstants:   make(map[string]bool),
 	}
 }
 
@@ -292,6 +295,17 @@ func (c *Class) lookup(name string) (*method, bool) {
 }
 
 func (c *Class) applyVisibility(name string) {
+	if c.moduleFunction {
+		if !c.privateMethods[name] {
+			c.privateMethods[name] = true
+			if c.state != nil {
+				c.state.privateMethodCount++
+			}
+		}
+		if m, ok := c.methods[name]; ok {
+			c.classMethods[name] = m
+		}
+	}
 	if c.defaultVisibility == "" || c.defaultVisibility == "public" {
 		return
 	}
@@ -318,9 +332,15 @@ func (c *Class) define(name string, fn NativeFunc) {
 	if c.singletonOf != nil {
 		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, native: fn}
 		if c.defaultVisibility == "private" {
+			if !c.singletonOf.privateClassMethods[name] && c.state != nil {
+				c.state.classPrivateCount++
+			}
 			c.singletonOf.privateClassMethods[name] = true
+		} else if c.defaultVisibility == "protected" {
+			c.singletonOf.protectedClassMethods[name] = true
 		} else if c.defaultVisibility == "public" {
 			delete(c.singletonOf.privateClassMethods, name)
+			delete(c.singletonOf.protectedClassMethods, name)
 		}
 		return
 	}
@@ -333,9 +353,15 @@ func (c *Class) defineIrep(name string, irep *Irep) {
 	if c.singletonOf != nil {
 		c.singletonOf.classMethods[name] = &method{owner: c.singletonOf, name: name, irep: irep}
 		if c.defaultVisibility == "private" {
+			if !c.singletonOf.privateClassMethods[name] && c.state != nil {
+				c.state.classPrivateCount++
+			}
 			c.singletonOf.privateClassMethods[name] = true
+		} else if c.defaultVisibility == "protected" {
+			c.singletonOf.protectedClassMethods[name] = true
 		} else if c.defaultVisibility == "public" {
 			delete(c.singletonOf.privateClassMethods, name)
+			delete(c.singletonOf.protectedClassMethods, name)
 		}
 		return
 	}

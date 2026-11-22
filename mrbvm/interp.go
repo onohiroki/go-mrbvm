@@ -164,7 +164,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope
 	s.frames = append(s.frames, frame)
-	defer leaveFrame(s, entryException, regs, frameEnv, pooled)
+	if strict {
+		s.strictDepth++
+	}
+	defer func() {
+		if strict {
+			s.strictDepth--
+		}
+		leaveFrame(s, entryException, regs, frameEnv, pooled)
+	}()
 
 	// caught holds the signal that transferred control into an ensure or
 	// rescue handler. OP_EXCEPT turns it back into a register value.
@@ -602,7 +610,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				pc = np - 1
 				continue
 			}
+			savedModuleFunction := targetClass.moduleFunction
+			if strict {
+				targetClass.moduleFunction = false
+			}
 			targetClass.defineIrep(name, irep.Reps[childIndex])
+			targetClass.moduleFunction = savedModuleFunction
 			regs[a] = SymbolValue(name)
 
 		case bytecode.OpLOADNIL:
@@ -705,6 +718,20 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					regs[in.Operands[0]] = value
 				} else if constAssignedSoon(instructions, pc, in.Operands[1]) {
 					regs[in.Operands[0]] = Nil
+				} else if hook, found := targetClass.lookupClassMethod("const_missing"); found {
+					missing, err := s.invoke(ctx, hook, s.classValue(targetClass), []Value{SymbolValue(name)}, Nil, Nil)
+					if err != nil {
+						np, rv, done, fatal := dispatch(err, in.Offset)
+						if fatal != nil {
+							return Nil, fatal
+						}
+						if done {
+							return rv, nil
+						}
+						pc = np - 1
+						continue
+					}
+					regs[in.Operands[0]] = missing
 				} else {
 					sig := &unwindSignal{kind: unwindException, value: s.newConstError(name, s.classValue(targetClass))}
 					np, rv, done, fatal := handle(sig, in.Offset)
@@ -897,6 +924,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if childIndex < 0 || childIndex >= len(irep.Reps) {
 				return Nil, fmt.Errorf("mrbvm: block irep %d out of range", childIndex)
 			}
+			visibility := ""
+			if targetClass != nil {
+				visibility = targetClass.defaultVisibility
+			}
 			regs[a] = BlockValue(blockData{
 				irep:        irep.Reps[childIndex],
 				env:         frameEnv,
@@ -905,6 +936,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				strict:      in.Op == bytecode.OpLAMBDA,
 				mid:         mid,
 				owner:       owner,
+				visibility:  visibility,
 			})
 		case bytecode.OpBLKPUSH:
 			a := int(in.Operands[0])
@@ -1940,7 +1972,7 @@ func (s *State) setClassVar(class *Class, name string, value Value) error {
 }
 
 func (s *State) lookupConstant(class *Class, name string) Value {
-	for current := class; current != nil; current = current.super {
+	for _, current := range classAncestors(class) {
 		if value, ok := current.constants[name]; ok {
 			return value
 		}
