@@ -382,6 +382,9 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - バックトレース行を呼び出し時・例外時のみ計算
 - 数値・文字列の意味論を拡充（整数 overflow、Float 表記、sprintf、
   `each_char`、`split` limit、文字集合の否定など）
+- Hash の `hash` / `eql?` キー、Range の汎用化、Module/Class の
+  可視性・include/prepend、String の破壊的メソッド・`to_i`/`to_f`・
+  `[]=` を追加
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態

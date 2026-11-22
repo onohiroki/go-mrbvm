@@ -219,6 +219,44 @@
 - conformance を 45 ケースに拡大（`integer_overflow` / `float_format` /
   `numeric_edges` / `format_string` / `string_extra`）
 
+### 4.12 公式テスト互換性の強化（2026-11-22）
+
+優先順に Hash / Range / Module・Class / String を強化した。
+
+- **Hash**
+  - オブジェクトキーで Ruby の `hash` / `eql?` を呼ぶ
+  - `compare_by_identity` / `rehash` / `default_proc`
+  - `store` / `clear` / `shift` / `replace` / `assoc` / `rassoc`
+  - String キーの複製と freeze、Hash 反復の `[key, value]` ペア渡し
+- **Range**
+  - 文字列・任意オブジェクトの `each`（`succ`）、endless range の `break`
+  - Float 終端付き `to_a`、beginless/endless の例外、NaN 境界の検査
+  - `Range.new` / `member?` / 汎用 `to_s` / `inspect` / `eql?`
+- **Module / Class**
+  - `Module.new.class` などモジュールとクラスの区別
+  - `include` / `prepend` のフック（`append_features` / `prepended`）と複数指定
+  - `public` / `private` / `protected` の可視性モード、`module_function`
+  - `define_method` / `singleton_class` / `extend` / `remove_const` /
+    `undef_method` / `*_constant`
+- **String**
+  - `initialize` / `initialize_copy` / 破壊的メソッド / `each_line` /
+    `setbyte` / `byterindex` / `bytesplice` / `[]=`
+  - `to_i` / `to_f` の mruby 互換スキャナ、`index` / `rindex` の offset
+  - String サブクラスの文字列としての等価性・表示
+  - `String#+` / `==` の再定義を OP_ADD / OP_EQ でも尊重
+
+公式テストの通過状況（このセッションの計測）:
+
+| ファイル | OK / Total | 備考 |
+| --- | ---: | --- |
+| `hash.rb` | 35 / 57 | カスタムキー、default、merge まで対応 |
+| `range.rb` | 23 / 26 | 残りは mruby GC テスト用ヘルパー |
+| `class.rb` | 37 / 49 | 高度な可視性・定数が残る |
+| `module.rb` | 25 / 86 | prepend の super 連鎖などが残る |
+| `string.rb` | 56 / 80 | Unicode 変換・inspect が残る |
+
+conformance は 51 ケースに拡大。
+
 ## 5. 品質ゲート
 
 各コミットで必ず実行する。
