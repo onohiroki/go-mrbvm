@@ -64,6 +64,7 @@ compiler and the reference implementation is always C mruby 4.0.0.
   nested stacks and ensure cleanup
 - `gomirb`, a persistent-State REPL with multi-line continuation,
   history persistence, and completion candidates
+- VM-7 benchmark tooling, register pooling, and a GC shim
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
 

@@ -178,9 +178,12 @@
   - `cmd/vmbench` と `benchmark/mixed.rb`
   - C mruby との比較（目安: 約 5x）
   - irep デコード結果の State キャッシュ
-  - Hash のプリミティブキー索引（書き込み 148ms → 2.3ms / 5,000 件）
+  - Hash のプリミティブキー索引（書き込み 148ms → 1.9ms / 5,000 件）
+  - ブロック非生成フレームの register プール
+  - GC shim（`GC.stat` / `count` / `enable?` / `start`）
+  - C mruby 比 約 3.7x
 - 次
-  - メソッド呼び出し・フレーム割り当ての削減
+  - 引数スライス割り当ての削減
   - `Value` のボクシング削減
   - メソッド探索キャッシュ
   - GC shim / `ObjectSpace`
