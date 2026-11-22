@@ -296,6 +296,8 @@ func (s *State) classOf(v Value) *Class {
 			return s.RegexpClass
 		case *matchData:
 			return s.MatchDataClass
+		case *fiberData:
+			return s.FiberClass
 		}
 	}
 	switch v.kind {

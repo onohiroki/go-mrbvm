@@ -65,6 +65,7 @@ type State struct {
 	FileClass        *Class
 	RegexpClass      *Class
 	MatchDataClass   *Class
+	FiberClass       *Class
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -84,6 +85,7 @@ type State struct {
 	FrozenErrorClass            *Class
 	SecurityErrorClass          *Class
 	IOErrorClass                *Class
+	FiberErrorClass             *Class
 	RegexpErrorClass            *Class
 	ScriptErrorClass            *Class
 	SyntaxErrorClass            *Class
@@ -176,6 +178,7 @@ func New(opts Options) *State {
 	s.FileClass = newClass("File", s.IOClass)
 	s.RegexpClass = newClass("Regexp", s.ObjectClass)
 	s.MatchDataClass = newClass("MatchData", s.ObjectClass)
+	s.FiberClass = newClass("Fiber", s.ObjectClass)
 	s.ExceptionClass = newClass("Exception", s.ObjectClass)
 	s.StandardErrorClass = newClass("StandardError", s.ExceptionClass)
 	s.RuntimeErrorClass = newClass("RuntimeError", s.StandardErrorClass)
@@ -195,6 +198,7 @@ func New(opts Options) *State {
 	s.RegexpErrorClass = newClass("RegexpError", s.StandardErrorClass)
 	s.SecurityErrorClass = newClass("SecurityError", s.StandardErrorClass)
 	s.IOErrorClass = newClass("IOError", s.StandardErrorClass)
+	s.FiberErrorClass = newClass("FiberError", s.StandardErrorClass)
 	s.ScriptErrorClass = newClass("ScriptError", s.ExceptionClass)
 	s.SyntaxErrorClass = newClass("SyntaxError", s.ScriptErrorClass)
 	s.SystemStackErrorClass = newClass("SystemStackError", s.ExceptionClass)
@@ -206,14 +210,14 @@ func New(opts Options) *State {
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
 		s.RangeClass, s.ProcClass, s.EnumerableClass, s.EnumeratorClass,
 		s.ComparableClass, s.GCClass, s.TimeClass, s.JSONClass,
-		s.IOClass, s.FileClass, s.RegexpClass, s.MatchDataClass,
+		s.IOClass, s.FileClass, s.RegexpClass, s.MatchDataClass, s.FiberClass,
 		s.ExceptionClass, s.StandardErrorClass, s.RuntimeErrorClass,
 		s.ArgumentErrorClass, s.TypeErrorClass, s.NameErrorClass,
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
 		s.NoMatchingPatternErrorClass,
 		s.IndexErrorClass, s.StopIterationClass, s.KeyErrorClass,
 		s.NotImplementedErrorClass, s.RangeErrorClass, s.FrozenErrorClass,
-		s.SecurityErrorClass, s.IOErrorClass,
+		s.SecurityErrorClass, s.IOErrorClass, s.FiberErrorClass,
 		s.RegexpErrorClass, s.ScriptErrorClass, s.SyntaxErrorClass,
 		s.SystemStackErrorClass,
 	} {
@@ -283,6 +287,7 @@ func New(opts Options) *State {
 		"File":          s.FileClass,
 		"Regexp":        s.RegexpClass,
 		"MatchData":     s.MatchDataClass,
+		"Fiber":         s.FiberClass,
 		"Exception":     s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
 		"ArgumentError": s.ArgumentErrorClass, "TypeError": s.TypeErrorClass,
@@ -298,6 +303,7 @@ func New(opts Options) *State {
 		"FrozenError":            s.FrozenErrorClass,
 		"SecurityError":          s.SecurityErrorClass,
 		"IOError":                s.IOErrorClass,
+		"FiberError":             s.FiberErrorClass,
 		"RegexpError":            s.RegexpErrorClass,
 		"ScriptError":            s.ScriptErrorClass,
 		"SyntaxError":            s.SyntaxErrorClass,
@@ -504,6 +510,7 @@ func New(opts Options) *State {
 	s.installFileLibrary()
 	s.installRegexpClass()
 	s.installMatchDataClass()
+	s.installFiberClass()
 	if opts.LoadMrblib {
 		irep, err := s.LoadBytecode(mrblibBytecode)
 		if err == nil {
