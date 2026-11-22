@@ -3,72 +3,43 @@ package mrbvm_test
 import (
 	"bytes"
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/onohiroki/go-mrbc/conformance"
 	"github.com/onohiroki/go-mrbc/mrbc"
 	localtoolchain "github.com/onohiroki/go-mrbvm/internal/toolchain"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
 )
 
-// TestConformance runs the tested subset of the shared behaviour corpus.
-// The list grows as the VM implements more of mruby.
+// TestConformance runs every case in the corpus shared with go-mrbc.
 func TestConformance(t *testing.T) {
-	cases := []string{
-		"advanced_classes",
-		"alias_undef",
-		"assignment_targets",
-		"basic_hello",
-		"blocks",
-		"case_and_logic",
-		"classes",
-		"collections",
-		"comparable",
-		"control_flow",
-		"core_library",
-		"core_library_extended",
-		"destructuring",
-		"ensure_control",
-		"enumerable",
-		"enumerator",
-		"exceptions",
-		"for_blocks",
-		"for_loops",
-		"immediate_values",
-		"keywords",
-		"lambda",
-		"lambda_super",
-		"metaprogramming",
-		"methods",
-		"modern_syntax",
-		"multiple_assignment",
-		"operator_assignment",
-		"parameters",
-		"pattern_matching",
-		"patterns_extended",
-		"reflection",
-		"retry_redo",
-		"runtime_edges",
-		"scalars",
-		"semantic_edges",
-		"singleton_classes",
-		"splat",
+	cases, err := conformance.Cases()
+	if err != nil {
+		t.Fatalf("list conformance cases: %v", err)
 	}
 
-	root := filepath.Join("..", "testdata", "conformance")
 	ctx := context.Background()
 	for _, name := range cases {
-		dir := filepath.Join(root, name)
-		mainPath := filepath.Join(dir, "main.rb")
-		want, err := os.ReadFile(filepath.Join(dir, "stdout.txt"))
-		if err != nil {
-			t.Fatalf("%s: read stdout.txt: %v", name, err)
-		}
-
+		name := name
 		t.Run(name+"/go-mrbc", func(t *testing.T) {
-			data, err := mrbc.CompileFile(ctx, mainPath, mrbc.Options{})
+			source, err := fs.ReadFile(conformance.FS, name+"/main.rb")
+			if err != nil {
+				t.Fatalf("read main.rb: %v", err)
+			}
+			want, err := fs.ReadFile(conformance.FS, name+"/stdout.txt")
+			if err != nil {
+				t.Fatalf("read stdout.txt: %v", err)
+			}
+			dir := t.TempDir()
+			mainPath := filepath.Join(dir, "main.rb")
+			if err := os.WriteFile(mainPath, source, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			data, err := mrbc.CompileFile(ctx, mainPath, mrbc.Options{FilePath: name + "/main.rb"})
 			if err != nil {
 				t.Fatalf("compile with go-mrbc: %v", err)
 			}
@@ -90,7 +61,20 @@ func TestConformance(t *testing.T) {
 			if err := localtoolchain.RequireVersion(mrbcPath, []string{"--version"}, "4.0"); err != nil {
 				t.Skipf("mrbc 4.0.0 is required: %v", err)
 			}
-			binary := filepath.Join(t.TempDir(), "case.mrb")
+			source, err := fs.ReadFile(conformance.FS, name+"/main.rb")
+			if err != nil {
+				t.Fatalf("read main.rb: %v", err)
+			}
+			want, err := fs.ReadFile(conformance.FS, name+"/stdout.txt")
+			if err != nil {
+				t.Fatalf("read stdout.txt: %v", err)
+			}
+			dir := t.TempDir()
+			mainPath := filepath.Join(dir, "main.rb")
+			if err := os.WriteFile(mainPath, source, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(dir, "case.mrb")
 			result, err := localtoolchain.Run(mrbcPath, "-o", binary, mainPath)
 			if err != nil {
 				t.Fatalf("run mrbc: %v", err)

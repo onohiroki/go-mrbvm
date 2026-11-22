@@ -17,7 +17,7 @@
   - 特異クラス、`class_eval` / `alias_method` / `remove_method`
   - 例外、ensure、非局所制御、パターンマッチ
   - `cmd/vmcompat` / `cmd/mrbtest`
-  - 共有 conformance **38 ケース**が `go-mrbc` と本家 `mrbc` の
+  - 共有 conformance **52 ケース**が `go-mrbc` と本家 `mrbc` の
     両方で成功
   - 公式テスト **20 ファイル**が成功（`testdata/official.txt`）
   - `Options.LoadMrblib` で 7 ファイルの mrblib subset を opt-in ロード
@@ -288,7 +288,7 @@
 - 公式テスト実行用の C テスト gem 互換スタブ（`Mrbtest`・
   `TestNotImplement`）を mrbtest の prelude に追加
 
-conformance は 51 ケースに拡大。除外している 3 系統（mruby GC 内部、
+conformance は 52 ケースに拡大（`go-mrbc` の `conformance` パッケージで共有）。除外している 3 系統（mruby GC 内部、
 Encoding の byte/char、Hash 再入カーソル）は引き続き対象外。
 
 ## 5. 品質ゲート
@@ -299,7 +299,7 @@ Encoding の byte/char、Hash 再入カーソル）は引き続き対象外。
 gofmt -l .
 go vet ./...
 go test ./...
-go run ./cmd/vmcompat testdata/conformance/*/main.rb
+go run ./cmd/vmcompat -corpus
 go run ./cmd/mrbtest <成功している公式テスト>
 ```
 
@@ -307,7 +307,7 @@ go run ./cmd/mrbtest <成功している公式テスト>
 
 - conformance は **go-mrbc と本家 mrbc の両方**で確認する。
 - 新しい公式テストが通ったら `mrbvm/official_test.go` に追加する。
-- 仕様差分を見つけたら `testdata/conformance` にケース化する。
+- 仕様差分を見つけたら `go-mrbc/conformance/testdata/conformance` にケース化する。
 - C mruby と挙動が違う場合は、どちらを正とするかコメントに残す。
 
 ## 6. リスクと判断ポイント

@@ -68,19 +68,9 @@ compiler and the reference implementation is always C mruby 4.0.0.
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
 
-The following 38 shared conformance cases pass with bytecode from both
-`go-mrbc` and the official mruby 4.0.0 `mrbc`:
-
-`advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
-`blocks`, `case_and_logic`, `classes`, `collections`, `comparable`,
-`control_flow`,
-`core_library`, `core_library_extended`, `destructuring`, `enumerable`,
-`enumerator`, `immediate_values`, `metaprogramming`, `ensure_control`, `exceptions`, `for_blocks`,
-`for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,
-`modern_syntax`, `multiple_assignment`, `operator_assignment`,
-`parameters`, `pattern_matching`, `patterns_extended`, `reflection`,
-`retry_redo`,
-`runtime_edges`, `scalars`, `semantic_edges`, `singleton_classes`, `splat`.
+The shared conformance corpus (52 cases) lives in the sibling `go-mrbc`
+repository as the importable `conformance` package. Every case passes with
+bytecode from both `go-mrbc` and the official mruby 4.0.0 `mrbc`.
 
 VM-3 leftovers are backtraces and richer exception introspection. VM-4 has
 started with the native core library and the differential runner; the next
@@ -123,7 +113,7 @@ go-mrbvm/
 ├── cmd/                   gomruby, gomirb, vmcompat, mrbtest, vmbench
 ├── docs/                  plan and bytecode format
 ├── examples/              sample macro scripts
-└── testdata/conformance/  shared behaviour corpus
+└── testdata/official.txt  manifest of passing official mruby tests
 ```
 
 ## Development
@@ -138,7 +128,7 @@ go build ./...
 go test ./...
 
 # Differential run against the reference mruby.
-go run ./cmd/vmcompat testdata/conformance/*/main.rb
+go run ./cmd/vmcompat -corpus
 
 # Run the manifest of official mruby tests that currently pass.
 go run ./cmd/mrbtest -manifest testdata/official.txt
@@ -175,8 +165,8 @@ state := mrbvm.New(mrbvm.Options{
 })
 ```
 
-The `testdata/conformance` corpus is copied from `go-mrbc` for bootstrapping.
-It will later move to an importable shared package.
+The conformance corpus is embedded by the sibling `go-mrbc` repository's
+`conformance` package, so compiler and VM always run the same cases.
 
 ## Commands
 

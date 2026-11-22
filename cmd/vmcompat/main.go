@@ -10,9 +10,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
+	"github.com/onohiroki/go-mrbc/conformance"
 	"github.com/onohiroki/go-mrbc/mrbc"
 	localtoolchain "github.com/onohiroki/go-mrbvm/internal/toolchain"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
@@ -27,12 +29,13 @@ type result struct {
 func main() {
 	verbose := flag.Bool("v", false, "print every comparison")
 	strict := flag.Bool("strict", false, "fail when mrbc or mruby is missing")
+	corpus := flag.Bool("corpus", false, "run every case in the shared conformance corpus")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: vmcompat [-v] [-strict] file.rb...")
+		fmt.Fprintln(os.Stderr, "usage: vmcompat [-v] [-strict] [-corpus] [file.rb...]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if flag.NArg() == 0 {
+	if flag.NArg() == 0 && !*corpus {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -58,6 +61,39 @@ func main() {
 	}
 
 	failures := 0
+	if *corpus {
+		cases, err := conformance.Cases()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "vmcompat: list corpus: %v\n", err)
+			os.Exit(2)
+		}
+		dir, err := os.MkdirTemp("", "vmcompat-corpus-*")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "vmcompat: create temp dir: %v\n", err)
+			os.Exit(2)
+		}
+		defer os.RemoveAll(dir)
+		for _, name := range cases {
+			source, err := fs.ReadFile(conformance.FS, name+"/main.rb")
+			if err != nil {
+				failures++
+				fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", name, err)
+				continue
+			}
+			path := filepath.Join(dir, name+".rb")
+			if err := os.WriteFile(path, source, 0o644); err != nil {
+				failures++
+				fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", name, err)
+				continue
+			}
+			if err := compareFile(ctx, path, mrubyPath, mrbcPath, *verbose); err != nil {
+				failures++
+				fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", name, err)
+			} else if *verbose {
+				fmt.Printf("ok   %s\n", name)
+			}
+		}
+	}
 	for _, path := range flag.Args() {
 		if err := compareFile(ctx, path, mrubyPath, mrbcPath, *verbose); err != nil {
 			failures++

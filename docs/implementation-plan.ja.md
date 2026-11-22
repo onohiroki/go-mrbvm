@@ -58,7 +58,7 @@ go-mrbvm/
 ├── cmd/
 │   ├── gomruby/              mruby 相当
 │   └── gomirb/               mirb 相当
-├── testdata/conformance/     共有適合コーパス
+├── conformance/              go-mrbc と共有する適合コーパス
 ├── examples/
 └── docs/
 ```
@@ -270,7 +270,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 
 - RITE ローダー: 本家 `mrbc` の出力を読めること
 - opcode 単体: 119 opcode それぞれの最小 irep
-- conformance: `testdata/conformance` を VM で実行
+- conformance: `go-mrbc` の `conformance` パッケージを VM で実行
 - mruby 公式テスト: `assert.rb` を前置して実行
 - ファズ: RITE バイナリ破損、生成プログラム
 - GC: `ObjectSpace`, `GC.start`, 大量確保、循環参照

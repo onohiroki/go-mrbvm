@@ -61,7 +61,7 @@ go-mrbc  ──no dependency on──▶ go-mrbvm
   - `src/error.c` — exception and backtrace behavior.
   - `mrbgems/mruby-compiler/src/codegen.c` — how mruby lowers Ruby.
 - Compiler and shared bytecode: `go-mrbc`.
-- Conformance corpus: `go-mrbc/testdata/conformance` and the mruby 4.0.0 test
+- Conformance corpus: `go-mrbc/conformance` and the mruby 4.0.0 test
   tree.
 - Prior art: [ChibiRuby](https://github.com/hadashiA/ChibiRuby), a pure C#
   mruby 4.0 VM. It implements all opcodes, passes mruby's official test
