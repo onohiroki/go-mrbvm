@@ -9,7 +9,7 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-**VM-4 is in progress.** The VM loads RITE 04.00 through
+**VM-4b, VM-4c, and VM-5 are implemented.** The VM loads RITE 04.00 through
 `go-mrbc/bytecode` and supports:
 
 - values, objects, classes, methods, blocks, closures, and upvars
@@ -46,9 +46,14 @@ compiler and the reference implementation is always C mruby 4.0.0.
 - exception `backtrace` / `full_message` / `cause`, `$!`, and `FrozenError`
 - reflection: `instance_variables`, `instance_variable_get` / `set`,
   `const_get` / `set`, `ancestors`, and `methods`
-- an opt-in precompiled mrblib subset (`Options.LoadMrblib`)
-- a host API: `DefineFunction`, `DefineClass`, `DefineConst`, `Send`,
-  `Raise`, and value conversion helpers
+- an opt-in precompiled mrblib subset (`Options.LoadMrblib`):
+  `10error`, `compar`, `enum`, `array`, `hash`, `string`, `range`
+- a host API: `DefineFunction`, `DefineClass`, `DefineModule`,
+  `DefineConst`, `Send`, `Raise`, and value conversion helpers
+- sandbox limits: instructions, wall time, call depth, output bytes,
+  array/hash/string sizes
+- a capability policy package (`sandbox.Policy`) for IO, files, network,
+  process, OS, eval, load, and require
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
 
@@ -127,8 +132,9 @@ go run ./cmd/vmcompat testdata/conformance/*/main.rb
 go run ./cmd/mrbtest -manifest testdata/official.txt
 ```
 
-The manifest currently covers `nil`, `true`, `false`, `comparable`,
-`object`, and `array`; `array.rb` passes with `KO: 0` / `Crash: 0`.
+The manifest currently covers **20** official test files, including
+`array`, `object`, `superclass`, `version`, `platform`, the exception-class
+tests, `nameerror`, and `nomethoderror`.
 
 ## Host API
 
@@ -139,6 +145,22 @@ state.DefineFunction("host_greet", func(ctx context.Context, s *mrbvm.State, sel
 })
 state.DefineConst(nil, "ANSWER", mrbvm.IntValue(42))
 result, err := state.Send(ctx, state.TopSelf, "ruby_method", mrbvm.IntValue(1))
+```
+
+Sandbox limits are set through `mrbvm.Options`:
+
+```go
+policy := sandbox.New().Permit(sandbox.FileRead)
+state := mrbvm.New(mrbvm.Options{
+	Policy:          policy,
+	MaxInstructions: 1_000_000,
+	MaxDepth:        100,
+	MaxOutputBytes:  64 * 1024,
+	MaxArraySize:    10_000,
+	MaxHashSize:     10_000,
+	MaxStringSize:   1 << 20,
+	MaxTime:         2 * time.Second,
+})
 ```
 
 The `testdata/conformance` corpus is copied from `go-mrbc` for bootstrapping.

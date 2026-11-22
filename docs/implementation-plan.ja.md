@@ -333,13 +333,31 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
    - `DefineFunction` / `DefineClass` / `DefineConst` / `Send` / `Raise`
    - `Value` ↔ Go 型変換、テストで Go ↔ Ruby の往復呼び出しを確認
 
-### 次の作業（VM-4b）
+### VM-4b / VM-4c / VM-5（2026-11-22 完了）
 
-1. 公式テストの拡大（`integer` / `float` / `string` / `hash` /
-   `range` / `symbol` / `exception`）
-2. mrblib subset の拡張（`array` / `hash` / `string` / `range`）
-3. ホスト API のサンドボックス制限と `Data` 対応
-4. backtrace の file:line 精度向上と `full_message` の書式調整
+- **VM-4b**
+  - 公式テスト 20 ファイルを `testdata/official.txt` に固定
+  - mrblib subset を `10error` / `compar` / `enum` / `array` / `hash` /
+    `string` / `range` に拡張
+- **VM-4c**
+  - `backtrace`（file:line）/ `full_message` / `cause` / `$!` /
+    `FrozenError`
+  - 公式 `t/exception.rb` が 50/50 で成功
+  - `instance_variables` / `instance_variable_get` / `set` /
+    `const_get` / `set` / `ancestors` / `methods`
+  - 公式 `nameerror.rb` / `nomethoderror.rb` と exception クラス系テスト
+- **VM-5**
+  - `DefineFunction` / `DefineClass` / `DefineModule` / `DefineConst` /
+    `Send` / `Raise`
+  - 命令数・時間・深さ・出力・配列/ハッシュ/文字列サイズ制限
+  - `sandbox.Policy` capability とテスト
+
+### 次の作業（VM-6）
+
+1. `gomirb`（REPL、複数行入力、履歴）
+2. JSON / IO / Time の基本実装
+3. Regexp / Fiber の opt-in 対応
+4. `gomirb` の複数行入力・履歴
 
 ## 16. 現在の状態
 
@@ -431,4 +449,5 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
     37 ケースが両コンパイラで成功
   - `t/array.rb` 完走、公式テストマニフェスト、例外 backtrace、
     リフレクション、mrblib opt-in、ホスト API の初期実装まで完了
-  - 次は VM-4b（公式テストの拡大と mrblib subset の拡張）
+  - VM-4b / VM-4c / VM-5 まで完了
+  - 次は VM-6（`gomirb`、JSON / IO / Time）

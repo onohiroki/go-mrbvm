@@ -19,11 +19,12 @@
   - `cmd/vmcompat` / `cmd/mrbtest`
   - 共有 conformance **38 ケース**が `go-mrbc` と本家 `mrbc` の
     両方で成功
-  - 公式テスト `nil.rb` / `true.rb` / `false.rb` / `comparable.rb` /
-    `object.rb` / `array.rb` が成功（`testdata/official.txt`）
-  - `Options.LoadMrblib` による mrblib subset の opt-in ロード
-  - ホスト API（`DefineFunction` / `DefineClass` / `DefineConst` /
-    `Send` / `Raise`）の最小実装
+  - 公式テスト **20 ファイル**が成功（`testdata/official.txt`）
+  - `Options.LoadMrblib` で 7 ファイルの mrblib subset を opt-in ロード
+  - ホスト API（`DefineFunction` / `DefineClass` / `DefineModule` /
+    `DefineConst` / `Send` / `Raise`）
+  - サンドボックス（命令数・時間・深さ・出力・コレクションサイズ）と
+    `sandbox.Policy` capability
 
 ## 2. 基本方針
 
@@ -47,9 +48,9 @@
 | フェーズ | 目標 | 主な作業 | 完了条件 |
 | --- | --- | --- | --- |
 | **VM-4a** コアライブラリ完成 | 公式 Array/Integer/String/Hash 系テストを通す | `Array#hash`、`freeze` / `frozen?`、`sort` の境界、`delete` / `shift` / `replace`、`initialize_copy`、`Float` / `RangeError` の整合 | `t/array.rb` が `KO: 0` / `Crash: 0`、conformance 40+ |
-| **VM-4b** 公式テスト拡大 | コア subset を一気に増やす | `integer.rb` / `float.rb` / `string.rb` / `hash.rb` / `range.rb` / `symbol.rb` / `exception.rb` を順に駆動 | 公式テスト 15 ファイル以上が成功 |
-| **VM-4c** 例外・リフレクション | 実用的なエラー情報とメタプログラミング | `backtrace`（file:line）、`full_message`、`cause`、`$!`、`FrozenError`、`instance_variables`、`instance_variable_get/set`、`const_get/set`、`ancestors`、`methods` | `t/exception.rb` などが成功、backtrace が表示できる |
-| **VM-5** ホスト API / サンドボックス | Go から mruby を安全に使う | `DefineFunction` / `DefineClass` / `DefineConst`、`Send`、値変換、Go error → Ruby 例外、命令数・時間・深さ・サイズ制限、capability | Go テストから Ruby 関数を呼び、Ruby から Go 関数を呼べる |
+| **VM-4b** 公式テスト拡大（完了） | コア subset を一気に増やす | `integer.rb` / `float.rb` / `string.rb` / `hash.rb` / `range.rb` / `symbol.rb` / `exception.rb` を順に駆動 | 公式テスト 15 ファイル以上が成功 |
+| **VM-4c** 例外・リフレクション（完了） | 実用的なエラー情報とメタプログラミング | `backtrace`（file:line）、`full_message`、`cause`、`$!`、`FrozenError`、`instance_variables`、`instance_variable_get/set`、`const_get/set`、`ancestors`、`methods` | `t/exception.rb` などが成功、backtrace が表示できる |
+| **VM-5** ホスト API / サンドボックス（完了） | Go から mruby を安全に使う | `DefineFunction` / `DefineClass` / `DefineConst`、`Send`、値変換、Go error → Ruby 例外、命令数・時間・深さ・サイズ制限、capability | Go テストから Ruby 関数を呼び、Ruby から Go 関数を呼べる |
 | **VM-6** `gomirb` / オプション機能 | 対話環境と実用ライブラリ | REPL、複数行入力、履歴、JSON、IO、Time、Regexp（Go regexp 近似）、Fiber | `gomirb` で式評価、JSON/IO の基本動作 |
 | **VM-7** 性能・GC | C mruby と比較可能な性能 | dispatch 最適化、値表現、アロケーション削減、ベンチマーク、GC shim、`ObjectSpace` | ベンチマーク結果を公開、主要操作で許容範囲 |
 
@@ -138,6 +139,24 @@
   - `backtrace` の file:line 精度向上
   - `full_message` の書式を C mruby に合わせる
 
+### 4.8 VM-4b / VM-4c / VM-5 完了（2026-11-22）
+
+- **VM-4b**
+  - 公式テスト 20 ファイルを manifest 化
+  - mrblib subset を 7 ファイルへ拡張
+- **VM-4c**
+  - backtrace（file:line）、full_message、cause、`$!`、FrozenError
+  - instance_variables/get/set、const_get/set、ancestors、methods
+  - 公式 `nameerror.rb` / `nomethoderror.rb` / exception クラス系テスト
+- **VM-5**
+  - `DefineFunction` / `DefineClass` / `DefineModule` / `DefineConst` /
+    `Send` / `Raise`
+  - 命令数・時間・深さ・出力・配列/ハッシュ/文字列サイズ制限
+  - capability policy とテスト
+
+公式 `t/exception.rb` も 50/50 で成功し、`$!` と cause 連鎖の
+スコープ復元を確認済み。
+
 ## 5. 品質ゲート
 
 各コミットで必ず実行する。
@@ -171,9 +190,9 @@ go run ./cmd/mrbtest <成功している公式テスト>
 ## 7. マイルストーン目安
 
 - **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
-- **VM-4b**: 公式テスト 15 ファイル以上
-- **VM-4c**: backtrace / reflection / exception 系テスト
-- **VM-5**: Go ホスト API の最小デモ
+- **VM-4b**: 公式テスト 20 ファイル（達成）
+- **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
+- **VM-5**: ホスト API とサンドボックス（達成）
 - **VM-6**: `gomirb` + JSON/IO
 - **VM-7**: ベンチマーク公開
 
