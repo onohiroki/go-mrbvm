@@ -950,16 +950,18 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if err != nil {
 				return Nil, err
 			}
-			if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
-				np, rv, done, fatal := dispatch(err, in.Offset)
-				if fatal != nil {
-					return Nil, fatal
+			if s.privateMethodCount > 0 {
+				if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
 				}
-				if done {
-					return rv, nil
-				}
-				pc = np - 1
-				continue
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			s.releaseValues(args)
@@ -1080,16 +1082,18 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if in.Op == bytecode.OpSEND0 {
 				recv = regs[in.Operands[0]]
 			}
-			if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
-				np, rv, done, fatal := dispatch(err, in.Offset)
-				if fatal != nil {
-					return Nil, fatal
+			if s.privateMethodCount > 0 {
+				if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
 				}
-				if done {
-					return rv, nil
-				}
-				pc = np - 1
-				continue
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], nil, Nil, Nil)
 			if err != nil {
@@ -1114,16 +1118,18 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if err != nil {
 				return Nil, err
 			}
-			if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
-				np, rv, done, fatal := dispatch(err, in.Offset)
-				if fatal != nil {
-					return Nil, fatal
+			if s.privateMethodCount > 0 {
+				if err := s.privateCallError(recv, self, irep.Syms[in.Operands[1]]); err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
 				}
-				if done {
-					return rv, nil
-				}
-				pc = np - 1
-				continue
 			}
 			result, err := s.call(ctx, recv, irep.Syms[in.Operands[1]], args, kw, block)
 			s.releaseValues(args)
@@ -1660,12 +1666,27 @@ func (s *State) releaseEnvironment(env *environment) {
 	s.envFree = append(s.envFree, env)
 }
 
+// acquireValues reuses an argument buffer without zeroing it: every caller
+// overwrites the first n elements before reading.
 func (s *State) acquireValues(n int) []Value {
-	return s.acquireSlice(&s.argFree, n)
+	if n <= 0 {
+		return nil
+	}
+	if stack := s.argFree; len(stack) > 0 {
+		buffer := stack[len(stack)-1]
+		s.argFree = stack[:len(stack)-1]
+		if cap(buffer) >= n {
+			return buffer[:n]
+		}
+	}
+	return make([]Value, n)
 }
 
 func (s *State) releaseValues(values []Value) {
-	s.releaseSlice(&s.argFree, values)
+	if cap(values) == 0 || len(s.argFree) >= freeSliceLimit {
+		return
+	}
+	s.argFree = append(s.argFree, values[:0])
 }
 
 func (s *State) sendArguments(irep *Irep, regs []Value, a int, argInfo uint32, hasBlock bool) ([]Value, Value, Value, error) {
