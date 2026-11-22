@@ -1518,7 +1518,12 @@ func indexableHashKey(value Value) (hashKey, bool) {
 	case KindInt:
 		key.i = value.Int()
 	case KindFloat:
-		key.bits = value.bits
+		// mruby treats 0.0 and -0.0 as the same hash key.
+		if value.Float() == 0 {
+			key.bits = 0
+		} else {
+			key.bits = value.bits
+		}
 	case KindString, KindSymbol:
 		key.str = value.String()
 	default:

@@ -167,6 +167,30 @@ func (v Value) Int() int64 { return int64(v.bits) }
 // Float returns the float payload.
 func (v Value) Float() float64 { return math.Float64frombits(v.bits) }
 
+// formatFloat renders a float the way mruby does: 15 significant digits,
+// "Infinity"/"-Infinity"/"NaN", and always with a visible decimal point.
+func formatFloat(value float64) string {
+	if math.IsInf(value, 1) {
+		return "Infinity"
+	}
+	if math.IsInf(value, -1) {
+		return "-Infinity"
+	}
+	if math.IsNaN(value) {
+		return "NaN"
+	}
+	text := strconv.FormatFloat(value, 'g', 15, 64)
+	for i := 0; i < len(text); i++ {
+		if text[i] == '.' {
+			return text
+		}
+		if text[i] == 'e' {
+			return text[:i] + ".0" + text[i:]
+		}
+	}
+	return text + ".0"
+}
+
 // ToS returns Ruby's to_s representation.
 func (v Value) ToS() string {
 	switch v.kind {
@@ -212,7 +236,7 @@ func inspectValue(v Value, seen map[*Object]bool) string {
 		}
 		return "0"
 	case KindFloat:
-		return strconv.FormatFloat(v.Float(), 'g', -1, 64)
+		return formatFloat(v.Float())
 	case KindSymbol:
 		return ":" + v.String()
 	case KindString:
