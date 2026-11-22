@@ -108,6 +108,7 @@ type State struct {
 
 	frames    []*callFrame
 	callDepth int
+	programs  map[*Irep]*irepProgram
 
 	policy           *sandbox.Policy
 	maxInstructions  uint64
@@ -156,6 +157,7 @@ func New(opts Options) *State {
 	if s.maxDepth == 0 {
 		s.maxDepth = 200
 	}
+	s.programs = make(map[*Irep]*irepProgram)
 	if opts.MaxOutputBytes > 0 {
 		s.output = &limitWriter{writer: stdout, remaining: opts.MaxOutputBytes}
 		s.stdout = s.output
@@ -1114,10 +1116,8 @@ func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
 			}
 			return data.values[pos], nil
 		case *hashData:
-			for _, entry := range data.entries {
-				if valuesEqual(entry.key, index) {
-					return entry.value, nil
-				}
+			if i, ok := hashLookup(data, index); ok {
+				return data.entries[i].value, nil
 			}
 			return data.defaultValue, nil
 		case *stringData:
@@ -1498,6 +1498,57 @@ func (s *State) Execute(ctx context.Context, irep *Irep) (Value, error) {
 	return s.executeFrame(ctx, irep, s.TopSelf, s.ObjectClass, nil, Nil, Nil, nil, "", nil, false)
 }
 
+func hashKeyOf(value Value) hashKey {
+	key := hashKey{kind: value.Kind()}
+	switch value.Kind() {
+	case KindInt:
+		key.i = value.Int()
+	case KindBigInt:
+		key.str = value.String()
+	case KindFloat:
+		key.bits = value.bits
+	case KindString, KindSymbol:
+		key.str = value.String()
+	case KindObject:
+		key.ptr = value.obj
+	}
+	return key
+}
+
+func ensureHashIndex(data *hashData) {
+	if data.index != nil {
+		return
+	}
+	data.index = make(map[hashKey]int, len(data.entries))
+	for i, entry := range data.entries {
+		data.index[hashKeyOf(entry.key)] = i
+	}
+}
+
+func primitiveHashKey(value Value) bool {
+	switch value.Kind() {
+	case KindNil, KindTrue, KindFalse, KindInt, KindBigInt, KindFloat, KindString, KindSymbol:
+		return true
+	}
+	return false
+}
+
+func hashLookup(data *hashData, key Value) (int, bool) {
+	ensureHashIndex(data)
+	if index, ok := data.index[hashKeyOf(key)]; ok && index < len(data.entries) && valuesEqual(data.entries[index].key, key) {
+		return index, true
+	}
+	if primitiveHashKey(key) {
+		return -1, false
+	}
+	for i, entry := range data.entries {
+		if valuesEqual(entry.key, key) {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, error) {
 	if recv.kind == KindObject && recv.obj != nil {
 		switch data := recv.obj.data.(type) {
@@ -1527,15 +1578,15 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 			data.values[pos] = value
 			return value, nil
 		case *hashData:
-			for i, entry := range data.entries {
-				if valuesEqual(entry.key, index) {
-					data.entries[i].value = value
-					return value, nil
-				}
+			if i, ok := hashLookup(data, index); ok {
+				data.entries[i].value = value
+				return value, nil
 			}
 			if err := s.checkHashSize(len(data.entries) + 1); err != nil {
 				return Nil, err
 			}
+			ensureHashIndex(data)
+			data.index[hashKeyOf(index)] = len(data.entries)
 			data.entries = append(data.entries, hashEntry{key: index, value: value})
 			return value, nil
 		}

@@ -14,6 +14,12 @@ func (s *State) executeIrep(ctx context.Context, irep *Irep, self Value) (Value,
 	return s.executeFrame(ctx, irep, self, s.ObjectClass, nil, Nil, Nil, nil, "", nil, false)
 }
 
+type irepProgram struct {
+	instructions []bytecode.Instruction
+	pcByOffset   map[int]int
+	lineByOffset map[int]int
+}
+
 type callFrame struct {
 	file   string
 	line   int
@@ -26,16 +32,38 @@ type exceptionScope struct {
 	kind   uint8
 }
 
+func (s *State) program(irep *Irep) (*irepProgram, error) {
+	if program, ok := s.programs[irep]; ok {
+		return program, nil
+	}
+	instructions, err := bytecode.Decode(irep.Code)
+	if err != nil {
+		return nil, err
+	}
+	pcByOffset := make(map[int]int, len(instructions))
+	for i, in := range instructions {
+		pcByOffset[in.Offset] = i
+	}
+	lineByOffset := make(map[int]int, len(irep.Lines))
+	for _, line := range irep.Lines {
+		lineByOffset[int(line.Offset)] = int(line.Line)
+	}
+	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineByOffset: lineByOffset}
+	s.programs[irep] = program
+	return program, nil
+}
+
 func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, strict bool) (Value, error) {
 	s.callDepth++
 	defer func() { s.callDepth-- }()
 	if s.maxDepth > 0 && s.callDepth > s.maxDepth {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.SystemStackErrorClass, "stack level too deep")}
 	}
-	instructions, err := bytecode.Decode(irep.Code)
+	program, err := s.program(irep)
 	if err != nil {
 		return Nil, err
 	}
+	instructions := program.instructions
 	nregs := int(irep.Nregs)
 	if nlocals := int(irep.Nlocals); nlocals > nregs {
 		nregs = nlocals
@@ -55,14 +83,8 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	_ = frameEnv
 	keywordSlot := -1
 	_ = keywordSlot
-	pcByOffset := make(map[int]int, len(instructions))
-	for i, in := range instructions {
-		pcByOffset[in.Offset] = i
-	}
-	lineByOffset := make(map[int]int, len(irep.Lines))
-	for _, line := range irep.Lines {
-		lineByOffset[int(line.Offset)] = int(line.Line)
-	}
+	pcByOffset := program.pcByOffset
+	lineByOffset := program.lineByOffset
 	frame := &callFrame{file: irep.Filename, method: mid}
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope

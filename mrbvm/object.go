@@ -21,6 +21,15 @@ type hashEntry struct {
 type hashData struct {
 	entries      []hashEntry
 	defaultValue Value
+	index        map[hashKey]int
+}
+
+type hashKey struct {
+	kind Kind
+	i    int64
+	bits uint64
+	str  string
+	ptr  *Object
 }
 
 type rangeData struct {
