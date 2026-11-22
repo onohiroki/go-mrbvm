@@ -115,16 +115,18 @@ type State struct {
 	envFree   []*environment
 	gcEnabled bool
 
-	policy           *sandbox.Policy
-	maxInstructions  uint64
-	maxDepth         int
-	maxTime          time.Duration
-	startTime        time.Time
-	instructionCount uint64
-	maxArraySize     int
-	maxHashSize      int
-	maxStringSize    int
-	output           *limitWriter
+	policy             *sandbox.Policy
+	maxInstructions    uint64
+	maxDepth           int
+	maxTime            time.Duration
+	startTime          time.Time
+	instructionCount   uint64
+	limitsEnabled      bool
+	privateMethodCount int
+	maxArraySize       int
+	maxHashSize        int
+	maxStringSize      int
+	output             *limitWriter
 }
 
 // New creates a VM state with the minimal core needed to execute VM-0
@@ -168,6 +170,7 @@ func New(opts Options) *State {
 		s.output = &limitWriter{writer: stdout, remaining: opts.MaxOutputBytes}
 		s.stdout = s.output
 	}
+	s.limitsEnabled = s.maxInstructions > 0 || s.maxTime > 0 || s.output != nil
 	s.BasicObjectClass = newClass("BasicObject", nil)
 	s.ObjectClass = newClass("Object", s.BasicObjectClass)
 	s.ModuleClass = newClass("Module", s.ObjectClass)
@@ -253,7 +256,11 @@ func New(opts Options) *State {
 	s.ClassClass.define("private", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if class, ok := s.asClass(self); ok {
 			for _, arg := range args {
-				class.privateMethods[arg.String()] = true
+				name := arg.String()
+				if !class.privateMethods[name] {
+					class.privateMethods[name] = true
+					s.privateMethodCount++
+				}
 			}
 		}
 		if len(args) > 0 {
@@ -2397,6 +2404,9 @@ func (s *State) kernelPuts(ctx context.Context, self Value, args []Value, kw Val
 }
 
 func (s *State) privateCallError(recv, self Value, name string) error {
+	if s.privateMethodCount == 0 {
+		return nil
+	}
 	if self.obj != nil && recv.obj == self.obj {
 		return nil
 	}

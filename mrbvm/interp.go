@@ -17,7 +17,7 @@ func (s *State) executeIrep(ctx context.Context, irep *Irep, self Value) (Value,
 type irepProgram struct {
 	instructions []bytecode.Instruction
 	pcByOffset   map[int]int
-	lineByOffset map[int]int
+	lineAt       []int32
 	hasBlocks    bool
 }
 
@@ -47,9 +47,15 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 	for i, in := range instructions {
 		pcByOffset[in.Offset] = i
 	}
-	lineByOffset := make(map[int]int, len(irep.Lines))
-	for _, line := range irep.Lines {
-		lineByOffset[int(line.Offset)] = int(line.Line)
+	lineAt := make([]int32, len(instructions))
+	lineEntry := 0
+	line := int32(0)
+	for i, in := range instructions {
+		for lineEntry < len(irep.Lines) && int(irep.Lines[lineEntry].Offset) <= in.Offset {
+			line = int32(irep.Lines[lineEntry].Line)
+			lineEntry++
+		}
+		lineAt[i] = line
 	}
 	hasBlocks := false
 	for _, in := range instructions {
@@ -58,7 +64,7 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 			break
 		}
 	}
-	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineByOffset: lineByOffset, hasBlocks: hasBlocks}
+	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineAt: lineAt, hasBlocks: hasBlocks}
 	s.programs[irep] = program
 	return program, nil
 }
@@ -119,7 +125,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	keywordSlot := -1
 	_ = keywordSlot
 	pcByOffset := program.pcByOffset
-	lineByOffset := program.lineByOffset
+	lineAt := program.lineAt
 	frame := callFrame{file: irep.Filename, method: mid}
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope
@@ -307,11 +313,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		return handle(sig, offset)
 	}
 	for pc := 0; pc < len(instructions); pc++ {
-		if err := ctx.Err(); err != nil {
-			return Nil, err
+		if pc&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return Nil, err
+			}
 		}
-		if err := s.checkExecutionLimits(); err != nil {
-			return Nil, err
+		if s.limitsEnabled {
+			if err := s.checkExecutionLimits(); err != nil {
+				return Nil, err
+			}
 		}
 		for len(exceptionScopes) > 0 && pc == exceptionScopes[len(exceptionScopes)-1].exitPC {
 			scope := exceptionScopes[len(exceptionScopes)-1]
@@ -319,8 +329,8 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			s.currentException = scope.prev
 		}
 		in := instructions[pc]
-		if line, ok := lineByOffset[in.Offset]; ok {
-			lastLine = line
+		if line := lineAt[pc]; line != 0 {
+			lastLine = int(line)
 		}
 		s.frames[len(s.frames)-1].line = lastLine
 		switch in.Op {
