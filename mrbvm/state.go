@@ -60,6 +60,7 @@ type State struct {
 	ComparableClass  *Class
 	GCClass          *Class
 	TimeClass        *Class
+	JSONClass        *Class
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -164,6 +165,7 @@ func New(opts Options) *State {
 	s.ComparableClass = newClass("Comparable", nil)
 	s.GCClass = newClass("GC", nil)
 	s.TimeClass = newClass("Time", s.ObjectClass)
+	s.JSONClass = newClass("JSON", nil)
 	s.ExceptionClass = newClass("Exception", s.ObjectClass)
 	s.StandardErrorClass = newClass("StandardError", s.ExceptionClass)
 	s.RuntimeErrorClass = newClass("RuntimeError", s.StandardErrorClass)
@@ -191,7 +193,7 @@ func New(opts Options) *State {
 		s.TrueClass, s.FalseClass, s.IntegerClass, s.FloatClass,
 		s.StringClass, s.SymbolClass, s.ArrayClass, s.HashClass,
 		s.RangeClass, s.ProcClass, s.EnumerableClass, s.EnumeratorClass,
-		s.ComparableClass, s.GCClass, s.TimeClass,
+		s.ComparableClass, s.GCClass, s.TimeClass, s.JSONClass,
 		s.ExceptionClass, s.StandardErrorClass, s.RuntimeErrorClass,
 		s.ArgumentErrorClass, s.TypeErrorClass, s.NameErrorClass,
 		s.NoMethodErrorClass, s.ZeroDivisionErrorClass, s.LocalJumpErrorClass,
@@ -262,6 +264,7 @@ func New(opts Options) *State {
 		"Comparable":    s.ComparableClass,
 		"GC":            s.GCClass,
 		"Time":          s.TimeClass,
+		"JSON":          s.JSONClass,
 		"Exception":     s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
 		"ArgumentError": s.ArgumentErrorClass, "TypeError": s.TypeErrorClass,
@@ -477,6 +480,7 @@ func New(opts Options) *State {
 	s.installImmediateLibrary()
 	s.installCoreLibrary()
 	s.installTimeClass()
+	s.installJSONModule()
 	if opts.LoadMrblib {
 		irep, err := s.LoadBytecode(mrblibBytecode)
 		if err == nil {
