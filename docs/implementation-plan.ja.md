@@ -309,36 +309,37 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 ## 15. 直近の作業
 
 詳細なフェーズ計画・品質ゲート・リスクは
-[roadmap.ja.md](roadmap.ja.md) を参照。ここでは直近スプリントのみを示す。
+[roadmap.ja.md](roadmap.ja.md) を参照。
 
-1. **VM-4a: `t/array.rb` を完走させる**
-   - `Array#hash`（循環配列を含めて安全に）
-   - `freeze` / `frozen?` / `FrozenError`
-   - `sort` / `sort!` の Float / bigint / NaN / 非整数ブロック
-   - `delete` / `delete_at` / `shift` / `pop` / `replace`
-   - `initialize_copy` / `dup` / `clone`
-   - `slice` / `first` / `last` の境界
-   - 完了条件: `mrbtest mruby/test/t/array.rb` が
-     `KO: 0` / `Crash: 0`
-2. **公式テストマニフェスト**
-   - `testdata/official.txt` を追加
-   - `cmd/mrbtest` に manifest 実行オプションを追加
-   - 成功ファイルを `go test` に固定
-3. **例外の実用化**
-   - `backtrace`（file:line）、`full_message`、`cause`、`$!`
-   - `FrozenError` と raise の再送出・cause 連鎖
-4. **リフレクション**
-   - `instance_variables` / `instance_variable_get` /
-     `instance_variable_set`
-   - `const_get` / `const_set` / `ancestors` / `methods`
-   - `respond_to?` の private 引数
-5. **mrblib の段階導入**
-   - `Options.LoadMrblib` で opt-in
-   - まず `10error.rb` / `compar.rb` / `enum.rb` のみ
-   - ネイティブ実装との差分を conformance で比較
-6. **ホスト API の設計着手**
-   - `DefineFunction` / `DefineClass` / `DefineConst` / `Send`
-   - `Value` ↔ Go 型変換、`context.Context` キャンセル
+### 完了した直近スプリント（2026-11-22）
+
+1. **VM-4a: `t/array.rb` を完走させる** — 完了
+   - `Array#hash`、`freeze` / `frozen?` / `FrozenError`、`sort` の境界、
+     `delete` / `shift` / `replace` / `initialize_copy`、スライス代入
+   - `mrbtest mruby/test/t/array.rb` が `KO: 0` / `Crash: 0`
+2. **公式テストマニフェスト** — 完了
+   - `testdata/official.txt` と `cmd/mrbtest -manifest`
+   - `nil` / `true` / `false` / `comparable` / `object` / `array` を
+     `go test` に固定
+3. **例外の実用化** — 完了
+   - `backtrace`（file:line）、`full_message`、`cause`、`$!`、`FrozenError`
+4. **リフレクション** — 完了
+   - `instance_variables` / `instance_variable_get` / `set`、
+     `const_get` / `set`、`ancestors`、`methods`
+5. **mrblib の段階導入** — 完了
+   - `Options.LoadMrblib` で `10error.rb` / `compar.rb` / `enum.rb` を
+     precompiled bytecode から opt-in ロード
+6. **ホスト API の設計着手** — 完了
+   - `DefineFunction` / `DefineClass` / `DefineConst` / `Send` / `Raise`
+   - `Value` ↔ Go 型変換、テストで Go ↔ Ruby の往復呼び出しを確認
+
+### 次の作業（VM-4b）
+
+1. 公式テストの拡大（`integer` / `float` / `string` / `hash` /
+   `range` / `symbol` / `exception`）
+2. mrblib subset の拡張（`array` / `hash` / `string` / `range`）
+3. ホスト API のサンドボックス制限と `Data` 対応
+4. backtrace の file:line 精度向上と `full_message` の書式調整
 
 ## 16. 現在の状態
 
@@ -428,4 +429,6 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
     `enumerator` / `comparable` / `singleton_classes` /
     `metaprogramming` / `immediate_values` conformance を追加し、
     37 ケースが両コンパイラで成功
-  - 次は VM-4a（`t/array.rb` の完走と公式テストマニフェスト）
+  - `t/array.rb` 完走、公式テストマニフェスト、例外 backtrace、
+    リフレクション、mrblib opt-in、ホスト API の初期実装まで完了
+  - 次は VM-4b（公式テストの拡大と mrblib subset の拡張）

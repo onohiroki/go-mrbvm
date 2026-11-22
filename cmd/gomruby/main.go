@@ -42,7 +42,7 @@ func main() {
 
 func load(ctx context.Context, path string) ([]byte, error) {
 	if filepath.Ext(path) == ".rb" {
-		return mrbc.CompileFile(ctx, path, mrbc.Options{})
+		return mrbc.CompileFile(ctx, path, mrbc.Options{DebugInfo: true})
 	}
 	return os.ReadFile(path)
 }

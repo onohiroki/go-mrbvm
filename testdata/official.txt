@@ -1,0 +1,8 @@
+# mruby 4.0.0 official tests that currently pass on go-mrbvm.
+# Paths are relative to mruby/test/t. Lines starting with # are ignored.
+nil.rb
+true.rb
+false.rb
+comparable.rb
+object.rb
+array.rb

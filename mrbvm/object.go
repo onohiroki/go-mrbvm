@@ -19,7 +19,8 @@ type hashEntry struct {
 }
 
 type hashData struct {
-	entries []hashEntry
+	entries      []hashEntry
+	defaultValue Value
 }
 
 type rangeData struct {
@@ -34,6 +35,7 @@ type Object struct {
 	singleton *Class
 	data      any
 	ivars     map[string]Value
+	frozen    bool
 }
 
 func (o *Object) ivar(name string) Value {
@@ -62,6 +64,7 @@ type Class struct {
 	singletonOf  *Class
 	singleton    *Class
 	included     []*Class
+	state        *State
 }
 
 type method struct {
@@ -96,7 +99,9 @@ type blockData struct {
 
 // exceptionData is the payload of a Ruby exception object.
 type exceptionData struct {
-	message string
+	message   string
+	backtrace []string
+	cause     Value
 }
 
 type bigIntData struct {
@@ -126,7 +131,15 @@ type unwindSignal struct {
 func (e *unwindSignal) Error() string {
 	switch e.kind {
 	case unwindException:
-		return "unhandled exception: " + e.value.Inspect() + " (" + exceptionMessage(e.value) + ")"
+		text := "unhandled exception: " + e.value.Inspect() + " (" + exceptionMessage(e.value) + ")"
+		if e.value.obj != nil {
+			if data, ok := e.value.obj.data.(*exceptionData); ok {
+				for _, line := range data.backtrace {
+					text += "\n\tfrom " + line
+				}
+			}
+		}
+		return text
 	case unwindReturn:
 		return "return"
 	case unwindBreak:
@@ -156,7 +169,7 @@ type nativeBlockData struct {
 }
 
 func newException(class *Class, message string) Value {
-	return ObjectValue(&Object{class: class, data: &exceptionData{message: message}})
+	return ObjectValue(&Object{class: class, data: &exceptionData{message: message, cause: Nil}})
 }
 
 func exceptionMessage(v Value) string {
@@ -227,6 +240,9 @@ func (c *Class) lookupClassMethod(name string) (*method, bool) {
 }
 
 func (s *State) ensureClassObject(c *Class) *Object {
+	if c.state == nil {
+		c.state = s
+	}
 	if c.object == nil {
 		c.object = &Object{class: s.ClassClass, data: c}
 	}

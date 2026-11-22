@@ -14,6 +14,12 @@ func (s *State) executeIrep(ctx context.Context, irep *Irep, self Value) (Value,
 	return s.executeFrame(ctx, irep, self, s.ObjectClass, nil, Nil, Nil, nil, "", nil, false)
 }
 
+type callFrame struct {
+	file   string
+	line   int
+	method string
+}
+
 func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, strict bool) (Value, error) {
 	instructions, err := bytecode.Decode(irep.Code)
 	if err != nil {
@@ -42,6 +48,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	for i, in := range instructions {
 		pcByOffset[in.Offset] = i
 	}
+	lineByOffset := make(map[int]int, len(irep.Lines))
+	for _, line := range irep.Lines {
+		lineByOffset[int(line.Offset)] = int(line.Line)
+	}
+	frame := &callFrame{file: irep.Filename, method: mid}
+	s.frames = append(s.frames, frame)
+	defer func() {
+		s.frames = s.frames[:len(s.frames)-1]
+	}()
+	lastLine := 0
 
 	// caught holds the signal that transferred control into an ensure or
 	// rescue handler. OP_EXCEPT turns it back into a register value.
@@ -98,6 +114,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			return sig.jumpTarget, Nil, false, nil
 		case unwindException:
+			s.ensureBacktrace(sig.value)
 			if handler := handlerAt(offset); handler != nil {
 				target, err := targetPC(handler)
 				if err != nil {
@@ -149,6 +166,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			return Nil, err
 		}
 		in := instructions[pc]
+		if line, ok := lineByOffset[in.Offset]; ok {
+			lastLine = line
+		}
+		frame.line = lastLine
 		switch in.Op {
 		case bytecode.OpNOP:
 			// no-op
@@ -264,7 +285,11 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if key > 0 || kdict {
 				keywordSlot = 1 + positional
 				if keywordSlot < len(regs) {
-					regs[keywordSlot] = frameKw
+					if kdict && frameKw.IsNil() {
+						regs[keywordSlot] = HashValue(nil)
+					} else {
+						regs[keywordSlot] = frameKw
+					}
 				}
 				blockSlot = keywordSlot + 1
 			}
@@ -357,9 +382,19 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[a] = StringValue(regs[a].ToS() + regs[a+1].ToS())
 
 		case bytecode.OpGETGV:
-			regs[in.Operands[0]] = s.globals[irep.Syms[in.Operands[1]]]
+			name := irep.Syms[in.Operands[1]]
+			if name == "$!" {
+				regs[in.Operands[0]] = s.currentException
+			} else {
+				regs[in.Operands[0]] = s.globals[name]
+			}
 		case bytecode.OpSETGV:
-			s.globals[irep.Syms[in.Operands[1]]] = regs[in.Operands[0]]
+			name := irep.Syms[in.Operands[1]]
+			if name == "$!" {
+				s.currentException = regs[in.Operands[0]]
+			} else {
+				s.globals[name] = regs[in.Operands[0]]
+			}
 		case bytecode.OpGETIV:
 			regs[in.Operands[0]] = self.obj.ivar(irep.Syms[in.Operands[1]])
 		case bytecode.OpSETIV:
@@ -1001,16 +1036,37 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if !ok {
 				return Nil, fmt.Errorf("mrbvm: ARYCAT receiver is not an array")
 			}
-			if regs[a+1].IsNil() {
+			srcValue := regs[a+1]
+			if srcValue.IsNil() {
 				break
 			}
-			if regs[a+1].obj != nil {
-				if src, ok := regs[a+1].obj.data.(*arrayData); ok {
+			if srcValue.obj != nil {
+				if src, ok := srcValue.obj.data.(*arrayData); ok {
 					dst.values = append(dst.values, src.values...)
 					break
 				}
+				if _, ok := s.classOf(srcValue).lookup("to_a"); ok {
+					converted, err := s.call(ctx, srcValue, "to_a", nil, Nil, Nil)
+					if err != nil {
+						np, rv, done, fatal := dispatch(err, in.Offset)
+						if fatal != nil {
+							return Nil, fatal
+						}
+						if done {
+							return rv, nil
+						}
+						pc = np - 1
+						continue
+					}
+					if converted.obj != nil {
+						if src, ok := converted.obj.data.(*arrayData); ok {
+							dst.values = append(dst.values, src.values...)
+							break
+						}
+					}
+				}
 			}
-			dst.values = append(dst.values, regs[a+1])
+			dst.values = append(dst.values, srcValue)
 		case bytecode.OpARYSPLAT:
 			a := int(in.Operands[0])
 			if regs[a].obj != nil {
@@ -1466,6 +1522,18 @@ func binaryValue(left Value, name string, right Value) (Value, bool) {
 				rem += rf
 			}
 			return FloatValue(rem), true
+		}
+	case "<<":
+		if li, ok := integerBig(left); ok {
+			if ri, ok := integerBig(right); ok && ri.Sign() >= 0 && ri.IsInt64() {
+				return normalizedBigInt(new(big.Int).Lsh(li, uint(ri.Int64()))), true
+			}
+		}
+	case ">>":
+		if li, ok := integerBig(left); ok {
+			if ri, ok := integerBig(right); ok && ri.Sign() >= 0 && ri.IsInt64() {
+				return normalizedBigInt(new(big.Int).Rsh(li, uint(ri.Int64()))), true
+			}
 		}
 	case "**":
 		if li, ri, ok := bothBigInts(left, right); ok {

@@ -3,6 +3,7 @@ package mrbvm
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -39,6 +40,9 @@ func (s *State) installArrayLibrary() {
 		return ArrayValue(result), nil
 	})
 	class.define("reverse!", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if err := s.ensureMutable(self); err != nil {
+			return Nil, err
+		}
 		values := arrayValues(self)
 		for i, j := 0, len(values)-1; i < j; i, j = i+1, j-1 {
 			values[i], values[j] = values[j], values[i]
@@ -56,6 +60,12 @@ func (s *State) installArrayLibrary() {
 	class.define("uniq", s.arrayUniqMethod)
 	class.define("compact", s.arrayCompactMethod)
 	class.define("each_index", s.arrayEachIndexMethod)
+	class.define("clear", s.arrayClearMethod)
+	class.define("map!", s.arrayMapBangMethod)
+	class.define("collect!", s.arrayMapBangMethod)
+	class.define("replace", s.arrayReplaceMethod)
+	class.define("initialize", s.arrayInitializeMethod)
+	class.define("initialize_copy", s.arrayInitializeCopyMethod)
 	class.define("slice", s.arraySliceMethod)
 	class.define("collect", s.arrayMapMethod)
 	class.define("select", s.arraySelectMethod)
@@ -79,6 +89,13 @@ func (s *State) installArrayLibrary() {
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.Inspect()), nil
 	})
+	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return BoolValue(len(args) == 1 && eqlValues(self, args[0])), nil
+	})
+	class.define("hash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return IntValue(hashValue(self, map[*Object]bool{})), nil
+	})
+	class.define("<=>", s.arrayCompareMethod)
 	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.Inspect()), nil
 	})
@@ -106,6 +123,25 @@ func (s *State) installHashLibrary() {
 		return ArrayValue(values), nil
 	})
 	class.define("fetch", s.hashFetchMethod)
+	class.define("default", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if self.obj != nil {
+			if data, ok := self.obj.data.(*hashData); ok {
+				return data.defaultValue, nil
+			}
+		}
+		return Nil, nil
+	})
+	class.define("default=", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if self.obj != nil && len(args) == 1 {
+			if data, ok := self.obj.data.(*hashData); ok {
+				data.defaultValue = args[0]
+			}
+		}
+		if len(args) == 1 {
+			return args[0], nil
+		}
+		return Nil, nil
+	})
 	class.define("key?", s.hashKeyMethod)
 	class.define("has_key?", s.hashKeyMethod)
 	class.define("include?", s.hashKeyMethod)
@@ -128,6 +164,13 @@ func (s *State) installHashLibrary() {
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.Inspect()), nil
 	})
+	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return BoolValue(len(args) == 1 && eqlValues(self, args[0])), nil
+	})
+	class.define("hash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return IntValue(hashValue(self, map[*Object]bool{})), nil
+	})
+	class.define("<=>", s.arrayCompareMethod)
 	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.Inspect()), nil
 	})
@@ -313,7 +356,10 @@ func (s *State) installObjectLibrary() {
 		return BoolValue(valuesEqual(self, args[0])), nil
 	})
 	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return BoolValue(len(args) == 1 && valuesEqual(self, args[0])), nil
+		return BoolValue(len(args) == 1 && eqlValues(self, args[0])), nil
+	})
+	class.define("hash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return IntValue(hashValue(self, map[*Object]bool{})), nil
 	})
 	class.define("==", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 {
@@ -417,6 +463,13 @@ func (s *State) installRangeLibrary() {
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.Inspect()), nil
 	})
+	class.define("eql?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return BoolValue(len(args) == 1 && eqlValues(self, args[0])), nil
+	})
+	class.define("hash", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return IntValue(hashValue(self, map[*Object]bool{})), nil
+	})
+	class.define("<=>", s.arrayCompareMethod)
 	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.Inspect()), nil
 	})
@@ -487,8 +540,15 @@ func rangeDataOf(v Value) (*rangeData, bool) {
 
 func (s *State) arrayFirstMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	values := arrayValues(self)
+	if len(args) > 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
 	if len(args) > 0 {
-		return s.arrayTake(values, int(args[0].Int()), false)
+		n, err := s.arrayLengthArg(args[0], "first")
+		if err != nil {
+			return Nil, err
+		}
+		return s.arrayTake(values, n, false)
 	}
 	if len(values) == 0 {
 		return Nil, nil
@@ -498,13 +558,31 @@ func (s *State) arrayFirstMethod(ctx context.Context, self Value, args []Value, 
 
 func (s *State) arrayLastMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	values := arrayValues(self)
+	if len(args) > 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
 	if len(args) > 0 {
-		return s.arrayTake(values, int(args[0].Int()), true)
+		n, err := s.arrayLengthArg(args[0], "last")
+		if err != nil {
+			return Nil, err
+		}
+		return s.arrayTake(values, n, true)
 	}
 	if len(values) == 0 {
 		return Nil, nil
 	}
 	return values[len(values)-1], nil
+}
+
+func (s *State) arrayLengthArg(value Value, method string) (int, error) {
+	n, err := s.indexInteger(value)
+	if err != nil {
+		return 0, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, method+": no implicit conversion to integer")}
+	}
+	if n < 0 {
+		return 0, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "negative array size")}
+	}
+	return n, nil
 }
 
 func (s *State) arrayTake(values []Value, n int, fromEnd bool) (Value, error) {
@@ -536,18 +614,46 @@ func (s *State) arrayIndexMethod2(ctx context.Context, self Value, args []Value,
 			}
 			continue
 		}
-		if len(args) == 1 && valuesEqual(value, args[0]) {
-			return IntValue(int64(i)), nil
+		if len(args) == 1 {
+			equal, err := s.rubyEqual(ctx, value, args[0])
+			if err != nil {
+				return Nil, err
+			}
+			if equal {
+				return IntValue(int64(i)), nil
+			}
 		}
 	}
 	return Nil, nil
 }
 
 func (s *State) arrayRindexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	values := arrayValues(self)
-	for i := len(values) - 1; i >= 0; i-- {
-		if len(args) == 1 && valuesEqual(values[i], args[0]) {
-			return IntValue(int64(i)), nil
+	data, _ := arrayDataOf(self)
+	for attempt := 0; attempt < 2; attempt++ {
+		values := arrayValues(self)
+		for i := len(values) - 1; i >= 0; i-- {
+			if len(args) == 1 {
+				equal, err := s.rubyEqual(ctx, values[i], args[0])
+				if err != nil {
+					return Nil, err
+				}
+				if equal {
+					return IntValue(int64(i)), nil
+				}
+				continue
+			}
+			if !block.IsNil() {
+				match, err := s.callBlock(ctx, block, []Value{values[i]}, Nil)
+				if err != nil {
+					return Nil, err
+				}
+				if match.IsTruthy() {
+					return IntValue(int64(i)), nil
+				}
+			}
+		}
+		if data == nil || len(data.values) == len(values) {
+			break
 		}
 	}
 	return Nil, nil
@@ -558,7 +664,7 @@ func (s *State) arrayJoinMethod(ctx context.Context, self Value, args []Value, k
 	if len(args) > 0 && !args[0].IsNil() {
 		separator = args[0].ToS()
 	}
-	joined, err := s.joinArrayValues(arrayValues(self), separator, map[*arrayData]bool{})
+	joined, err := s.joinArrayValues(ctx, arrayDataOfValue(self), separator, map[*arrayData]bool{})
 	if err != nil {
 		return Nil, err
 	}
@@ -566,6 +672,9 @@ func (s *State) arrayJoinMethod(ctx context.Context, self Value, args []Value, k
 }
 
 func (s *State) arrayDeleteAtMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	if len(args) != 1 || args[0].Kind() != KindInt {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "delete_at expects an integer")}
 	}
@@ -588,50 +697,82 @@ func (s *State) arrayDeleteAtMethod(ctx context.Context, self Value, args []Valu
 }
 
 func (s *State) arrayDeleteMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	if len(args) != 1 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "delete expects one argument")}
 	}
+	data, _ := arrayDataOf(self)
 	values := arrayValues(self)
+	originalLen := len(values)
 	result := make([]Value, 0, len(values))
 	var deleted Value
 	found := false
 	for _, value := range values {
-		if valuesEqual(value, args[0]) {
+		equal, err := s.rubyEqual(ctx, value, args[0])
+		if err != nil {
+			return Nil, err
+		}
+		if data != nil && len(data.values) != originalLen {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RuntimeErrorClass, "can't modify array during iteration")}
+		}
+		if equal {
 			deleted = value
 			found = true
 			continue
 		}
 		result = append(result, value)
 	}
-	if self.obj != nil {
-		if data, ok := self.obj.data.(*arrayData); ok {
-			data.values = result
-		}
+	if data != nil {
+		data.values = result
 	}
 	if found {
 		return deleted, nil
 	}
 	if !block.IsNil() {
-		return s.callBlock(ctx, block, nil, Nil)
+		return s.callBlock(ctx, block, []Value{args[0]}, Nil)
 	}
 	return Nil, nil
 }
 
 func (s *State) arrayShiftMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	values := arrayValues(self)
-	if len(values) == 0 {
-		return Nil, nil
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
 	}
-	value := values[0]
+	values := arrayValues(self)
+	if len(args) == 0 {
+		if len(values) == 0 {
+			return Nil, nil
+		}
+		value := values[0]
+		if self.obj != nil {
+			if data, ok := self.obj.data.(*arrayData); ok {
+				data.values = values[1:]
+			}
+		}
+		return value, nil
+	}
+	n, err := s.arrayLengthArg(args[0], "shift")
+	if err != nil {
+		return Nil, err
+	}
+	if n > len(values) {
+		n = len(values)
+	}
+	result := append([]Value(nil), values[:n]...)
 	if self.obj != nil {
 		if data, ok := self.obj.data.(*arrayData); ok {
-			data.values = values[1:]
+			data.values = values[n:]
 		}
 	}
-	return value, nil
+	return ArrayValue(result), nil
 }
 
 func (s *State) arrayUnshiftMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	if self.obj == nil {
 		return Nil, fmt.Errorf("mrbvm: not an array")
 	}
@@ -644,6 +785,9 @@ func (s *State) arrayUnshiftMethod(ctx context.Context, self Value, args []Value
 }
 
 func (s *State) arrayPopMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	values := arrayValues(self)
 	if len(values) == 0 {
 		return Nil, nil
@@ -658,6 +802,9 @@ func (s *State) arrayPopMethod(ctx context.Context, self Value, args []Value, kw
 }
 
 func (s *State) arrayConcatMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
 	values := arrayValues(self)
 	for _, arg := range args {
 		values = append(values, arrayValues(arg)...)
@@ -667,6 +814,103 @@ func (s *State) arrayConcatMethod(ctx context.Context, self Value, args []Value,
 			data.values = values
 		}
 	}
+	return self, nil
+}
+
+func (s *State) arrayClearMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	if data, ok := arrayDataOf(self); ok {
+		data.values = nil
+	}
+	return self, nil
+}
+
+func (s *State) arrayMapBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	data, ok := arrayDataOf(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	if block.IsNil() {
+		return s.toEnum(self, "map!", nil), nil
+	}
+	for i, value := range data.values {
+		mapped, err := s.callBlock(ctx, block, []Value{value}, Nil)
+		if err != nil {
+			return Nil, err
+		}
+		data.values[i] = mapped
+	}
+	return self, nil
+}
+
+func (s *State) arrayReplaceMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	data, ok := arrayDataOf(self)
+	if !ok || len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "replace expects one array")}
+	}
+	source := append([]Value(nil), arrayValues(args[0])...)
+	data.values = source
+	return self, nil
+}
+
+func (s *State) arrayInitializeMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	data, ok := arrayDataOf(self)
+	if !ok {
+		return Nil, fmt.Errorf("mrbvm: not an array")
+	}
+	switch len(args) {
+	case 0:
+		data.values = nil
+	case 1:
+		count, err := s.arrayLengthArg(args[0], "initialize")
+		if err != nil {
+			return Nil, err
+		}
+		data.values = make([]Value, count)
+		if !block.IsNil() {
+			for i := range data.values {
+				value, err := s.callBlock(ctx, block, []Value{IntValue(int64(i))}, Nil)
+				if err != nil {
+					return Nil, err
+				}
+				data.values[i] = value
+			}
+		}
+	case 2:
+		count, err := s.arrayLengthArg(args[0], "initialize")
+		if err != nil {
+			return Nil, err
+		}
+		data.values = make([]Value, count)
+		for i := range data.values {
+			data.values[i] = args[1]
+		}
+	default:
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	return self, nil
+}
+
+func (s *State) arrayInitializeCopyMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	data, ok := arrayDataOf(self)
+	if !ok || len(args) != 1 {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "initialize_copy expects one array")}
+	}
+	data.values = append([]Value(nil), arrayValues(args[0])...)
 	return self, nil
 }
 
@@ -1578,4 +1822,187 @@ func (s *State) objectTapMethod(ctx context.Context, self Value, args []Value, k
 		}
 	}
 	return self, nil
+}
+
+func (s *State) arrayCompareMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return Nil, nil
+	}
+	other := arrayValues(args[0])
+	values := arrayValues(self)
+	length := len(values)
+	if len(other) < length {
+		length = len(other)
+	}
+	for i := 0; i < length; i++ {
+		result, err := s.call(ctx, values[i], "<=>", []Value{other[i]}, Nil, Nil)
+		if err != nil {
+			return Nil, err
+		}
+		if result.IsNil() {
+			return Nil, nil
+		}
+		if result.Kind() != KindInt {
+			return Nil, nil
+		}
+		if result.Int() < 0 {
+			return IntValue(-1), nil
+		}
+		if result.Int() > 0 {
+			return IntValue(1), nil
+		}
+	}
+	switch {
+	case len(values) < len(other):
+		return IntValue(-1), nil
+	case len(values) > len(other):
+		return IntValue(1), nil
+	default:
+		return IntValue(0), nil
+	}
+}
+
+func hashValue(v Value, seen map[*Object]bool) int64 {
+	const fnvOffset = int64(1469598103934665603)
+	const fnvPrime = int64(1099511628211)
+	mix := func(h int64, value Value) int64 {
+		return (h ^ hashValue(value, seen)) * fnvPrime
+	}
+	switch v.Kind() {
+	case KindNil:
+		return 1
+	case KindFalse:
+		return 2
+	case KindTrue:
+		return 3
+	case KindInt:
+		return v.Int()
+	case KindBigInt:
+		value, _ := v.BigInt()
+		return int64(fnvString(value.String(), fnvOffset, fnvPrime))
+	case KindFloat:
+		return int64(math.Float64bits(v.Float()))
+	case KindString, KindSymbol:
+		return int64(fnvString(v.String(), fnvOffset, fnvPrime))
+	case KindObject:
+		if v.obj == nil {
+			return 0
+		}
+		if seen[v.obj] {
+			return 0x9e3779b9
+		}
+		switch data := v.obj.data.(type) {
+		case *arrayData:
+			seen[v.obj] = true
+			h := int64(17)
+			for _, item := range data.values {
+				h = mix(h, item)
+			}
+			delete(seen, v.obj)
+			return h
+		case *hashData:
+			seen[v.obj] = true
+			h := int64(29)
+			for _, entry := range data.entries {
+				h ^= mix(h, entry.key) ^ mix(h, entry.value)
+			}
+			delete(seen, v.obj)
+			return h
+		case *rangeData:
+			h := int64(41)
+			h = mix(h, data.low)
+			h = mix(h, data.high)
+			if data.exclusive {
+				h++
+			}
+			return h
+		case *stringData:
+			return int64(fnvString(data.value, fnvOffset, fnvPrime))
+		default:
+			return int64(fnvString(fmt.Sprintf("%p", v.obj), fnvOffset, fnvPrime))
+		}
+	}
+	return 0
+}
+
+func fnvString(text string, offset, prime int64) int64 {
+	h := offset
+	for i := 0; i < len(text); i++ {
+		h ^= int64(text[i])
+		h *= prime
+	}
+	return h
+}
+
+type eqlPair struct {
+	left  *Object
+	right *Object
+}
+
+func eqlValues(left, right Value) bool {
+	return eqlValuesSeen(left, right, make(map[eqlPair]bool))
+}
+
+func eqlValuesSeen(left, right Value, seen map[eqlPair]bool) bool {
+	if left.Kind() != right.Kind() {
+		return false
+	}
+	switch left.Kind() {
+	case KindInt:
+		return left.Int() == right.Int()
+	case KindBigInt:
+		li, _ := left.BigInt()
+		ri, _ := right.BigInt()
+		return li.Cmp(ri) == 0
+	case KindFloat:
+		return left.Float() == right.Float()
+	case KindString, KindSymbol:
+		return left.String() == right.String()
+	case KindNil, KindTrue, KindFalse:
+		return true
+	case KindObject:
+		if left.obj == nil || right.obj == nil {
+			return left.obj == right.obj
+		}
+		pair := eqlPair{left: left.obj, right: right.obj}
+		if seen[pair] {
+			return true
+		}
+		leftArray, leftOK := left.obj.data.(*arrayData)
+		rightArray, rightOK := right.obj.data.(*arrayData)
+		if leftOK || rightOK {
+			if !leftOK || !rightOK || len(leftArray.values) != len(rightArray.values) {
+				return false
+			}
+			seen[pair] = true
+			defer delete(seen, pair)
+			for i := range leftArray.values {
+				if !eqlValuesSeen(leftArray.values[i], rightArray.values[i], seen) {
+					return false
+				}
+			}
+			return true
+		}
+		leftHash, leftOK := left.obj.data.(*hashData)
+		rightHash, rightOK := right.obj.data.(*hashData)
+		if leftOK || rightOK {
+			if !leftOK || !rightOK || len(leftHash.entries) != len(rightHash.entries) {
+				return false
+			}
+			return valuesEqual(left, right)
+		}
+		return left.obj == right.obj
+	}
+	return false
+}
+
+func (s *State) rubyEqual(ctx context.Context, left, right Value) (bool, error) {
+	if left.obj != nil && right.obj != nil && left.obj == right.obj {
+		return true, nil
+	}
+	result, err := s.call(ctx, left, "==", []Value{right}, Nil, Nil)
+	if err != nil {
+		return false, err
+	}
+	return result.IsTruthy(), nil
 }

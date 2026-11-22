@@ -17,9 +17,13 @@
   - 特異クラス、`class_eval` / `alias_method` / `remove_method`
   - 例外、ensure、非局所制御、パターンマッチ
   - `cmd/vmcompat` / `cmd/mrbtest`
-  - 共有 conformance **37 ケース**が `go-mrbc` と本家 `mrbc` の
+  - 共有 conformance **38 ケース**が `go-mrbc` と本家 `mrbc` の
     両方で成功
-  - 公式テスト `nil.rb` / `true.rb` / `false.rb` / `comparable.rb` が成功
+  - 公式テスト `nil.rb` / `true.rb` / `false.rb` / `comparable.rb` /
+    `object.rb` / `array.rb` が成功（`testdata/official.txt`）
+  - `Options.LoadMrblib` による mrblib subset の opt-in ロード
+  - ホスト API（`DefineFunction` / `DefineClass` / `DefineConst` /
+    `Send` / `Raise`）の最小実装
 
 ## 2. 基本方針
 
@@ -49,9 +53,9 @@
 | **VM-6** `gomirb` / オプション機能 | 対話環境と実用ライブラリ | REPL、複数行入力、履歴、JSON、IO、Time、Regexp（Go regexp 近似）、Fiber | `gomirb` で式評価、JSON/IO の基本動作 |
 | **VM-7** 性能・GC | C mruby と比較可能な性能 | dispatch 最適化、値表現、アロケーション削減、ベンチマーク、GC shim、`ObjectSpace` | ベンチマーク結果を公開、主要操作で許容範囲 |
 
-## 4. 直近スプリント
+## 4. 直近スプリント（2026-11-22 完了）
 
-### 4.1 `t/array.rb` を完走させる
+### 4.1 `t/array.rb` を完走させる（完了）
 
 - `Array#hash`
   - 循環配列を含めて安全に計算する。
@@ -65,7 +69,7 @@
 **完了条件**: `mrbtest mruby/test/t/array.rb` が
 `KO: 0` / `Crash: 0`。
 
-### 4.2 公式テストマニフェスト
+### 4.2 公式テストマニフェスト（完了）
 
 - `testdata/official.txt` を追加する。
 - `cmd/mrbtest` に manifest 実行オプションを追加する。
@@ -74,7 +78,7 @@
   - `nil.rb` / `true.rb` / `false.rb` / `comparable.rb`
   - 次に `integer.rb` / `float.rb` / `symbol.rb`
 
-### 4.3 例外の実用化
+### 4.3 例外の実用化（完了）
 
 - `Exception#backtrace` を irep の `Filename` / `Lines` から生成する。
 - `Exception#full_message`
@@ -85,7 +89,7 @@
 
 **完了条件**: 未捕捉例外で `file:line` が表示される。
 
-### 4.4 リフレクション
+### 4.4 リフレクション（完了）
 
 - `Object#instance_variables`
 - `Object#instance_variable_get` / `instance_variable_set`
@@ -96,7 +100,7 @@
 
 **完了条件**: 公式 `object.rb` / `module.rb` / `class.rb` の基本部分が通る。
 
-### 4.5 mrblib の段階導入
+### 4.5 mrblib の段階導入（完了）
 
 - いきなり全部ロードしない。
 - `Options.LoadMrblib` で opt-in にする。
@@ -106,7 +110,7 @@
 
 **判断ポイント**: ネイティブ実装と mrblib のどちらを正とするか。
 
-### 4.6 ホスト API の設計着手
+### 4.6 ホスト API の設計着手（完了）
 
 - `DefineFunction`
 - `DefineClass`
@@ -117,6 +121,22 @@
 
 **完了条件**: Go のテストから Ruby メソッドを呼び、Ruby から Go 関数を
 呼べる。
+
+### 4.7 次のスプリント（VM-4b）
+
+- 公式テストの拡大
+  - `integer.rb` / `float.rb` / `string.rb` / `hash.rb` / `range.rb` /
+    `symbol.rb` / `exception.rb`
+  - 通ったファイルを `testdata/official.txt` に追加
+- mrblib subset の拡張
+  - `array.rb` / `hash.rb` / `string.rb` / `range.rb` を opt-in で追加
+  - ネイティブ実装との差分を conformance で固定
+- ホスト API の拡張
+  - サンドボックスの命令数・時間・深さ制限
+  - `Data` による Go オブジェクト保持
+- 例外系の仕上げ
+  - `backtrace` の file:line 精度向上
+  - `full_message` の書式を C mruby に合わせる
 
 ## 5. 品質ゲート
 
@@ -150,7 +170,7 @@ go run ./cmd/mrbtest <成功している公式テスト>
 
 ## 7. マイルストーン目安
 
-- **VM-4a**: `t/array.rb` + conformance 40+
+- **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
 - **VM-4b**: 公式テスト 15 ファイル以上
 - **VM-4c**: backtrace / reflection / exception 系テスト
 - **VM-5**: Go ホスト API の最小デモ

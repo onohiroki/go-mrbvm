@@ -43,9 +43,16 @@ compiler and the reference implementation is always C mruby 4.0.0.
 - redefinition-aware optimized indexing (`GETIDX` / `SETIDX`), array
   slice assignment, and cycle-safe `inspect`, `join`, and equality
 - `NilClass`, `TrueClass`, and `FalseClass` with their logical operators
+- exception `backtrace` / `full_message` / `cause`, `$!`, and `FrozenError`
+- reflection: `instance_variables`, `instance_variable_get` / `set`,
+  `const_get` / `set`, `ancestors`, and `methods`
+- an opt-in precompiled mrblib subset (`Options.LoadMrblib`)
+- a host API: `DefineFunction`, `DefineClass`, `DefineConst`, `Send`,
+  `Raise`, and value conversion helpers
 - `cmd/vmcompat` for differential runs against the reference mruby
+- `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
 
-The following 37 shared conformance cases pass with bytecode from both
+The following 38 shared conformance cases pass with bytecode from both
 `go-mrbc` and the official mruby 4.0.0 `mrbc`:
 
 `advanced_classes`, `alias_undef`, `assignment_targets`, `basic_hello`,
@@ -55,7 +62,8 @@ The following 37 shared conformance cases pass with bytecode from both
 `enumerator`, `immediate_values`, `metaprogramming`, `ensure_control`, `exceptions`, `for_blocks`,
 `for_loops`, `keywords`, `lambda`, `lambda_super`, `methods`,
 `modern_syntax`, `multiple_assignment`, `operator_assignment`,
-`parameters`, `pattern_matching`, `patterns_extended`, `retry_redo`,
+`parameters`, `pattern_matching`, `patterns_extended`, `reflection`,
+`retry_redo`,
 `runtime_edges`, `scalars`, `semantic_edges`, `singleton_classes`, `splat`.
 
 VM-3 leftovers are backtraces and richer exception introspection. VM-4 has
@@ -115,8 +123,22 @@ go test ./...
 # Differential run against the reference mruby.
 go run ./cmd/vmcompat testdata/conformance/*/main.rb
 
-# Run official mruby test files with assert.rb.
-go run ./cmd/mrbtest mruby/test/t/comparable.rb
+# Run the manifest of official mruby tests that currently pass.
+go run ./cmd/mrbtest -manifest testdata/official.txt
+```
+
+The manifest currently covers `nil`, `true`, `false`, `comparable`,
+`object`, and `array`; `array.rb` passes with `KO: 0` / `Crash: 0`.
+
+## Host API
+
+```go
+state := mrbvm.New(mrbvm.Options{})
+state.DefineFunction("host_greet", func(ctx context.Context, s *mrbvm.State, self mrbvm.Value, args []mrbvm.Value, block mrbvm.Value) (mrbvm.Value, error) {
+	return mrbvm.StringValue("hi " + args[0].String()), nil
+})
+state.DefineConst(nil, "ANSWER", mrbvm.IntValue(42))
+result, err := state.Send(ctx, state.TopSelf, "ruby_method", mrbvm.IntValue(1))
 ```
 
 The `testdata/conformance` corpus is copied from `go-mrbc` for bootstrapping.

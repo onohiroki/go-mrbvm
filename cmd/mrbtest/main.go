@@ -22,12 +22,24 @@ func main() {
 	verbose := flag.Bool("v", false, "show every assertion label")
 	stress := flag.Bool("stress", false, "run stress tests")
 	assertPath := flag.String("assert", filepath.Join("mruby", "test", "assert.rb"), "path to assert.rb")
+	manifest := flag.String("manifest", "", "file listing test names under mruby/test/t")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: mrbtest [-v] [-stress] test.rb...")
+		fmt.Fprintln(os.Stderr, "usage: mrbtest [-v] [-stress] [-manifest file] test.rb...")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if flag.NArg() == 0 {
+	files := append([]string(nil), flag.Args()...)
+	if *manifest != "" {
+		listed, err := readManifest(*manifest)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mrbtest: %v\n", err)
+			os.Exit(2)
+		}
+		for _, name := range listed {
+			files = append(files, filepath.Join("mruby", "test", "t", name))
+		}
+	}
+	if len(files) == 0 {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -40,7 +52,7 @@ func main() {
 
 	ctx := context.Background()
 	failures := 0
-	for _, path := range flag.Args() {
+	for _, path := range files {
 		if err := runFile(ctx, path, string(assertSource), *verbose, *stress); err != nil {
 			failures++
 			fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", path, err)
@@ -52,6 +64,22 @@ func main() {
 	}
 }
 
+func readManifest(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		files = append(files, line)
+	}
+	return files, nil
+}
+
 func runFile(ctx context.Context, path, assertSource string, verbose, stress bool) error {
 	source, err := os.ReadFile(path)
 	if err != nil {
@@ -61,6 +89,10 @@ func runFile(ctx context.Context, path, assertSource string, verbose, stress boo
 	var program strings.Builder
 	program.WriteString("RUBY_ENGINE = \"mruby\"\n")
 	program.WriteString("def t_print(*args); print(*args); end\n")
+	program.WriteString("module AryShared\n")
+	program.WriteString("  def self.heap_empty?(ary); ary.empty?; end\n")
+	program.WriteString("  def self.copy_ptr_null?(ary); false; end\n")
+	program.WriteString("end\n")
 	if verbose {
 		program.WriteString("$mrbtest_verbose = true\n")
 	}
@@ -86,7 +118,7 @@ func runFile(ctx context.Context, path, assertSource string, verbose, stress boo
 		return err
 	}
 
-	bytecode, err := mrbc.CompileFile(ctx, tempPath, mrbc.Options{})
+	bytecode, err := mrbc.CompileFile(ctx, tempPath, mrbc.Options{DebugInfo: true})
 	if err != nil {
 		return fmt.Errorf("compile: %w", err)
 	}

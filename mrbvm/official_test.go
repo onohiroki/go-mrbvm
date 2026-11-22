@@ -21,11 +21,17 @@ func TestOfficialSubset(t *testing.T) {
 	if err != nil {
 		t.Skip("mruby reference checkout is not available")
 	}
-	files := []string{
-		"nil.rb",
-		"true.rb",
-		"false.rb",
-		"comparable.rb",
+	manifest, err := os.ReadFile(filepath.Join("..", "testdata", "official.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := make([]string, 0)
+	for _, line := range strings.Split(string(manifest), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		files = append(files, line)
 	}
 	ctx := context.Background()
 	for _, name := range files {
@@ -37,6 +43,10 @@ func TestOfficialSubset(t *testing.T) {
 			var program strings.Builder
 			program.WriteString("RUBY_ENGINE = \"mruby\"\n")
 			program.WriteString("def t_print(*args); print(*args); end\n")
+			program.WriteString("module AryShared\n")
+			program.WriteString("  def self.heap_empty?(ary); ary.empty?; end\n")
+			program.WriteString("  def self.copy_ptr_null?(ary); false; end\n")
+			program.WriteString("end\n")
 			program.Write(assertSource)
 			program.WriteString("\n")
 			program.Write(source)
@@ -52,7 +62,7 @@ func TestOfficialSubset(t *testing.T) {
 			if err := temp.Close(); err != nil {
 				t.Fatal(err)
 			}
-			data, err := mrbc.CompileFile(ctx, temp.Name(), mrbc.Options{})
+			data, err := mrbc.CompileFile(ctx, temp.Name(), mrbc.Options{DebugInfo: true})
 			if err != nil {
 				t.Fatalf("compile: %v", err)
 			}

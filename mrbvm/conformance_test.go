@@ -48,6 +48,7 @@ func TestConformance(t *testing.T) {
 		"parameters",
 		"pattern_matching",
 		"patterns_extended",
+		"reflection",
 		"retry_redo",
 		"runtime_edges",
 		"scalars",

@@ -57,14 +57,14 @@ Array.class_eval do
   end
 end
 begin
-  p arr[0]
+  p arr.__send__(:[], 0)
 ensure
   Array.class_eval do
     alias_method :[], :__old_aref
     remove_method :__old_aref
   end
 end
-p arr[0]
+p arr.__send__(:[], 0)
 
 a = [1, 2, 3, 4, 5]
 a[1, 2] = [9, 8, 7]
