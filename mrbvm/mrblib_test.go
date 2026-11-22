@@ -40,6 +40,14 @@ class V
 end
 p V.new(1) < V.new(2)
 p NameError.new("x").message
+
+p [1, 2, 3].each_index.to_a
+seen = []
+{a: 1, b: 2}.each { |k, v| seen << [k, v] }
+p seen
+p "a\nb\n".each_line.to_a
+p (1..3).each.to_a
+p [3, 1, 2].sort
 `
 	temp, err := os.CreateTemp(t.TempDir(), "mrblib-*.rb")
 	if err != nil {
@@ -61,7 +69,8 @@ p NameError.new("x").message
 	if _, err := state.Run(ctx, data); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
-	want := "[6, 2, 4]\n[3, 2]\n6\n[1, 2, 3]\ntrue\n\"x\"\n"
+	want := "[6, 2, 4]\n[3, 2]\n6\n[1, 2, 3]\ntrue\n\"x\"\n" +
+		"[0, 1, 2]\n[[:a, 1], [:b, 2]]\n[\"a\\n\", \"b\\n\"]\n[1, 2, 3]\n[1, 2, 3]\n"
 	if got := out.String(); got != want {
 		t.Fatalf("output mismatch:\n got %q\nwant %q", got, want)
 	}
