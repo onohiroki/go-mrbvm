@@ -68,7 +68,7 @@ compiler and the reference implementation is always C mruby 4.0.0.
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
 
-The shared conformance corpus (52 cases) lives in the sibling `go-mrbc`
+The shared conformance corpus (53 cases) lives in the sibling `go-mrbc`
 repository as the importable `conformance` package. Every case passes with
 bytecode from both `go-mrbc` and the official mruby 4.0.0 `mrbc`.
 

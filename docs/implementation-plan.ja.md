@@ -400,6 +400,14 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - Phase 6/7（cref / defined?）: メソッド・ブロックのレキシカル cref、
   定数探索、`defined?` の非評価判定、クラス変数のレキシカル解決を実装
   （`module.rb` 86/86、`range.rb` 24/26）
+- Phase 8（共有コーパス）: `go-mrbc` の `conformance` パッケージを
+  `embed.FS` で共有し、53 ケースを `go-mrbvm` の `go test` と
+  `vmcompat -corpus` で実行
+- Phase 9（演算子メソッド層）: `Integer` / `Float` の演算子を実メソッドに
+  し、再定義時は opcode と `SEND` 高速パスを `s.call` にフォールバック。
+  `TestOperatorRedefinition` で CRuby / 開発ツリーの挙動を固定
+- `Float::NAN == Float::NAN` は 4.0.0 の `OP_EQ` が `true`、開発ツリーと
+  CRuby が `false`。共有コーパスはこの参照バグを表明せず、VM は CRuby に従う
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録
 
 ## 16. 現在の状態
@@ -407,7 +415,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - リポジトリのスキャフォールド済み
 - `go-mrbvm` モジュール作成済み
 - `go-mrbc/bytecode` への依存と `DecodeBytecode` の入口あり
-- 適合コーパス、サンプル、設計資料をコピー済み
+- 適合コーパスは `go-mrbc` の `conformance` パッケージで共有済み
 - **VM-0 実装済み**
   - RITE 04.00 のロード
   - 最小の値・オブジェクトモデル

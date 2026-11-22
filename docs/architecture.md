@@ -423,18 +423,20 @@ own repository initially.
 
 ### Reuse the compiler corpus
 
-Expose `go-mrbc` testdata as an importable package:
+The corpus is exposed by `go-mrbc/conformance`:
 
 ```go
 package conformance
 
 import "embed"
 
-//go:embed testdata
-var FS embed.FS
+//go:embed testdata/conformance
+var embedded embed.FS
 ```
 
-Then `go-mrbvm` can run the same cases without copying them.
+`go-mrbvm` imports the package and runs the same cases without copying them.
+`conformance.Cases()` returns the case directories, and `conformance.FS`
+contains `main.rb`, `stdout.txt`, and the optional expectation files.
 
 ### Differential execution
 

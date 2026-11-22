@@ -162,10 +162,24 @@ mruby     20 iterations  531.027ms  37.66 ops/s
 ratio     go-mrbvm/mruby = 1.33x
 ```
 
-公式 `mrbc` は `OP_ADD` / `OP_ADDILV` / `OP_LT` などの専用命令を出力する
-一方、go-mrbc は算術を `SEND` で出力する。`vmbench -mrbc` を使うと
-C mruby と同じバイトコードで比較できる。C mruby の計測にはプロセス起動
-時間が含まれるため、比率は目安。
+公式 `mrbc` と go-mrbc は現在どちらも `OP_ADD` / `OP_ADDILV` / `OP_LT`
+などの専用命令を出力する。`vmbench -mrbc` を使うと C mruby と同じ
+バイトコードで比較できる。C mruby の計測にはプロセス起動時間が含まれる
+ため、比率は目安。
+
+### 演算子メソッド層の影響（2026-11-22）
+
+`Integer` / `Float` の演算子を実メソッドとして登録し、再定義時だけ
+opcode を `s.call` にフォールバックする変更の前後。同じマシンで
+`vmbench -n 20 -compare benchmark/mixed.rb` を実行した。
+
+| バイトコード | 変更前 | 変更後 |
+| --- | ---: | ---: |
+| go-mrbc | 1.256s | 1.216s |
+| 公式 mrbc | 1.307s | 1.279s |
+
+通常のプログラムでは `bopRedefined` が false のままなので、演算子
+メソッドの追加による退行は見られない。
 今後の最適化対象:
 
 - `Value` のボクシングとインターフェース割り当て

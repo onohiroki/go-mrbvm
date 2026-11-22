@@ -17,8 +17,10 @@
   - 特異クラス、`class_eval` / `alias_method` / `remove_method`
   - 例外、ensure、非局所制御、パターンマッチ
   - `cmd/vmcompat` / `cmd/mrbtest`
-  - 共有 conformance **52 ケース**が `go-mrbc` と本家 `mrbc` の
-    両方で成功
+  - 共有 conformance **53 ケース**が `go-mrbc` と本家 `mrbc` の
+    両方で成功（`go-mrbc/conformance` パッケージを共有）
+  - `Integer` / `Float` の演算子メソッド層、`send` / alias /
+    リフレクション、再定義時の opcode フォールバック
   - 公式テスト **20 ファイル**が成功（`testdata/official.txt`）
   - `Options.LoadMrblib` で 7 ファイルの mrblib subset を opt-in ロード
   - ホスト API（`DefineFunction` / `DefineClass` / `DefineModule` /
@@ -30,6 +32,8 @@
 
 1. **C mruby 4.0.0 を常に正とする**
    - `cmd/vmcompat` で stdout / exit status を比較する。
+   - ただし既知の参照バグ（NaN の自己等価、負の即値、rescue 内 `next`）は
+     CRuby と mruby 開発ツリーの挙動を正とし、共有コーパスには入れない。
 2. **両コンパイラを維持**
    - `go-mrbc` と本家 `mrbc` の両方で conformance を通す。
 3. **ネイティブ実装を優先**
@@ -288,7 +292,34 @@
 - 公式テスト実行用の C テスト gem 互換スタブ（`Mrbtest`・
   `TestNotImplement`）を mrbtest の prelude に追加
 
-conformance は 52 ケースに拡大（`go-mrbc` の `conformance` パッケージで共有）。除外している 3 系統（mruby GC 内部、
+### 4.13 共有コーパスと演算子メソッド層（2026-11-22）
+
+- `go-mrbc` に `conformance` パッケージを追加し、53 ケースを
+  `embed.FS` で共有。`go-mrbvm` はローカルコピーを廃止し、
+  `mrbvm/conformance_test.go` が全ケースを動的に実行する。
+- `cmd/vmcompat -corpus` で共有コーパス全体を C mruby /
+  go-mrbc / 本家 mrbc の三者で比較できるようにした。
+- `Integer` / `Float` の
+  `+ - * / % ** << >> & | ^ ~ -@` を実メソッドとして登録。
+  `alias_method` / `send` / `method_defined?` / `respond_to?` が
+  組み込み演算子を参照できる。
+- 演算子が再定義されたら `bopRedefined` を立て、`OP_ADD` 系、
+  `OP_ADDI` / `OP_SUBI`、`OP_ADDILV` / `OP_SUBILV`、および
+  `SEND` の演算子高速パスを `s.call` にフォールバック。
+  `a == a` の同一性ショートカットも再定義を尊重する。
+- `Integer#<<` / `>>` の負のシフト、`FloatDomainError` 定数、
+  `Mrbtest::FLOAT_TOLERANCE`、複数名の `remove_method` を追加。
+- `TestOperatorRedefinition` で CRuby / 開発ツリーの再定義挙動を固定。
+  共有 `operator_methods` は 4.0.0 と CRuby の両方で同じ結果になる
+  alias / send / reflection だけを検証する。
+- `vmbench`（mixed.rb、20 iterations）:
+  go-mrbc bytecode 1.256s → 1.216s、公式 mrbc bytecode
+  1.307s → 1.279s。演算子メソッド層による退行はない。
+- `integer.rb` / `float.rb` は演算子再定義のブロックが通るようになった。
+  残る失敗は Float 比較の精度、整数の丸め、`__ensure` など
+  演算子 opcode とは独立した互換ギャップ。
+
+conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケージで共有）。除外している 3 系統（mruby GC 内部、
 Encoding の byte/char、Hash 再入カーソル）は引き続き対象外。
 
 ## 5. 品質ゲート
