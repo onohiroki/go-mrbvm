@@ -186,8 +186,10 @@
   - 文字列 `<<` の追記バッファと `String#dup` 修正
   - バックトレース整形のフレームキャッシュ
   - `Object` とペイロード（String/Array/Hash/Block/Exception）の同一アロケーション
+  - 行番号テーブル・制限チェック・private 検査・defer のホットループ最適化
+  - 1 引数 SEND の演算子 ID 事前計算と整数専用高速パス
   - GC shim（`GC.stat` / `count` / `enable?` / `start`）
-  - MethodCall の割り当て 41,403 → 1,400 / 回、C mruby 比 約 3.5x
+  - MethodCall の割り当て 41,403 → 1,397 / 回、C mruby 比 約 1.6x
 - 次
   - `Value` のボクシング削減
   - `State` 初期化コスト
