@@ -288,6 +288,8 @@ func (s *State) classOf(v Value) *Class {
 			return s.ProcClass
 		case *enumeratorData:
 			return s.EnumeratorClass
+		case *timeData:
+			return s.TimeClass
 		}
 	}
 	switch v.kind {
