@@ -96,6 +96,7 @@ func runFile(ctx context.Context, path, assertSource string, verbose, stress boo
 	// The official runner links the mruby-test C gem, which provides these
 	// test-support constants. Per-file runs need the same names to exist.
 	program.WriteString("module Mrbtest\n")
+	program.WriteString("  FLOAT_TOLERANCE = 1e-10\n")
 	program.WriteString("  def self.nofree_cstr?; true; end\n")
 	program.WriteString("end\n")
 	program.WriteString("class TestNotImplement; end\n")

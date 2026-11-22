@@ -792,6 +792,7 @@ func New(opts Options) *State {
 		"KeyError":               s.KeyErrorClass,
 		"NotImplementedError":    s.NotImplementedErrorClass,
 		"RangeError":             s.RangeErrorClass,
+		"FloatDomainError":       s.FloatDomainErrorClass,
 		"FrozenError":            s.FrozenErrorClass,
 		"SecurityError":          s.SecurityErrorClass,
 		"IOError":                s.IOErrorClass,

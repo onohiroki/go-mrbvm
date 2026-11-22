@@ -98,6 +98,17 @@ func (s *State) numericBinaryOperator(self Value, name string, args []Value) (Va
 		if isNumericZero(right) {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ZeroDivisionErrorClass, "divided by 0")}
 		}
+	case "<<", ">>":
+		if shift, ok := integerBig(right); ok && shift.Sign() < 0 {
+			opposite := ">>"
+			if name == ">>" {
+				opposite = "<<"
+			}
+			amount := normalizedBigInt(new(big.Int).Neg(shift))
+			if value, ok := binaryValue(self, opposite, amount); ok {
+				return value, nil
+			}
+		}
 	}
 	if value, ok := binaryValue(self, name, right); ok {
 		return value, nil

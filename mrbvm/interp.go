@@ -1401,7 +1401,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			// Operators on built-in values are the hottest sends. Evaluate
 			// them directly instead of marshalling a one-element argument
 			// slice; fall through for user-defined behaviour or errors.
-			if op := binaryOps[pc]; op != binNone && s.privateMethodCount == 0 {
+			if op := binaryOps[pc]; op != binNone && s.privateMethodCount == 0 && !s.bopRedefined {
 				right := regs[a+1]
 				if recv.Kind() == KindInt && right.Kind() == KindInt {
 					if result, ok := intBinaryOp(recv.Int(), right.Int(), op); ok {
@@ -1509,6 +1509,22 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpADD, bytecode.OpSUB, bytecode.OpMUL, bytecode.OpDIV,
 			bytecode.OpEQ, bytecode.OpLT, bytecode.OpLE, bytecode.OpGT, bytecode.OpGE:
 			a := int(in.Operands[0])
+			if s.bopRedefined {
+				result, err := s.call(ctx, regs[a], bytecodeArithName(in.Op), []Value{regs[a+1]}, Nil, Nil)
+				if err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				regs[a] = result
+				continue
+			}
 			left := regs[a]
 			right := regs[a+1]
 			needDispatch := false
@@ -1598,6 +1614,26 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[in.Operands[0]] = value
 		case bytecode.OpADDI, bytecode.OpSUBI:
 			a := int(in.Operands[0])
+			name := "+"
+			if in.Op == bytecode.OpSUBI {
+				name = "-"
+			}
+			if s.bopRedefined {
+				result, err := s.call(ctx, regs[a], name, []Value{IntValue(int64(in.Operands[1]))}, Nil, Nil)
+				if err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				regs[a] = result
+				continue
+			}
 			if left := regs[a]; left.Kind() == KindInt {
 				immediate := int64(in.Operands[1])
 				if in.Op == bytecode.OpADDI {
@@ -1611,10 +1647,6 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 						continue
 					}
 				}
-			}
-			name := "+"
-			if in.Op == bytecode.OpSUBI {
-				name = "-"
 			}
 			left := regs[a]
 			value, ok := binaryValue(left, name, IntValue(int64(in.Operands[1])))
@@ -1636,6 +1668,26 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[in.Operands[0]] = value
 		case bytecode.OpADDILV, bytecode.OpSUBILV:
 			a := int(in.Operands[0])
+			name := "+"
+			if in.Op == bytecode.OpSUBILV {
+				name = "-"
+			}
+			if s.bopRedefined {
+				result, err := s.call(ctx, regs[a], name, []Value{IntValue(int64(in.Operands[2]))}, Nil, Nil)
+				if err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				regs[a] = result
+				continue
+			}
 			if left := regs[a]; left.Kind() == KindInt {
 				immediate := int64(in.Operands[2])
 				if in.Op == bytecode.OpADDILV {
@@ -1649,10 +1701,6 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 						continue
 					}
 				}
-			}
-			name := "+"
-			if in.Op == bytecode.OpSUBILV {
-				name = "-"
 			}
 			left := regs[a]
 			value, ok := binaryValue(left, name, IntValue(int64(in.Operands[2])))
