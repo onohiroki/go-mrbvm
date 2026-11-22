@@ -336,10 +336,14 @@ func (s *State) classOf(v Value) *Class {
 		return s.IntegerClass
 	case KindFloat:
 		return s.FloatClass
-	case KindString:
+	case KindString, KindSymbol:
+		if v.obj != nil && v.obj.class != nil {
+			return v.obj.class
+		}
+		if v.kind == KindSymbol {
+			return s.SymbolClass
+		}
 		return s.StringClass
-	case KindSymbol:
-		return s.SymbolClass
 	default:
 		return s.ObjectClass
 	}

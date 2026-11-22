@@ -160,6 +160,19 @@ func (s *State) installAdvancedIntegerLibrary() {
 		}
 		return FloatValue(float64(self.Int()) / float64(args[0].Int())), nil
 	})
+	class.define("quo", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "quo expects one argument")}
+		}
+		if args[0].Kind() == KindInt && args[0].Int() == 0 {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ZeroDivisionErrorClass, "divided by 0")}
+		}
+		_, divisor, ok := numeric(args[0])
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a number")}
+		}
+		return FloatValue(float64(self.Int()) / divisor), nil
+	})
 	class.define("bit_length", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		value := self.Int()
 		if value < 0 {

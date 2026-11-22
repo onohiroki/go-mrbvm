@@ -1,0 +1,9 @@
+MyArray
+[1]
+false
+MyHash
+{x: 1}
+MyString
+"x"
+1
+false

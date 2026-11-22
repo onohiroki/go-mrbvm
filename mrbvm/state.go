@@ -1926,42 +1926,48 @@ func (s *State) hashSetMethod(ctx context.Context, self Value, args []Value, kw 
 	return s.setIndex(ctx, self, args[0], args[1])
 }
 
+func copyObjectIvars(obj *Object) map[string]Value {
+	if len(obj.ivars) == 0 {
+		return nil
+	}
+	ivars := make(map[string]Value, len(obj.ivars))
+	for name, value := range obj.ivars {
+		ivars[name] = value
+	}
+	return ivars
+}
+
 func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if self.Kind() == KindString && self.obj != nil {
-		if data, ok := self.obj.data.(*stringData); ok {
-			return StringValue(data.str()), nil
-		}
+	if self.obj == nil {
 		return self, nil
 	}
-	if self.Kind() != KindObject || self.obj == nil {
-		return self, nil
-	}
+	var duplicate Value
 	switch data := self.obj.data.(type) {
-	case *arrayData:
-		values := make([]Value, len(data.values))
-		copy(values, data.values)
-		return ArrayValue(values), nil
-	case *hashData:
-		entries := make([]hashEntry, len(data.entries))
-		copy(entries, data.entries)
-		return HashValue(entries), nil
 	case *stringData:
-		return StringValue(data.str()), nil
+		duplicate = StringValue(data.str())
+	case *arrayData:
+		duplicate = ArrayValue(append([]Value(nil), data.values...))
+	case *hashData:
+		duplicate = HashValue(append([]hashEntry(nil), data.entries...))
+	case *rangeData:
+		duplicate = RangeValue(data.low, data.high, data.exclusive)
 	case *exceptionData:
 		copyData := *data
 		copyData.backtrace = append([]string(nil), data.backtrace...)
-		return ObjectValue(&Object{class: self.obj.class, data: &copyData, ivars: self.obj.ivars}), nil
+		duplicate = ObjectValue(&Object{class: self.obj.class, data: &copyData})
 	case *Class:
 		return self, nil
 	case *blockData:
 		copyData := *data
-		return ObjectValue(&Object{data: &copyData}), nil
+		duplicate = ObjectValue(&Object{data: &copyData})
+	default:
+		duplicate = ObjectValue(&Object{class: self.obj.class})
 	}
-	ivars := make(map[string]Value, len(self.obj.ivars))
-	for name, value := range self.obj.ivars {
-		ivars[name] = value
+	if duplicate.obj != nil {
+		duplicate.obj.class = self.obj.class
+		duplicate.obj.ivars = copyObjectIvars(self.obj)
 	}
-	return ObjectValue(&Object{class: self.obj.class, ivars: ivars}), nil
+	return duplicate, nil
 }
 
 func (s *State) objectRespondToMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
