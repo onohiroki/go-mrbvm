@@ -111,6 +111,7 @@ type State struct {
 	callDepth int
 	programs  map[*Irep]*irepProgram
 	regPool   sync.Pool
+	gcEnabled bool
 
 	policy           *sandbox.Policy
 	maxInstructions  uint64
@@ -155,6 +156,7 @@ func New(opts Options) *State {
 		maxHashSize:     opts.MaxHashSize,
 		maxStringSize:   opts.MaxStringSize,
 		startTime:       time.Now(),
+		gcEnabled:       true,
 	}
 	if s.maxDepth == 0 {
 		s.maxDepth = 200
@@ -506,19 +508,11 @@ func New(opts Options) *State {
 	for _, class := range []*Class{s.ArrayClass, s.HashClass, s.RangeClass} {
 		includeModule(class, s.EnumerableClass)
 	}
-	s.GCClass.classMethods["start"] = &method{owner: s.GCClass, name: "start", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return Nil, nil
-	}}
-	s.GCClass.classMethods["enable"] = &method{owner: s.GCClass, name: "enable", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return True, nil
-	}}
-	s.GCClass.classMethods["disable"] = &method{owner: s.GCClass, name: "disable", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return True, nil
-	}}
 	s.installImmediateLibrary()
 	s.installCoreLibrary()
 	s.installTimeClass()
 	s.installJSONModule()
+	s.installGCLibrary()
 	s.installIOLibrary()
 	s.installFileLibrary()
 	s.installRegexpClass()
