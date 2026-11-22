@@ -122,5 +122,22 @@ It will later move to an importable shared package.
 
 ## License
 
-MIT. See [LICENSE](LICENSE). mruby, Prism, go-mrbc, and ChibiRuby are
-distributed under their respective licenses.
+The original source code and documentation in this repository are licensed
+under the **MIT License**; see [LICENSE](LICENSE).
+
+The `mrbvm` library consumes [go-mrbc](https://github.com/onohiroki/go-mrbc)'s
+`bytecode` package (MIT). The `gomruby` command can also link the compiler
+stack:
+
+- [go-ruby-prism](https://github.com/danielgatis/go-ruby-prism) — MIT
+- [Prism](https://github.com/ruby/prism) — MIT, embedded as `prism.wasm`
+- [wazero](https://github.com/tetratelabs/wazero) — Apache-2.0
+
+See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and
+[third_party/](third_party/) for the notices and full license texts. mruby is
+referenced as the bytecode and VM specification; no mruby C code is linked.
+ChibiRuby is referenced as prior art; no code is copied.
+
+`.mrb` files generated from user Ruby programs are not claimed by this
+project's MIT License. Their licensing is determined by the input program and
+the user's own distribution terms.
