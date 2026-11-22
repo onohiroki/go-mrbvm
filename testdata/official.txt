@@ -6,3 +6,17 @@ false.rb
 comparable.rb
 object.rb
 array.rb
+indexerror.rb
+rangeerror.rb
+runtimeerror.rb
+standarderror.rb
+typeerror.rb
+regexperror.rb
+localjumperror.rb
+bs_literal.rb
+version.rb
+platform.rb
+superclass.rb
+nameerror.rb
+nomethoderror.rb
+exception.rb
