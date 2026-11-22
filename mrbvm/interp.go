@@ -18,6 +18,7 @@ type irepProgram struct {
 	instructions []bytecode.Instruction
 	pcByOffset   map[int]int
 	lineAt       []int32
+	jumpAt       []int32
 	binaryOps    []binaryOp
 	hasBlocks    bool
 }
@@ -65,6 +66,18 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 			break
 		}
 	}
+	jumpAt := make([]int32, len(instructions))
+	for i := range jumpAt {
+		jumpAt[i] = -1
+	}
+	for i, in := range instructions {
+		switch in.Op {
+		case bytecode.OpJMP, bytecode.OpJMPUW, bytecode.OpJMPIF, bytecode.OpJMPNOT, bytecode.OpJMPNIL:
+			if target, err := jumpTarget(in, pcByOffset); err == nil {
+				jumpAt[i] = int32(target)
+			}
+		}
+	}
 	binaryOps := make([]binaryOp, len(instructions))
 	for i, in := range instructions {
 		if in.Op != bytecode.OpSEND && in.Op != bytecode.OpSSEND {
@@ -78,7 +91,7 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 			binaryOps[i] = binaryOpForName(irep.Syms[sym])
 		}
 	}
-	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineAt: lineAt, binaryOps: binaryOps, hasBlocks: hasBlocks}
+	program := &irepProgram{instructions: instructions, pcByOffset: pcByOffset, lineAt: lineAt, jumpAt: jumpAt, binaryOps: binaryOps, hasBlocks: hasBlocks}
 	s.programs[irep] = program
 	return program, nil
 }
@@ -145,6 +158,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	_ = keywordSlot
 	pcByOffset := program.pcByOffset
 	lineAt := program.lineAt
+	jumpAt := program.jumpAt
 	binaryOps := program.binaryOps
 	frame := callFrame{file: irep.Filename, method: mid}
 	entryException := s.currentException
@@ -332,8 +346,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		}
 		return handle(sig, offset)
 	}
+	ctxDone := ctx.Done()
 	for pc := 0; pc < len(instructions); pc++ {
-		if pc&1023 == 0 {
+		if pc&1023 == 0 && ctxDone != nil {
 			if err := ctx.Err(); err != nil {
 				return Nil, err
 			}
@@ -349,10 +364,10 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			s.currentException = scope.prev
 		}
 		in := instructions[pc]
-		if line := lineAt[pc]; line != 0 {
-			lastLine = int(line)
+		if line := int(lineAt[pc]); line != 0 && line != lastLine {
+			lastLine = line
+			s.frames[len(s.frames)-1].line = line
 		}
-		s.frames[len(s.frames)-1].line = lastLine
 		switch in.Op {
 		case bytecode.OpNOP:
 			// no-op
@@ -1184,15 +1199,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			regs[in.Operands[0]] = result
 
 		case bytecode.OpJMP:
-			target, err := jumpTarget(in, pcByOffset)
-			if err != nil {
-				return Nil, err
+			target := jumpAt[pc]
+			if target < 0 {
+				return Nil, fmt.Errorf("mrbvm: %s has an invalid jump target", in.Op)
 			}
-			pc = target - 1
+			pc = int(target) - 1
 		case bytecode.OpJMPUW:
-			target, err := jumpTarget(in, pcByOffset)
-			if err != nil {
-				return Nil, err
+			target := int(jumpAt[pc])
+			if target < 0 {
+				return Nil, fmt.Errorf("mrbvm: %s has an invalid jump target", in.Op)
 			}
 			np, rv, done, fatal := handle(&unwindSignal{kind: unwindJump, jumpTarget: target}, in.Offset)
 			if fatal != nil {
@@ -1204,40 +1219,35 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			pc = np - 1
 		case bytecode.OpJMPIF:
 			if regs[in.Operands[0]].IsTruthy() {
-				target, err := jumpTarget(in, pcByOffset)
-				if err != nil {
-					return Nil, err
+				target := jumpAt[pc]
+				if target < 0 {
+					return Nil, fmt.Errorf("mrbvm: %s has an invalid jump target", in.Op)
 				}
-				pc = target - 1
+				pc = int(target) - 1
 			}
 		case bytecode.OpJMPNOT:
 			if !regs[in.Operands[0]].IsTruthy() {
-				target, err := jumpTarget(in, pcByOffset)
-				if err != nil {
-					return Nil, err
+				target := jumpAt[pc]
+				if target < 0 {
+					return Nil, fmt.Errorf("mrbvm: %s has an invalid jump target", in.Op)
 				}
-				pc = target - 1
+				pc = int(target) - 1
 			}
 		case bytecode.OpJMPNIL:
 			if regs[in.Operands[0]].IsNil() {
-				target, err := jumpTarget(in, pcByOffset)
-				if err != nil {
-					return Nil, err
+				target := jumpAt[pc]
+				if target < 0 {
+					return Nil, fmt.Errorf("mrbvm: %s has an invalid jump target", in.Op)
 				}
-				pc = target - 1
+				pc = int(target) - 1
 			}
 
 		case bytecode.OpADD, bytecode.OpSUB, bytecode.OpMUL, bytecode.OpDIV,
 			bytecode.OpEQ, bytecode.OpLT, bytecode.OpLE, bytecode.OpGT, bytecode.OpGE:
-			name := map[bytecode.Opcode]string{
-				bytecode.OpADD: "+", bytecode.OpSUB: "-", bytecode.OpMUL: "*",
-				bytecode.OpDIV: "/", bytecode.OpEQ: "==", bytecode.OpLT: "<",
-				bytecode.OpLE: "<=", bytecode.OpGT: ">", bytecode.OpGE: ">=",
-			}[in.Op]
 			left := regs[in.Operands[0]]
-			value, ok := binaryValue(left, name, regs[in.Operands[0]+1])
+			value, ok := binaryValueOp(left, bytecodeArithOp(in.Op), regs[in.Operands[0]+1])
 			if !ok {
-				result, err := s.call(ctx, left, name, []Value{regs[in.Operands[0]+1]}, Nil, Nil)
+				result, err := s.call(ctx, left, bytecodeArithName(in.Op), []Value{regs[in.Operands[0]+1]}, Nil, Nil)
 				if err != nil {
 					np, rv, done, fatal := dispatch(err, in.Offset)
 					if fatal != nil {
@@ -1919,6 +1929,54 @@ func intBinaryOp(left, right int64, op binaryOp) (Value, bool) {
 		return BoolValue(left >= right), true
 	}
 	return Nil, false
+}
+
+func bytecodeArithName(op bytecode.Opcode) string {
+	switch op {
+	case bytecode.OpADD:
+		return "+"
+	case bytecode.OpSUB:
+		return "-"
+	case bytecode.OpMUL:
+		return "*"
+	case bytecode.OpDIV:
+		return "/"
+	case bytecode.OpEQ:
+		return "=="
+	case bytecode.OpLT:
+		return "<"
+	case bytecode.OpLE:
+		return "<="
+	case bytecode.OpGT:
+		return ">"
+	case bytecode.OpGE:
+		return ">="
+	}
+	return ""
+}
+
+func bytecodeArithOp(op bytecode.Opcode) binaryOp {
+	switch op {
+	case bytecode.OpADD:
+		return binAdd
+	case bytecode.OpSUB:
+		return binSub
+	case bytecode.OpMUL:
+		return binMul
+	case bytecode.OpDIV:
+		return binDiv
+	case bytecode.OpEQ:
+		return binEq
+	case bytecode.OpLT:
+		return binLt
+	case bytecode.OpLE:
+		return binLe
+	case bytecode.OpGT:
+		return binGt
+	case bytecode.OpGE:
+		return binGe
+	}
+	return binNone
 }
 
 func binaryValue(left Value, name string, right Value) (Value, bool) {
