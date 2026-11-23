@@ -138,7 +138,10 @@ type environment struct {
 	regs        []Value
 	block       Value
 	methodFrame bool
-	names       []string
+	// pinned marks an environment a Binding reaches. The frame pool must not
+	// recycle it when its frame returns.
+	pinned bool
+	names  []string
 }
 
 type blockData struct {

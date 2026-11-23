@@ -837,6 +837,9 @@ func (s *State) installObjectLibrary() {
 		return BoolValue(!valuesEqual(self, args[0])), nil
 	})
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if self.obj != nil && s.TopSelf.obj != nil && self.obj == s.TopSelf.obj {
+			return StringValue("main"), nil
+		}
 		return StringValue(self.ToS()), nil
 	})
 	class.define("inspect", s.objectInspectMethod)

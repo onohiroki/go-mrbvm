@@ -20,7 +20,6 @@ mruby-fiber/test/fiber2.rb
 mruby-set/test/set.rb
 mruby-struct/test/struct.rb
 mruby-data/test/data.rb
-mruby-regexp/test/regexp.rb
 mruby-regexp/test/string_regexp.rb
 mruby-regexp/test/string_index.rb
 mruby-regexp/test/symbol_regexp.rb

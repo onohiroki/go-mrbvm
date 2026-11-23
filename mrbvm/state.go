@@ -92,6 +92,7 @@ type State struct {
 	regexpQuotedSet        bool
 	regexpQuotedLiteral    string
 	regexpQuotedRegexp     Value
+	topLevelEnv            *environment
 	BacktraceLocationClass *Class
 	FiberClass             *Class
 	BindingClass           *Class
@@ -1948,6 +1949,9 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 		return Nil, fmt.Errorf("mrbvm: Class#new receiver is not a class")
 	}
 	if class == s.MatchDataClass || s.classIsSubclass(class, s.MatchDataClass) {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, "undefined method 'new' for Class")}
+	}
+	if class == s.BindingClass {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, "undefined method 'new' for Class")}
 	}
 	if class.singletonOf != nil || class.isSingleton {
@@ -3833,6 +3837,10 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 		duplicate = ObjectValue(&Object{class: self.obj.class, data: copyData})
 	case *structData:
 		duplicate = ObjectValue(&Object{class: self.obj.class, data: &structData{values: append([]Value(nil), data.values...)}})
+	case *bindingData:
+		copyData := *data
+		copyData.env = copyEnvironmentChain(data.env)
+		duplicate = ObjectValue(&Object{class: self.obj.class, data: &copyData})
 	case *matchData:
 		copyData := *data
 		copyData.groups = append([]string(nil), data.groups...)

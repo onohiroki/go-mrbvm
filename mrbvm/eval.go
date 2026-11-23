@@ -24,6 +24,7 @@ type bindingData struct {
 	method      string
 	file        string
 	line        int
+	visibility  string
 }
 
 func (s *State) installEvalLibrary() {
@@ -37,6 +38,15 @@ func (s *State) installEvalLibrary() {
 	s.ObjectClass.define("binding", s.kernelBindingMethod)
 	s.KernelClass.classMethods["binding"] = &method{owner: s.KernelClass, name: "binding", native: s.kernelBindingMethod}
 
+	s.topLevelEnv = &environment{}
+	s.ObjectClass.constants["TOPLEVEL_BINDING"] = ObjectValue(&Object{class: s.BindingClass, data: &bindingData{
+		env:         s.topLevelEnv,
+		self:        s.TopSelf,
+		targetClass: s.ObjectClass,
+		cref:        s.ObjectClass,
+		owner:       s.ObjectClass,
+		method:      "<main>",
+	}})
 	s.ObjectClass.define("instance_eval", s.instanceEvalMethod)
 	s.BasicObjectClass.define("instance_eval", s.instanceEvalMethod)
 	s.ClassClass.define("class_eval", s.classEvalStringMethod)
@@ -51,6 +61,9 @@ func (s *State) installEvalLibrary() {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, "undefined method 'new' for Class")}
 	}}
 	class.define("eval", s.bindingEvalMethod)
+	class.define("dup", s.bindingDupMethod)
+	class.define("clone", s.bindingDupMethod)
+	class.define("initialize_copy", s.bindingInitializeCopyMethod)
 	class.define("local_variables", s.bindingLocalVariablesMethod)
 	class.define("local_variable_get", s.bindingLocalVariableGetMethod)
 	class.define("local_variable_set", s.bindingLocalVariableSetMethod)
@@ -79,10 +92,12 @@ type evalContext struct {
 	owner       *Class
 	env         *environment
 	method      string
+	visibility  string
+	isolate     bool
 }
 
 func (s *State) currentEvalContext() evalContext {
-	context := evalContext{self: s.TopSelf, targetClass: s.ObjectClass, cref: s.ObjectClass, owner: s.ObjectClass}
+	context := evalContext{self: s.TopSelf, targetClass: s.ObjectClass, cref: s.ObjectClass, owner: s.ObjectClass, env: s.topLevelEnv}
 	if len(s.frames) == 0 {
 		return context
 	}
@@ -131,13 +146,45 @@ func (s *State) evalString(ctx context.Context, source, filename string, line in
 		source = prefix + "\n" + source
 		lineOffset = line - 2
 	}
+	targetVisibility := ""
+	if scope.targetClass != nil {
+		targetVisibility = scope.targetClass.defaultVisibility
+	}
+	if scope.visibility != "" || (scope.self.obj != nil && s.TopSelf.obj != nil && scope.self.obj == s.TopSelf.obj && scope.targetClass == s.ObjectClass) {
+		if scope.visibility != "" {
+			targetVisibility = scope.visibility
+		} else {
+			targetVisibility = "private"
+		}
+	}
+	if scope.targetClass != nil {
+		savedVisibility := scope.targetClass.defaultVisibility
+		scope.targetClass.defaultVisibility = targetVisibility
+		if scope.isolate {
+			defer func(saved string) { scope.targetClass.defaultVisibility = saved }(savedVisibility)
+		}
+	}
 	irep, err := s.compiler(ctx, []byte(source), CompileOptions{
 		FilePath:   filename,
 		LocalNames: names,
 		LineOffset: lineOffset,
 	})
 	if err != nil {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.SyntaxErrorClass, err.Error())}
+		message := err.Error()
+		if strings.Contains(message, "PostExecutionNode") {
+			line := 0
+			for index, text := range strings.Split(source, "\n") {
+				if strings.HasPrefix(strings.TrimSpace(text), "END") {
+					line = index + 1
+					break
+				}
+			}
+			if line == 0 {
+				line = 1
+			}
+			message = fmt.Sprintf("file %s line %d: generator error, END not supported", filename, line)
+		}
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.SyntaxErrorClass, message)}
 	}
 	eval := &evalScope{irep: irep, initial: values}
 	s.evalScopes = append(s.evalScopes, eval)
@@ -244,6 +291,7 @@ func (s *State) kernelEvalMethod(ctx context.Context, self Value, args []Value, 
 		}
 		line = int(args[3].Int())
 	}
+	scope.isolate = true
 	return s.evalString(ctx, args[0].String(), filename, line, scope)
 }
 
@@ -447,6 +495,13 @@ func (s *State) kernelBindingMethod(ctx context.Context, self Value, args []Valu
 		file = s.frames[len(s.frames)-1].file
 		line = s.frames[len(s.frames)-1].line
 	}
+	for env := scope.env; env != nil; env = env.parent {
+		env.pinned = true
+	}
+	visibility := ""
+	if scope.targetClass != nil {
+		visibility = scope.targetClass.defaultVisibility
+	}
 	data := &bindingData{
 		env:         scope.env,
 		self:        scope.self,
@@ -456,14 +511,59 @@ func (s *State) kernelBindingMethod(ctx context.Context, self Value, args []Valu
 		method:      scope.method,
 		file:        file,
 		line:        line,
+		visibility:  visibility,
 	}
 	return ObjectValue(&Object{class: s.BindingClass, data: data}), nil
+}
+
+func copyEnvironmentChain(env *environment) *environment {
+	if env == nil {
+		return nil
+	}
+	copyEnv := &environment{
+		parent:      copyEnvironmentChain(env.parent),
+		regs:        append([]Value(nil), env.regs...),
+		block:       env.block,
+		methodFrame: env.methodFrame,
+		pinned:      true,
+		names:       append([]string(nil), env.names...),
+	}
+	return copyEnv
+}
+
+func (s *State) bindingDupMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := bindingOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a binding")}
+	}
+	copyData := *data
+	copyData.env = copyEnvironmentChain(data.env)
+	return ObjectValue(&Object{class: s.classOf(self), data: &copyData}), nil
+}
+
+func (s *State) bindingInitializeCopyMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 1 {
+		return Nil, argumentCountError(s, len(args), "1")
+	}
+	source, ok := bindingOf(args[0])
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "initialize_copy requires a Binding")}
+	}
+	copyData := *source
+	copyData.env = copyEnvironmentChain(source.env)
+	if self.obj != nil {
+		self.obj.data = &copyData
+	}
+	return self, nil
 }
 
 func (s *State) bindingEvalMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	data, ok := bindingOf(self)
 	if !ok {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a binding")}
+		if self.obj == nil || !s.classIsSubclass(s.classOf(self), s.BindingClass) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a binding")}
+		}
+		data = &bindingData{env: s.topLevelEnv, self: s.TopSelf, targetClass: s.ObjectClass, cref: s.ObjectClass, owner: s.ObjectClass}
 	}
 	if len(args) < 1 || len(args) > 3 || args[0].Kind() != KindString {
 		return Nil, argumentCountError(s, len(args), "1..3")
@@ -482,7 +582,7 @@ func (s *State) bindingEvalMethod(ctx context.Context, self Value, args []Value,
 		}
 		line = int(args[2].Int())
 	}
-	scope := evalContext{self: data.self, targetClass: data.targetClass, cref: data.cref, owner: data.owner, env: data.env, method: data.method}
+	scope := evalContext{self: data.self, targetClass: data.targetClass, cref: data.cref, owner: data.owner, env: data.env, method: data.method, visibility: data.visibility}
 	return s.evalString(ctx, args[0].String(), filename, line, scope)
 }
 

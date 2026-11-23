@@ -109,10 +109,10 @@ func leaveFrame(s *State, entryException Value, regs []Value, env *environment, 
 	s.frames = s.frames[:len(s.frames)-1]
 	s.currentException = entryException
 	if pooled {
-		if env != nil {
+		if env != nil && !env.pinned {
 			s.releaseEnvironment(env)
+			s.releaseSlice(&s.regFree, regs)
 		}
-		s.releaseSlice(&s.regFree, regs)
 	}
 	s.callDepth--
 }
