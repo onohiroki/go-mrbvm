@@ -157,6 +157,9 @@ type environment struct {
 	// already full of temporaries. Writing them into regs would clobber a
 	// temporary the caller is using.
 	extras map[string]Value
+	// evalFrames holds the frames earlier evals made from this scope. A proc
+	// made by one of them must see the locals a later eval writes back.
+	evalFrames []*environment
 }
 
 type blockData struct {

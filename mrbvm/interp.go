@@ -47,6 +47,9 @@ type evalForward struct {
 	args  []Value
 	kw    Value
 	block Value
+	// frameEnv is the frame the evaluated source ran in. The evaluator keeps
+	// it so later writes through the same binding reach procs it made.
+	frameEnv *environment
 }
 
 type exceptionScope struct {
@@ -193,6 +196,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	}
 	if evalForward != nil {
 		frameEnv.evalForward = evalForward
+		evalForward.frameEnv = frameEnv
 	}
 	frame := callFrame{file: irep.Filename, method: mid, env: frameEnv, cref: cref, superStart: superStart, superBase: superBase, self: self, targetClass: targetClass, owner: owner, args: args, kw: kwSnapshot, evalForward: evalForward}
 	var evalFrame *evalScope

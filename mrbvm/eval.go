@@ -102,6 +102,9 @@ type evalContext struct {
 	kw          Value
 	block       Value
 	inMethod    bool
+	// recordFrames keeps the eval frames of a binding so writes to its locals
+	// reach procs the string made.
+	recordFrames bool
 }
 
 // evalForwardFor answers what a forwarding super or a yield in evaluated
@@ -244,9 +247,16 @@ func (s *State) evalString(ctx context.Context, source, filename string, line in
 	if block.obj == nil {
 		block = Nil
 	}
-	s.pendingEvalForward = &evalForward{args: append([]Value(nil), scope.args...), kw: scope.kw, block: block}
+	forward := &evalForward{args: append([]Value(nil), scope.args...), kw: scope.kw, block: block}
+	s.pendingEvalForward = forward
 	result, runErr := s.executeFrame(ctx, irep, scope.self, scope.targetClass, nil, Nil, block, scope.env, scope.method, scope.owner, scope.cref, false)
 	s.pendingEvalForward = nil
+	if scope.recordFrames && scope.env != nil && forward.frameEnv != nil {
+		forward.frameEnv.pinned = true
+		if !containsEnvironment(scope.env.evalFrames, forward.frameEnv) {
+			scope.env.evalFrames = append(scope.env.evalFrames, forward.frameEnv)
+		}
+	}
 	if !scope.isolate && scope.targetClass != nil && scope.targetClass.defaultVisibility != targetVisibility {
 		scope.targetClass.visibilityEscaped = true
 	}
@@ -303,6 +313,37 @@ func findEvalLocal(env *environment, name string) (*environment, int, bool) {
 	return nil, 0, false
 }
 
+func containsEnvironment(envs []*environment, want *environment) bool {
+	for _, env := range envs {
+		if env == want {
+			return true
+		}
+	}
+	return false
+}
+
+// syncEvalFrames writes a value a later eval produced into the frames earlier
+// evals made from the same scope, so a proc they captured reads the new value.
+func syncEvalFrames(env *environment, name string, value Value) {
+	if env == nil || name == "" || strings.HasPrefix(name, "__gomrbc_") {
+		return
+	}
+	for current := env; current != nil; current = current.parent {
+		for _, frameEnv := range current.evalFrames {
+			for slot, localName := range frameEnv.names {
+				if localName == name && slot < len(frameEnv.regs) {
+					frameEnv.regs[slot] = value
+				}
+			}
+			if frameEnv.extras != nil {
+				if _, ok := frameEnv.extras[name]; ok {
+					frameEnv.extras[name] = value
+				}
+			}
+		}
+	}
+}
+
 func writeEvalLocals(env *environment, captured map[string]Value) {
 	for name, value := range captured {
 		if name == "" || strings.HasPrefix(name, "__gomrbc_") {
@@ -314,6 +355,7 @@ func writeEvalLocals(env *environment, captured map[string]Value) {
 			} else if slot < len(owner.regs) {
 				owner.regs[slot] = value
 			}
+			syncEvalFrames(env, name, value)
 			continue
 		}
 		if env == nil {
@@ -323,6 +365,7 @@ func writeEvalLocals(env *environment, captured map[string]Value) {
 			env.extras = make(map[string]Value)
 		}
 		env.extras[name] = value
+		syncEvalFrames(env, name, value)
 	}
 }
 
@@ -344,17 +387,18 @@ func (s *State) kernelEvalMethod(ctx context.Context, self Value, args []Value, 
 		}
 		hasBinding = true
 		scope = evalContext{
-			self:        binding.self,
-			targetClass: binding.targetClass,
-			cref:        binding.cref,
-			owner:       binding.owner,
-			env:         binding.env,
-			method:      binding.method,
-			visibility:  binding.visibility,
-			args:        binding.args,
-			kw:          binding.kw,
-			block:       binding.block,
-			inMethod:    binding.inMethod,
+			self:         binding.self,
+			targetClass:  binding.targetClass,
+			cref:         binding.cref,
+			owner:        binding.owner,
+			env:          binding.env,
+			method:       binding.method,
+			visibility:   binding.visibility,
+			args:         binding.args,
+			kw:           binding.kw,
+			block:        binding.block,
+			inMethod:     binding.inMethod,
+			recordFrames: true,
 		}
 	}
 	if len(args) > 2 && !args[2].IsNil() {
@@ -666,7 +710,7 @@ func (s *State) bindingEvalMethod(ctx context.Context, self Value, args []Value,
 		}
 		line = int(args[2].Int())
 	}
-	scope := evalContext{self: data.self, targetClass: data.targetClass, cref: data.cref, owner: data.owner, env: data.env, method: data.method, visibility: data.visibility, args: data.args, kw: data.kw, block: data.block, inMethod: data.inMethod}
+	scope := evalContext{self: data.self, targetClass: data.targetClass, cref: data.cref, owner: data.owner, env: data.env, method: data.method, visibility: data.visibility, args: data.args, kw: data.kw, block: data.block, inMethod: data.inMethod, recordFrames: true}
 	return s.evalString(ctx, args[0].String(), filename, line, scope)
 }
 
