@@ -1435,6 +1435,7 @@ func (s *State) hashSelectBangMethod(ctx context.Context, self Value, args []Val
 		return Nil, nil
 	}
 	data.entries = entries
+	data.version++
 	data.index = nil
 	data.indexBuilt = 0
 	return self, nil
@@ -1457,6 +1458,7 @@ func (s *State) hashRejectBangMethod(ctx context.Context, self Value, args []Val
 		return Nil, nil
 	}
 	data.entries = entries
+	data.version++
 	data.index = nil
 	data.indexBuilt = 0
 	return self, nil

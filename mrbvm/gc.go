@@ -49,4 +49,14 @@ func (s *State) installGCLibrary() {
 	class.classMethods["step_limit"] = &method{owner: class, name: "step_limit", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(0), nil
 	}}
+	class.classMethods["generational_mode"] = &method{owner: class, name: "generational_mode", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return BoolValue(s.gcGenerational), nil
+	}}
+	class.classMethods["generational_mode="] = &method{owner: class, name: "generational_mode=", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return Nil, argumentCountError(s, len(args), "1")
+		}
+		s.gcGenerational = args[0].IsTruthy()
+		return BoolValue(s.gcGenerational), nil
+	}}
 }

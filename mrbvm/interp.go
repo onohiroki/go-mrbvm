@@ -2062,6 +2062,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				}
 				if !found {
 					data.entries = append(data.entries, hashEntry{key: key, value: value})
+					data.version++
 				}
 			}
 		case bytecode.OpHASHCAT:

@@ -126,6 +126,7 @@ type State struct {
 	argFree           [][]Value
 	envFree           []*environment
 	gcEnabled         bool
+	gcGenerational    bool
 
 	policy             *sandbox.Policy
 	maxInstructions    uint64
@@ -2500,10 +2501,18 @@ func hashDeleteKey(hash Value, name string) (Value, bool) {
 	for i, entry := range data.entries {
 		if valuesEqual(entry.key, key) {
 			data.entries = append(data.entries[:i], data.entries[i+1:]...)
+			data.version++
 			return entry.value, true
 		}
 	}
 	return Nil, false
+}
+
+func (s *State) hashModifiedError() error {
+	return &unwindSignal{
+		kind:  unwindException,
+		value: newException(s.RuntimeErrorClass, "hash modified during iteration"),
+	}
 }
 
 func hashDataOf(self Value) (*hashData, bool) {
@@ -2523,6 +2532,71 @@ func (s *State) hashEntries(self Value) ([]hashEntry, bool) {
 		return nil, false
 	}
 	return data.entries, true
+}
+
+func (s *State) hashInspectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if _, ok := hashDataOf(self); !ok {
+		return StringValue(self.Inspect()), nil
+	}
+	return s.hashInspectValue(ctx, self, make(map[*Object]bool))
+}
+
+func (s *State) hashInspectValue(ctx context.Context, self Value, seen map[*Object]bool) (Value, error) {
+	data, ok := hashDataOf(self)
+	if !ok {
+		return StringValue(self.Inspect()), nil
+	}
+	if self.obj != nil {
+		if seen[self.obj] {
+			return StringValue("{...}"), nil
+		}
+		seen[self.obj] = true
+		defer delete(seen, self.obj)
+	}
+	parts := make([]string, 0, len(data.entries))
+	for _, entry := range data.entries {
+		version := data.version
+		var keyText string
+		if entry.key.Kind() == KindSymbol {
+			keyText = entry.key.String() + ": "
+		} else {
+			key, err := s.hashInspectPart(ctx, entry.key, seen)
+			if err != nil {
+				return Nil, err
+			}
+			keyText = key + " => "
+		}
+		value, err := s.hashInspectPart(ctx, entry.value, seen)
+		if err != nil {
+			return Nil, err
+		}
+		if data.version != version {
+			return Nil, s.hashModifiedError()
+		}
+		parts = append(parts, keyText+value)
+	}
+	return StringValue("{" + strings.Join(parts, ", ") + "}"), nil
+}
+
+func (s *State) hashInspectPart(ctx context.Context, value Value, seen map[*Object]bool) (string, error) {
+	if value.Kind() == KindObject && value.obj != nil {
+		if _, ok := value.obj.data.(*hashData); ok {
+			inspected, err := s.hashInspectValue(ctx, value, seen)
+			if err != nil {
+				return "", err
+			}
+			return inspected.String(), nil
+		}
+		if _, ok := value.obj.data.(*arrayData); ok {
+			return value.Inspect(), nil
+		}
+		result, err := s.call(ctx, value, "inspect", nil, Nil, Nil)
+		if err != nil {
+			return "", err
+		}
+		return result.ToS(), nil
+	}
+	return value.Inspect(), nil
 }
 
 func (s *State) hashDeconstructKeysMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -2600,12 +2674,22 @@ func (s *State) hashExceptMethod(ctx context.Context, self Value, args []Value, 
 		return Nil, fmt.Errorf("mrbvm: __except expects an array")
 	}
 	var result []hashEntry
-	for _, entry := range entries {
+	snapshot := append([]hashEntry(nil), entries...)
+	for _, entry := range snapshot {
+		// The pair is copied into the snapshot before the key gets a chance
+		// to take itself out of the source hash.
+		if _, err := s.hashCode(ctx, entry.key); err != nil {
+			return Nil, err
+		}
 		excluded := false
 		for _, key := range keys.values {
+			version := dataVersion(self)
 			equal, err := s.call(ctx, entry.key, "eql?", []Value{key}, Nil, Nil)
 			if err != nil {
 				return Nil, err
+			}
+			if dataVersion(self) != version {
+				return Nil, s.hashModifiedError()
 			}
 			if equal.IsTruthy() {
 				excluded = true
@@ -2617,6 +2701,13 @@ func (s *State) hashExceptMethod(ctx context.Context, self Value, args []Value, 
 		}
 	}
 	return HashValue(result), nil
+}
+
+func dataVersion(self Value) uint64 {
+	if data, ok := hashDataOf(self); ok {
+		return data.version
+	}
+	return 0
 }
 
 func (s *State) rangeCaseEqMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -2982,10 +3073,17 @@ func (s *State) hashCompare(ctx context.Context, left, right Value, strict bool)
 		s.eqSeen[pair] = true
 		defer delete(s.eqSeen, pair)
 	}
+	leftVersion, rightVersion := leftData.version, rightData.version
 	for _, entry := range leftData.entries {
+		if leftData.version != leftVersion || rightData.version != rightVersion {
+			return false, s.hashModifiedError()
+		}
 		index, found, err := s.hashLookupKey(ctx, rightData, entry.key)
 		if err != nil {
 			return false, err
+		}
+		if leftData.version != leftVersion || rightData.version != rightVersion {
+			return false, s.hashModifiedError()
 		}
 		if !found {
 			return false, nil
@@ -3000,6 +3098,9 @@ func (s *State) hashCompare(ctx context.Context, left, right Value, strict bool)
 		if err != nil {
 			return false, err
 		}
+		if leftData.version != leftVersion || rightData.version != rightVersion {
+			return false, s.hashModifiedError()
+		}
 		if !equal {
 			return false, nil
 		}
@@ -3008,26 +3109,24 @@ func (s *State) hashCompare(ctx context.Context, left, right Value, strict bool)
 }
 
 func (s *State) hashLookupObject(ctx context.Context, data *hashData, key Value) (int, bool, error) {
-	keyHash, err := s.hashCode(ctx, key)
+	version := data.version
+	_, err := s.hashCode(ctx, key)
 	if err != nil {
 		return -1, false, err
+	}
+	if data.version != version {
+		return -1, false, s.hashModifiedError()
 	}
 	limit := len(data.entries)
 	for i := 0; i < limit && i < len(data.entries); i++ {
 		stored := data.entries[i].key
-		if stored.Kind() != KindObject && stored.Kind() != KindBigInt {
-			continue
-		}
-		storedHash, err := s.hashCode(ctx, stored)
-		if err != nil {
-			return -1, false, err
-		}
-		if storedHash != keyHash {
-			continue
-		}
+		version = data.version
 		equal, err := s.call(ctx, key, "eql?", []Value{stored}, Nil, Nil)
 		if err != nil {
 			return -1, false, err
+		}
+		if data.version != version {
+			return -1, false, s.hashModifiedError()
 		}
 		if equal.IsTruthy() {
 			if i >= len(data.entries) {
@@ -3118,6 +3217,7 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 			}
 			ensureHashIndex(data)
 			data.entries = appendHashEntry(data.entries, hashEntry{key: index, value: value})
+			data.version++
 			addHashIndex(data, len(data.entries)-1)
 			return value, nil
 		}

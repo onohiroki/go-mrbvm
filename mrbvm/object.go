@@ -25,6 +25,7 @@ type hashEntry struct {
 
 type hashData struct {
 	entries      []hashEntry
+	version      uint64
 	defaultValue Value
 	// index is an open-addressed table of entry indexes (-1 for empty),
 	// used only for primitive keys. indexBuilt records how many entries it

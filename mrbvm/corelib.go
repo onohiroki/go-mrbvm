@@ -228,6 +228,7 @@ func (s *State) installHashLibrary() {
 			return self, nil
 		}
 		data.identity = true
+		data.version++
 		data.index = nil
 		data.indexBuilt = 0
 		return self, nil
@@ -241,11 +242,16 @@ func (s *State) installHashLibrary() {
 		if !ok {
 			return self, nil
 		}
-		rebuilt := &hashData{entries: make([]hashEntry, 0, len(data.entries))}
-		for _, entry := range data.entries {
+		snapshot := append([]hashEntry(nil), data.entries...)
+		version := data.version
+		rebuilt := &hashData{entries: make([]hashEntry, 0, len(snapshot))}
+		for _, entry := range snapshot {
 			index, found, err := s.hashLookupKey(ctx, rebuilt, entry.key)
 			if err != nil {
 				return Nil, err
+			}
+			if data.version != version {
+				return Nil, s.hashModifiedError()
 			}
 			if found {
 				rebuilt.entries[index] = entry
@@ -254,7 +260,11 @@ func (s *State) installHashLibrary() {
 			rebuilt.entries = appendHashEntry(rebuilt.entries, entry)
 			addHashIndex(rebuilt, len(rebuilt.entries)-1)
 		}
+		if data.version != version {
+			return Nil, s.hashModifiedError()
+		}
 		data.entries = rebuilt.entries
+		data.version++
 		data.index = nil
 		data.indexBuilt = 0
 		return self, nil
@@ -268,9 +278,13 @@ func (s *State) installHashLibrary() {
 			return Nil, nil
 		}
 		for _, entry := range data.entries {
-			equal, err := s.rubyEqual(ctx, entry.key, args[0])
+			version := data.version
+			equal, err := s.rubyEql(ctx, entry.key, args[0])
 			if err != nil {
 				return Nil, err
+			}
+			if data.version != version {
+				return Nil, s.hashModifiedError()
 			}
 			if equal {
 				return ArrayValue([]Value{entry.key, entry.value}), nil
@@ -284,9 +298,13 @@ func (s *State) installHashLibrary() {
 			return Nil, nil
 		}
 		for _, entry := range data.entries {
-			equal, err := s.rubyEqual(ctx, entry.value, args[0])
+			version := data.version
+			equal, err := s.rubyEql(ctx, entry.value, args[0])
 			if err != nil {
 				return Nil, err
+			}
+			if data.version != version {
+				return Nil, s.hashModifiedError()
 			}
 			if equal {
 				return ArrayValue([]Value{entry.key, entry.value}), nil
@@ -304,6 +322,7 @@ func (s *State) installHashLibrary() {
 		}
 		entry := data.entries[0]
 		data.entries = data.entries[1:]
+		data.version++
 		data.index = nil
 		data.indexBuilt = 0
 		return ArrayValue([]Value{entry.key, entry.value}), nil
@@ -321,6 +340,7 @@ func (s *State) installHashLibrary() {
 			return Nil, err
 		}
 		data.entries = append([]hashEntry(nil), other.entries...)
+		data.version++
 		data.defaultValue = other.defaultValue
 		data.defaultProc = other.defaultProc
 		data.identity = other.identity
@@ -334,6 +354,7 @@ func (s *State) installHashLibrary() {
 		}
 		if data, ok := hashDataOf(self); ok {
 			data.entries = nil
+			data.version++
 			data.index = nil
 			data.indexBuilt = 0
 		}
@@ -370,9 +391,7 @@ func (s *State) installHashLibrary() {
 		return IntValue(hashValue(self, map[*Object]bool{})), nil
 	})
 	class.define("<=>", s.arrayCompareMethod)
-	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return StringValue(self.Inspect()), nil
-	})
+	class.define("inspect", s.hashInspectMethod)
 }
 
 func (s *State) installStringLibrary() {
@@ -1877,6 +1896,7 @@ func (s *State) hashMergeBangMethod(ctx context.Context, self Value, args []Valu
 			return Nil, err
 		}
 		data.entries = entries
+		data.version++
 		data.index = nil
 		data.indexBuilt = 0
 	}
@@ -1930,6 +1950,7 @@ func (s *State) hashDeleteMethod(ctx context.Context, self Value, args []Value, 
 	if found {
 		value := data.entries[index].value
 		data.entries = append(data.entries[:index], data.entries[index+1:]...)
+		data.version++
 		data.index = nil
 		return value, nil
 	}
