@@ -41,3 +41,4 @@ lang.rb
 literals.rb
 module.rb
 unicode.rb
+kernel.rb

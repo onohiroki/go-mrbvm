@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // installCoreLibrary adds the pure-Go part of mruby's core library. The
@@ -731,6 +733,11 @@ func (s *State) installIntegerLibrary() {
 		return self, nil
 	})
 	class.define("to_f", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if self.Kind() == KindBigInt {
+			value, _ := self.BigInt()
+			floatValue, _ := new(big.Float).SetInt(value).Float64()
+			return FloatValue(floatValue), nil
+		}
 		return FloatValue(float64(self.Int())), nil
 	})
 	class.define("chr", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -824,9 +831,7 @@ func (s *State) installObjectLibrary() {
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return StringValue(self.ToS()), nil
 	})
-	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return StringValue(self.Inspect()), nil
-	})
+	class.define("inspect", s.objectInspectMethod)
 	class.define("<=>", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 {
 			return Nil, nil
@@ -840,13 +845,13 @@ func (s *State) installObjectLibrary() {
 		if len(args) != 0 || !kw.IsNil() {
 			return Nil, argumentCountError(s, len(args), "0")
 		}
-		return IntValue(hashValue(self, map[*Object]bool{})), nil
+		return IntValue(objectIdentityID(self)), nil
 	})
 	class.define("object_id", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 0 {
 			return Nil, argumentCountError(s, len(args), "0")
 		}
-		return IntValue(hashValue(self, map[*Object]bool{})), nil
+		return IntValue(objectIdentityID(self)), nil
 	})
 	class.define("instance_eval", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if block.IsNil() {
@@ -868,6 +873,16 @@ func (s *State) installObjectLibrary() {
 	})
 	class.define("send", s.objectSendMethod)
 	class.define("__send__", s.objectSendMethod)
+	class.define("!~", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 1 {
+			return True, nil
+		}
+		result, err := s.call(ctx, self, "=~", args, Nil, Nil)
+		if err != nil {
+			return Nil, err
+		}
+		return BoolValue(!result.IsTruthy()), nil
+	})
 	class.define("tap", s.objectTapMethod)
 	s.SymbolClass.define("to_sym", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return self, nil
@@ -2909,7 +2924,7 @@ func (s *State) objectIsAMethod(ctx context.Context, self Value, args []Value, k
 	}
 	class, ok := s.asClass(args[0])
 	if !ok {
-		return False, nil
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "class or module required")}
 	}
 	return BoolValue(s.isA(self, class)), nil
 }
@@ -3404,4 +3419,49 @@ func expandStringReplacement(replacement, match, pre, post string) string {
 		}
 	}
 	return builder.String()
+}
+
+func objectIdentityID(value Value) int64 {
+	if value.obj != nil && (value.Kind() == KindObject || value.Kind() == KindString) {
+		return int64(uintptr(unsafe.Pointer(value.obj)))
+	}
+	return hashValue(value, map[*Object]bool{})
+}
+
+func (s *State) objectInspectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if self.obj != nil && s.TopSelf.obj != nil && self.obj == s.TopSelf.obj {
+		return StringValue("main"), nil
+	}
+	if self.obj == nil {
+		return StringValue(self.Inspect()), nil
+	}
+	if _, ok := self.obj.data.(*Class); ok {
+		return StringValue(self.Inspect()), nil
+	}
+	names := make([]string, 0, len(self.obj.ivars))
+	for name := range self.obj.ivars {
+		if strings.HasPrefix(name, "@") {
+			names = append(names, name)
+		}
+	}
+	className := s.classOf(self).name
+	if className == "" {
+		className = "Object"
+	}
+	text := "#<" + className
+	if len(names) > 0 {
+		sort.Strings(names)
+		for _, name := range names {
+			value, ok := self.obj.ivars[name]
+			if !ok {
+				continue
+			}
+			rendered, err := s.call(ctx, value, "inspect", nil, Nil, Nil)
+			if err != nil {
+				return Nil, err
+			}
+			text += " " + name + "=" + rendered.ToS()
+		}
+	}
+	return StringValue(text + ">"), nil
 }

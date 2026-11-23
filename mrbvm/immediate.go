@@ -14,6 +14,18 @@ func (s *State) installImmediateLibrary() {
 	s.NilClass.define("^", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return BoolValue(len(args) == 1 && args[0].IsTruthy()), nil
 	})
+	s.NilClass.define("to_a", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return ArrayValue(nil), nil
+	})
+	s.NilClass.define("to_f", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return FloatValue(0), nil
+	})
+	s.NilClass.define("to_h", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return HashValue(nil), nil
+	})
+	s.NilClass.define("to_i", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		return IntValue(0), nil
+	})
 	s.NilClass.define("<=>", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) == 1 && args[0].IsNil() {
 			return IntValue(0), nil

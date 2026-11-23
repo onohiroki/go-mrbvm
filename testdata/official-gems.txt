@@ -1,0 +1,13 @@
+# mrbgems tests that exercise language semantics without C test helpers.
+mruby-symbol-ext/test/symbol.rb
+mruby-array-ext/test/array.rb
+mruby-hash-ext/test/hash.rb
+mruby-string-ext/test/string.rb
+mruby-enum-ext/test/enum.rb
+mruby-enumerator/test/enumerator.rb
+mruby-object-ext/test/object.rb
+mruby-object-ext/test/nil.rb
+mruby-class-ext/test/class.rb
+mruby-class-ext/test/module.rb
+mruby-kernel-ext/test/kernel.rb
+mruby-metaprog/test/metaprog.rb

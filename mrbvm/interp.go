@@ -29,6 +29,8 @@ type callFrame struct {
 	method      string
 	lineText    string
 	lineTextFor int
+	env         *environment
+	cref        *Class
 }
 
 type exceptionScope struct {
@@ -150,8 +152,9 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		frameEnv.regs = regs
 		frameEnv.block = block
 		frameEnv.methodFrame = strict
+		frameEnv.names = irep.LocalNames
 	} else {
-		frameEnv = &environment{parent: capturedEnv, regs: regs, block: block, methodFrame: strict}
+		frameEnv = &environment{parent: capturedEnv, regs: regs, block: block, methodFrame: strict, names: irep.LocalNames}
 	}
 	_ = frameEnv
 	keywordSlot := -1
@@ -160,7 +163,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	lineAt := program.lineAt
 	jumpAt := program.jumpAt
 	binaryOps := program.binaryOps
-	frame := callFrame{file: irep.Filename, method: mid}
+	frame := callFrame{file: irep.Filename, method: mid, env: frameEnv, cref: cref}
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope
 	s.frames = append(s.frames, frame)
@@ -561,14 +564,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpSCLASS:
 			a := int(in.Operands[0])
 			if class, ok := s.asClass(regs[a]); ok {
-				if class.singleton == nil {
-					class.singleton = newClass(class.name, nil)
-					class.singleton.singletonOf = class
-					class.singleton.isSingleton = true
-					class.singleton.lexicalOuter = class
-					s.ensureClassObject(class.singleton)
-				}
-				regs[a] = s.classValue(class.singleton)
+				regs[a] = s.classValue(s.ensureSingletonOfClass(class))
 				break
 			}
 			if regs[a].obj == nil {
@@ -740,6 +736,31 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			s.definedSet = true
 			s.definedNil = regs[in.Operands[0]].IsNil()
 		case bytecode.OpSETIV:
+			if self.obj != nil {
+				if _, isRange := self.obj.data.(*rangeData); isRange {
+					sig := &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "can't modify frozen Range")}
+					np, rv, done, fatal := dispatch(sig, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+				if err := s.ensureMutable(self); err != nil {
+					np, rv, done, fatal := dispatch(err, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
+					continue
+				}
+			}
 			self.obj.setIvar(irep.Syms[in.Operands[1]], regs[in.Operands[0]])
 		case bytecode.OpOCLASS:
 			regs[in.Operands[0]] = s.classValue(s.ObjectClass)
@@ -996,14 +1017,12 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				pc = np - 1
 				continue
 			}
-			if outerWasNil && owner != nil {
-				if created, ok := s.asClass(value); ok {
-					outerCref := cref
-					if outerCref != nil && outerCref.singletonOf != nil {
-						outerCref = outerCref.singletonOf
-					}
-					created.lexicalOuter = outerCref
+			if created, ok := s.asClass(value); ok && (!outerWasNil || owner != nil) {
+				outerCref := cref
+				if outerCref != nil && outerCref.singletonOf != nil {
+					outerCref = outerCref.singletonOf
 				}
+				created.lexicalOuter = outerCref
 			}
 			regs[a] = value
 
@@ -1443,16 +1462,36 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				}
 			}
 			if !ok {
-				missingValue, missingErr := s.invokeMethodMissing(ctx, self, mid, args, kw, block)
-				if missingErr == nil {
-					regs[in.Operands[0]] = missingValue
+				if _, hasMissing := s.classOf(self).lookup("method_missing"); hasMissing {
+					missingValue, missingErr := s.invokeMethodMissing(ctx, self, mid, args, kw, block)
+					if missingErr == nil {
+						regs[in.Operands[0]] = missingValue
+						continue
+					}
+					sig, _ := missingErr.(*unwindSignal)
+					if sig == nil {
+						return Nil, missingErr
+					}
+					np, rv, done, fatal := handle(sig, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np - 1
 					continue
 				}
-				sig, _ := missingErr.(*unwindSignal)
-				if sig == nil {
-					return Nil, missingErr
+				superException := newException(s.NoMethodErrorClass,
+					fmt.Sprintf("no superclass method '%s' for %s", mid, s.classOf(self).name))
+				if data, ok := superException.obj.data.(*exceptionData); ok {
+					data.name = SymbolValue(mid)
+					data.receiver = self
+					data.receiverSet = true
+					data.args = ArrayValue(append([]Value(nil), args...))
 				}
-				np, rv, done, fatal := handle(sig, in.Offset)
+				missingErr := &unwindSignal{kind: unwindException, value: superException}
+				np, rv, done, fatal := handle(missingErr, in.Offset)
 				if fatal != nil {
 					return Nil, fatal
 				}
@@ -2267,7 +2306,12 @@ func (s *State) setClassVar(class *Class, name string, value Value) error {
 }
 
 func lookupLexicalConstant(cref *Class, name string) (Value, bool) {
+	seen := make(map[*Class]bool)
 	for current := cref; current != nil; current = current.lexicalOuter {
+		if seen[current] {
+			break
+		}
+		seen[current] = true
 		if value, ok := current.constants[name]; ok {
 			return value, true
 		}
@@ -2281,7 +2325,12 @@ func lookupLexicalConstant(cref *Class, name string) (Value, bool) {
 }
 
 func findAutoloadLexical(cref *Class, name string) (*Class, string, bool) {
+	seen := make(map[*Class]bool)
 	for current := cref; current != nil; current = current.lexicalOuter {
+		if seen[current] {
+			break
+		}
+		seen[current] = true
 		if path, ok := current.autoloads[name]; ok {
 			return current, path, true
 		}

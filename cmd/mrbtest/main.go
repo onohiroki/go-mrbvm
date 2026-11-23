@@ -36,7 +36,11 @@ func main() {
 			os.Exit(2)
 		}
 		for _, name := range listed {
-			files = append(files, filepath.Join("mruby", "test", "t", name))
+			if strings.Contains(name, "/") {
+				files = append(files, filepath.Join("mruby", "mrbgems", name))
+			} else {
+				files = append(files, filepath.Join("mruby", "test", "t", name))
+			}
 		}
 	}
 	if len(files) == 0 {
@@ -80,63 +84,80 @@ func readManifest(path string) ([]string, error) {
 	return files, nil
 }
 
+func compileSource(ctx context.Context, source, fileName string) ([]byte, error) {
+	temp, err := os.CreateTemp("", "mrbtest-*.rb")
+	if err != nil {
+		return nil, err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if _, err := temp.WriteString(source); err != nil {
+		temp.Close()
+		return nil, err
+	}
+	if err := temp.Close(); err != nil {
+		return nil, err
+	}
+	return mrbc.CompileFile(ctx, tempPath, mrbc.Options{DebugInfo: true, FilePath: fileName})
+}
+
 func runFile(ctx context.Context, path, assertSource string, verbose, stress bool) error {
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
 
-	var program strings.Builder
-	program.WriteString("RUBY_ENGINE = \"mruby\"\n")
-	program.WriteString("def t_print(*args); print(*args); end\n")
-	program.WriteString("module AryShared\n")
-	program.WriteString("  def self.heap_empty?(ary); ary.empty?; end\n")
-	program.WriteString("  def self.copy_ptr_null?(ary); false; end\n")
-	program.WriteString("end\n")
+	var prelude strings.Builder
+	prelude.WriteString("RUBY_ENGINE = \"mruby\"\n")
+	prelude.WriteString("def t_print(*args); print(*args); end\n")
+	prelude.WriteString("def instance_exec_from_c(*args, &block); instance_exec(*args, &block); end\n")
+	prelude.WriteString("module AryShared\n")
+	prelude.WriteString("  def self.heap_empty?(ary); ary.empty?; end\n")
+	prelude.WriteString("  def self.copy_ptr_null?(ary); false; end\n")
+	prelude.WriteString("end\n")
 	// The official runner links the mruby-test C gem, which provides these
 	// test-support constants. Per-file runs need the same names to exist.
-	program.WriteString("module Mrbtest\n")
-	program.WriteString("  FLOAT_TOLERANCE = 1e-10\n")
-	program.WriteString("  def self.nofree_cstr?; true; end\n")
-	program.WriteString("end\n")
-	program.WriteString("class TestNotImplement; end\n")
+	prelude.WriteString("module Mrbtest\n")
+	prelude.WriteString("  FLOAT_TOLERANCE = 1e-10\n")
+	prelude.WriteString("  def self.nofree_cstr?; true; end\n")
+	prelude.WriteString("end\n")
+	prelude.WriteString("class TestNotImplement\n")
+	prelude.WriteString("  __define_notimplement__ :gone\n")
+	prelude.WriteString("  NAMELESS_RAISED = true\n")
+	prelude.WriteString("  NAMELESS_RESULT = NotImplementedError.new(\"function is unimplemented on this machine\")\n")
+	prelude.WriteString("end\n")
+	prelude.WriteString(assertSource)
+	prelude.WriteString("\n")
+
+	var program strings.Builder
 	if verbose {
 		program.WriteString("$mrbtest_verbose = true\n")
 	}
 	if stress {
 		program.WriteString("$mrbtest_stress = true\n")
 	}
-	program.WriteString(assertSource)
-	program.WriteString("\n")
 	program.Write(source)
 	program.WriteString("\nreport\n")
 
-	temp, err := os.CreateTemp("", "mrbtest-*.rb")
+	preludeBytecode, err := compileSource(ctx, prelude.String(), path)
 	if err != nil {
-		return err
+		return fmt.Errorf("compile assert.rb: %w", err)
 	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if _, err := temp.WriteString(program.String()); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-
-	bytecode, err := mrbc.CompileFile(ctx, tempPath, mrbc.Options{DebugInfo: true})
+	bytecode, err := compileSource(ctx, program.String(), path)
 	if err != nil {
 		return fmt.Errorf("compile: %w", err)
 	}
 
 	var output bytes.Buffer
 	state := mrbvm.New(mrbvm.Options{Stdout: &output, Stderr: &output})
-	_, runErr := state.Run(ctx, bytecode)
-	fmt.Print(output.String())
-	if runErr != nil {
-		return runErr
+	if _, err := state.Run(ctx, preludeBytecode); err != nil {
+		return err
 	}
+	if _, err := state.Run(ctx, bytecode); err != nil {
+		fmt.Print(output.String())
+		return err
+	}
+	fmt.Print(output.String())
 	text := output.String()
 	if !strings.Contains(text, "  Total:") {
 		return fmt.Errorf("test did not reach report")

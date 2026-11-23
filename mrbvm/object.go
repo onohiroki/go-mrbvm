@@ -3,6 +3,7 @@ package mrbvm
 import (
 	"context"
 	"math/big"
+	"strings"
 )
 
 type stringData struct {
@@ -101,18 +102,22 @@ type Class struct {
 	deprecatedConstants   map[string]bool
 	included              []*Class
 	prepended             []*Class
+	subclasses            []*Class
+	temporaryName         bool
+	permanentName         bool
 	privateMethods        map[string]bool
 	protectedMethods      map[string]bool
 	state                 *State
 }
 
 type method struct {
-	owner   *Class
-	cref    *Class
-	name    string
-	native  NativeFunc
-	irep    *Irep
-	builtin bool
+	notImplemented bool
+	owner          *Class
+	cref           *Class
+	name           string
+	native         NativeFunc
+	irep           *Irep
+	builtin        bool
 }
 
 // NativeFunc is a Go function exposed as a Ruby method.
@@ -126,6 +131,7 @@ type environment struct {
 	regs        []Value
 	block       Value
 	methodFrame bool
+	names       []string
 }
 
 type blockData struct {
@@ -142,13 +148,14 @@ type blockData struct {
 
 // exceptionData is the payload of a Ruby exception object.
 type exceptionData struct {
-	message     string
-	backtrace   []string
-	cause       Value
-	name        Value
-	receiver    Value
-	receiverSet bool
-	args        Value
+	message        string
+	backtrace      []string
+	backtraceValue Value
+	cause          Value
+	name           Value
+	receiver       Value
+	receiverSet    bool
+	args           Value
 }
 
 type bigIntData struct {
@@ -290,6 +297,7 @@ func asSignal(v Value) (*unwindSignal, bool) {
 func newClass(name string, super *Class) *Class {
 	return &Class{
 		name:                  name,
+		permanentName:         name != "" && !strings.HasPrefix(name, "#<"),
 		super:                 super,
 		methods:               make(map[string]*method),
 		classMethods:          make(map[string]*method),

@@ -288,6 +288,13 @@ func inspectValue(v Value, seen map[*Object]bool) string {
 	case KindObject:
 		if v.obj != nil {
 			if c, ok := v.obj.data.(*Class); ok {
+				if c.name == "" || c.name == "#<Class>" || c.name == "#<Module>" {
+					kind := "Class"
+					if c.isModule {
+						kind = "Module"
+					}
+					return fmt.Sprintf("#<%s:%p>", kind, c)
+				}
 				return c.name
 			}
 			switch data := v.obj.data.(type) {
