@@ -33,6 +33,9 @@ type callFrame struct {
 	cref        *Class
 	superStart  int
 	superBase   *Class
+	self        Value
+	targetClass *Class
+	owner       *Class
 }
 
 type exceptionScope struct {
@@ -169,7 +172,23 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	lineAt := program.lineAt
 	jumpAt := program.jumpAt
 	binaryOps := program.binaryOps
-	frame := callFrame{file: irep.Filename, method: mid, env: frameEnv, cref: cref, superStart: superStart, superBase: superBase}
+	frame := callFrame{file: irep.Filename, method: mid, env: frameEnv, cref: cref, superStart: superStart, superBase: superBase, self: self, targetClass: targetClass, owner: owner}
+	var evalFrame *evalScope
+	for i := len(s.evalScopes) - 1; i >= 0; i-- {
+		scope := s.evalScopes[i]
+		if scope.irep == irep && !scope.applied {
+			scope.applied = true
+			evalFrame = scope
+			for index, name := range irep.LocalNames {
+				if index < len(regs) {
+					if value, ok := scope.initial[name]; ok {
+						regs[index] = value
+					}
+				}
+			}
+			break
+		}
+	}
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope
 	s.frames = append(s.frames, frame)
@@ -177,6 +196,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		s.strictDepth++
 	}
 	defer func() {
+		if evalFrame != nil {
+			captured := make(map[string]Value, len(irep.LocalNames))
+			for index, name := range irep.LocalNames {
+				if name != "" && index < len(regs) {
+					captured[name] = regs[index]
+				}
+			}
+			evalFrame.captured = captured
+		}
 		if strict {
 			s.strictDepth--
 		}

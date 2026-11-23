@@ -69,7 +69,7 @@ func runManifest(t *testing.T, manifestPath, root, assertSource string) {
 				t.Fatalf("compile: %v", err)
 			}
 			var out bytes.Buffer
-			state := mrbvm.New(mrbvm.Options{Stdout: &out})
+			state := mrbvm.New(mrbvm.Options{Stdout: &out, Compiler: compileEvalSource})
 			if _, err := state.Run(ctx, preludeBytecode); err != nil {
 				t.Fatalf("run assert.rb: %v\n%s", err, out.String())
 			}
@@ -85,6 +85,10 @@ func runManifest(t *testing.T, manifestPath, root, assertSource string) {
 			}
 		})
 	}
+}
+
+func compileEvalSource(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
+	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset})
 }
 
 func testPrelude(assertSource string) string {

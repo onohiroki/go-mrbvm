@@ -16,10 +16,22 @@ import (
 )
 
 // Options controls VM construction.
+// CompileOptions controls evaluator compilation.
+type CompileOptions struct {
+	FilePath   string
+	LocalNames []string
+	LineOffset int
+}
+
+// CompileFunc compiles Ruby source for eval/load. The VM core does not link a
+// compiler; embeddings inject one through Options.Compiler.
+type CompileFunc func(ctx context.Context, source []byte, opts CompileOptions) (*Irep, error)
+
 type Options struct {
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
+	Compiler CompileFunc
+	Stdin    io.Reader
+	Stdout   io.Writer
+	Stderr   io.Writer
 
 	// LoadMrblib loads a precompiled subset of mruby's Ruby-level core
 	// library (10error, compar, enum, array, hash, string, range) at VM
@@ -76,10 +88,14 @@ type State struct {
 	MatchDataClass         *Class
 	BacktraceLocationClass *Class
 	FiberClass             *Class
+	BindingClass           *Class
 	RootFiber              Value
 	rootFiber              *fiberData
 	fiberSwitchCh          chan fiberSwitchRequest
 	fiberCBoundary         int
+	compiler               CompileFunc
+	evalScopes             []*evalScope
+	requiredFiles          map[string]bool
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -103,6 +119,7 @@ type State struct {
 	FiberErrorClass             *Class
 	RegexpErrorClass            *Class
 	ScriptErrorClass            *Class
+	LoadErrorClass              *Class
 	SyntaxErrorClass            *Class
 	SystemStackErrorClass       *Class
 
@@ -193,6 +210,8 @@ func New(opts Options) *State {
 		maxStringSize:   opts.MaxStringSize,
 		startTime:       time.Now(),
 		gcEnabled:       true,
+		compiler:        opts.Compiler,
+		requiredFiles:   make(map[string]bool),
 	}
 	if s.maxDepth == 0 {
 		s.maxDepth = 200
@@ -247,6 +266,7 @@ func New(opts Options) *State {
 	s.RegexpClass = newClass("Regexp", s.ObjectClass)
 	s.MatchDataClass = newClass("MatchData", s.ObjectClass)
 	s.FiberClass = newClass("Fiber", s.ObjectClass)
+	s.BindingClass = newClass("Binding", s.ObjectClass)
 	s.ExceptionClass = newClass("Exception", s.ObjectClass)
 	s.StandardErrorClass = newClass("StandardError", s.ExceptionClass)
 	s.RuntimeErrorClass = newClass("RuntimeError", s.StandardErrorClass)
@@ -269,6 +289,7 @@ func New(opts Options) *State {
 	s.IOErrorClass = newClass("IOError", s.StandardErrorClass)
 	s.FiberErrorClass = newClass("FiberError", s.StandardErrorClass)
 	s.ScriptErrorClass = newClass("ScriptError", s.ExceptionClass)
+	s.LoadErrorClass = newClass("LoadError", s.ScriptErrorClass)
 	s.SyntaxErrorClass = newClass("SyntaxError", s.ScriptErrorClass)
 	s.SystemStackErrorClass = newClass("SystemStackError", s.ExceptionClass)
 
@@ -898,16 +919,16 @@ func New(opts Options) *State {
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
 		"Rational": s.RationalClass, "Complex": s.ComplexClass, "Math": s.MathClass, "Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
-		"Enumerator":    s.EnumeratorClass,
-		"Comparable":    s.ComparableClass,
-		"GC":            s.GCClass,
-		"Time":          s.TimeClass,
-		"JSON":          s.JSONClass,
-		"IO":            s.IOClass,
-		"File":          s.FileClass,
-		"Regexp":        s.RegexpClass,
-		"MatchData":     s.MatchDataClass,
-		"Fiber":         s.FiberClass,
+		"Enumerator": s.EnumeratorClass,
+		"Comparable": s.ComparableClass,
+		"GC":         s.GCClass,
+		"Time":       s.TimeClass,
+		"JSON":       s.JSONClass,
+		"IO":         s.IOClass,
+		"File":       s.FileClass,
+		"Regexp":     s.RegexpClass,
+		"MatchData":  s.MatchDataClass,
+		"Fiber":      s.FiberClass, "Binding": s.BindingClass,
 		"Exception":     s.ExceptionClass,
 		"StandardError": s.StandardErrorClass, "RuntimeError": s.RuntimeErrorClass,
 		"ArgumentError": s.ArgumentErrorClass, "TypeError": s.TypeErrorClass,
@@ -927,6 +948,7 @@ func New(opts Options) *State {
 		"FiberError":             s.FiberErrorClass,
 		"RegexpError":            s.RegexpErrorClass,
 		"ScriptError":            s.ScriptErrorClass,
+		"LoadError":              s.LoadErrorClass,
 		"SyntaxError":            s.SyntaxErrorClass,
 		"SystemStackError":       s.SystemStackErrorClass,
 	} {
@@ -1153,6 +1175,7 @@ func New(opts Options) *State {
 	s.installMatchDataClass()
 	s.installFiberClass()
 	s.installFiberStorage()
+	s.installEvalLibrary()
 	s.installNumericOperatorMethods()
 	s.installMetaprogLibrary()
 	s.installBacktraceLibrary()

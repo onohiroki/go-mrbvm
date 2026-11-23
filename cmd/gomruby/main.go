@@ -33,7 +33,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	state := mrbvm.New(mrbvm.Options{})
+	state := mrbvm.New(mrbvm.Options{Compiler: compileEvalSource})
 	if _, err := state.Run(ctx, data); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -45,4 +45,8 @@ func load(ctx context.Context, path string) ([]byte, error) {
 		return mrbc.CompileFile(ctx, path, mrbc.Options{DebugInfo: true})
 	}
 	return os.ReadFile(path)
+}
+
+func compileEvalSource(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
+	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset})
 }

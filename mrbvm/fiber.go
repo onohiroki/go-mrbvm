@@ -24,6 +24,7 @@ type fiberVMState struct {
 	definedKind      string
 	definedSet       bool
 	definedNil       bool
+	evalScopes       []*evalScope
 }
 
 type fiberEvent struct {
@@ -247,6 +248,7 @@ func (s *State) saveFiberVM(data *fiberData) {
 	data.vm.definedKind = s.definedKind
 	data.vm.definedSet = s.definedSet
 	data.vm.definedNil = s.definedNil
+	data.vm.evalScopes = s.evalScopes
 }
 
 func (s *State) restoreFiberVM(data *fiberData) {
@@ -257,6 +259,7 @@ func (s *State) restoreFiberVM(data *fiberData) {
 	s.definedKind = data.vm.definedKind
 	s.definedSet = data.vm.definedSet
 	s.definedNil = data.vm.definedNil
+	s.evalScopes = data.vm.evalScopes
 }
 
 func fiberResult(values []Value) Value {

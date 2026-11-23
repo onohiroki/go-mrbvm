@@ -101,6 +101,10 @@ func compileSource(ctx context.Context, source, fileName string) ([]byte, error)
 	return mrbc.CompileFile(ctx, tempPath, mrbc.Options{DebugInfo: true, FilePath: fileName})
 }
 
+func compileEvalSource(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
+	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset})
+}
+
 func runFile(ctx context.Context, path, assertSource string, verbose, stress bool) error {
 	source, err := os.ReadFile(path)
 	if err != nil {
@@ -157,7 +161,7 @@ func runFile(ctx context.Context, path, assertSource string, verbose, stress boo
 	}
 
 	var output bytes.Buffer
-	state := mrbvm.New(mrbvm.Options{Stdout: &output, Stderr: &output})
+	state := mrbvm.New(mrbvm.Options{Stdout: &output, Stderr: &output, Compiler: compileEvalSource})
 	if _, err := state.Run(ctx, preludeBytecode); err != nil {
 		return err
 	}

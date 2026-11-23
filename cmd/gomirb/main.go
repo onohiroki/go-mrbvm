@@ -30,7 +30,7 @@ func main() {
 	}
 
 	ctx := context.Background()
-	state := mrbvm.New(mrbvm.Options{Stdout: os.Stdout, Stderr: os.Stderr})
+	state := mrbvm.New(mrbvm.Options{Stdout: os.Stdout, Stderr: os.Stderr, Compiler: compileEvalSource})
 	if *preload != "" {
 		source, err := os.ReadFile(*preload)
 		if err != nil {
@@ -187,4 +187,8 @@ func incompleteSource(message string) bool {
 		}
 	}
 	return false
+}
+
+func compileEvalSource(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
+	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset})
 }
