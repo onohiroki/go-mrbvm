@@ -96,6 +96,7 @@ func (s *State) installArrayLibrary() {
 	class.define("pop", s.arrayPopMethod)
 	class.define("concat", s.arrayConcatMethod)
 	class.define("flatten", s.arrayFlattenMethod)
+	class.define("flatten!", s.arrayFlattenBangMethod)
 	class.define("uniq", s.arrayUniqMethod)
 	class.define("compact", s.arrayCompactMethod)
 	class.define("each_index", s.arrayEachIndexMethod)
@@ -1133,6 +1134,9 @@ func (s *State) arrayIndexMethod2(ctx context.Context, self Value, args []Value,
 			continue
 		}
 		if len(args) == 1 {
+			if identicalValue(value, args[0]) {
+				return IntValue(int64(i)), nil
+			}
 			equal, err := s.rubyEqual(ctx, value, args[0])
 			if err != nil {
 				return Nil, err
@@ -1151,6 +1155,9 @@ func (s *State) arrayRindexMethod(ctx context.Context, self Value, args []Value,
 		values := arrayValues(self)
 		for i := len(values) - 1; i >= 0; i-- {
 			if len(args) == 1 {
+				if identicalValue(values[i], args[0]) {
+					return IntValue(int64(i)), nil
+				}
 				equal, err := s.rubyEqual(ctx, values[i], args[0])
 				if err != nil {
 					return Nil, err
@@ -1442,44 +1449,83 @@ func (s *State) arrayInitializeCopyMethod(ctx context.Context, self Value, args 
 	return self, nil
 }
 
+func (s *State) arrayFlattenValues(values []Value, level int, ancestors map[*arrayData]bool) ([]Value, error) {
+	result := make([]Value, 0, len(values))
+	for _, value := range values {
+		if value.obj != nil {
+			if arr, ok := value.obj.data.(*arrayData); ok && level != 0 {
+				tracked := false
+				if level < 0 {
+					if ancestors[arr] {
+						return nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "tried to flatten recursive array")}
+					}
+					ancestors[arr] = true
+					tracked = true
+				}
+				nested, err := s.arrayFlattenValues(arr.values, level-1, ancestors)
+				if tracked {
+					delete(ancestors, arr)
+				}
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, nested...)
+				continue
+			}
+		}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
 func (s *State) arrayFlattenMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	depth := -1
 	if len(args) > 0 && args[0].Kind() == KindInt {
 		depth = int(args[0].Int())
 	}
-	var flatten func(values []Value, level int) []Value
-	flatten = func(values []Value, level int) []Value {
-		var result []Value
-		for _, value := range values {
-			if value.obj != nil {
-				if arr, ok := value.obj.data.(*arrayData); ok && level != 0 {
-					result = append(result, flatten(arr.values, level-1)...)
-					continue
-				}
-			}
-			result = append(result, value)
-		}
-		return result
+	data, ok := arrayDataOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an array")}
 	}
-	return ArrayValue(flatten(arrayValues(self), depth)), nil
+	ancestors := map[*arrayData]bool{data: true}
+	values, err := s.arrayFlattenValues(data.values, depth, ancestors)
+	if err != nil {
+		return Nil, err
+	}
+	return ArrayValue(values), nil
 }
 
-func (s *State) arrayUniqMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	values := arrayValues(self)
-	result := make([]Value, 0, len(values))
-	for _, value := range values {
-		duplicate := false
-		for _, existing := range result {
-			if valuesEqual(existing, value) {
-				duplicate = true
+func (s *State) arrayFlattenBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.ensureMutable(self); err != nil {
+		return Nil, err
+	}
+	data, ok := arrayDataOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an array")}
+	}
+	depth := -1
+	if len(args) > 0 && args[0].Kind() == KindInt {
+		depth = int(args[0].Int())
+	}
+	ancestors := map[*arrayData]bool{data: true}
+	values, err := s.arrayFlattenValues(data.values, depth, ancestors)
+	if err != nil {
+		return Nil, err
+	}
+	changed := len(values) != len(data.values)
+	if !changed {
+		for i := range values {
+			if !identicalValue(values[i], data.values[i]) {
+				changed = true
 				break
 			}
 		}
-		if !duplicate {
-			result = append(result, value)
-		}
 	}
-	return ArrayValue(result), nil
+	if !changed {
+		return Nil, nil
+	}
+	data.values = values
+	return self, nil
 }
 
 func (s *State) arrayCompactMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1571,6 +1617,9 @@ func (s *State) arrayIncludeMethod(ctx context.Context, self Value, args []Value
 		return False, nil
 	}
 	for _, value := range arrayValues(self) {
+		if identicalValue(value, args[0]) {
+			return True, nil
+		}
 		equal, err := s.rubyEqual(ctx, value, args[0])
 		if err != nil {
 			return Nil, err

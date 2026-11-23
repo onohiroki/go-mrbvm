@@ -13,6 +13,7 @@ import (
 
 func (s *State) installAdvancedCoreLibrary() {
 	s.installAdvancedArrayLibrary()
+	s.installArrayExtensionLibrary()
 	s.installAdvancedHashLibrary()
 	s.installAdvancedStringLibrary()
 	s.installAdvancedIntegerLibrary()
@@ -1174,7 +1175,7 @@ func (s *State) digValue(ctx context.Context, receiver, key Value) (Value, error
 		switch data := receiver.obj.data.(type) {
 		case *arrayData:
 			if key.Kind() != KindInt {
-				return Nil, nil
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion into Integer")}
 			}
 			index := int(key.Int())
 			if index < 0 || index >= len(data.values) {
@@ -1198,9 +1199,17 @@ func (s *State) arrayTransposeMethod(ctx context.Context, self Value, args []Val
 	if len(rows) == 0 {
 		return ArrayValue(nil), nil
 	}
-	width := len(arrayValues(rows[0]))
+	first, ok := arrayDataOf(rows[0])
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion into Array")}
+	}
+	width := len(first.values)
 	for _, row := range rows {
-		if len(arrayValues(row)) != width {
+		data, ok := arrayDataOf(row)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion into Array")}
+		}
+		if len(data.values) != width {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "element size differs")}
 		}
 	}
