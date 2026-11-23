@@ -2093,23 +2093,23 @@ func (s *State) stringLinesMethod(ctx context.Context, self Value, args []Value,
 	return ArrayValue(values), nil
 }
 
-func (s *State) stringSuccMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	runes := []rune(self.String())
+func succString(text string) string {
+	runes := []rune(text)
 	if len(runes) == 0 {
-		return StringValue(""), nil
+		return ""
 	}
 	for i := len(runes) - 1; i >= 0; i-- {
 		r := runes[i]
 		switch {
 		case r >= '0' && r < '9':
 			runes[i] = r + 1
-			return StringValue(string(runes)), nil
+			return string(runes)
 		case r == '9':
 			runes[i] = '0'
 			continue
 		case (r >= 'a' && r < 'z') || (r >= 'A' && r < 'Z'):
 			runes[i] = r + 1
-			return StringValue(string(runes)), nil
+			return string(runes)
 		case r == 'z':
 			runes[i] = 'a'
 			continue
@@ -2118,14 +2118,18 @@ func (s *State) stringSuccMethod(ctx context.Context, self Value, args []Value, 
 			continue
 		default:
 			runes[i] = r + 1
-			return StringValue(string(runes)), nil
+			return string(runes)
 		}
 	}
 	prefix := "a"
 	if len(runes) > 0 && runes[0] >= 'A' && runes[0] <= 'Z' {
 		prefix = "A"
 	}
-	return StringValue(prefix + string(runes)), nil
+	return prefix + string(runes)
+}
+
+func (s *State) stringSuccMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	return StringValue(succString(self.String())), nil
 }
 
 func (s *State) stringSqueezeMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {

@@ -20,6 +20,7 @@ func (s *State) installCoreLibrary() {
 	s.installStringLibrary()
 	s.installIntegerLibrary()
 	s.installObjectLibrary()
+	s.installSymbolLibrary()
 	s.installRangeLibrary()
 	s.installAdvancedCoreLibrary()
 }
