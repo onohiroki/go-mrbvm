@@ -3648,8 +3648,13 @@ func (s *State) kernelProcMethod(ctx context.Context, self Value, args []Value, 
 
 func (s *State) procArityMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if self.Kind() == KindObject && self.obj != nil {
-		if data, ok := self.obj.data.(*blockData); ok {
+		switch data := self.obj.data.(type) {
+		case *blockData:
 			return IntValue(procArity(data)), nil
+		case *nativeBlockData:
+			if data.hasArity {
+				return IntValue(int64(data.arity)), nil
+			}
 		}
 	}
 	return IntValue(-1), nil
@@ -4241,7 +4246,11 @@ func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw
 				data.targetClass.defaultVisibility = data.visibility
 				defer func() { data.targetClass.defaultVisibility = saved }()
 			}
-			return s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, block, data.env, data.mid, data.owner, data.cref, data.strict)
+			result, err := s.executeFrame(ctx, data.irep, data.self, data.targetClass, args, kw, block, data.env, data.mid, data.owner, data.cref, data.strict)
+			if sig, ok := err.(*unwindSignal); ok && sig.kind == unwindBreak && sig.target == nil {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.LocalJumpErrorClass, "break from proc-closure")}
+			}
+			return result, err
 		}
 	}
 	return s.callBlock(ctx, self, args, kw)

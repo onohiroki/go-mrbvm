@@ -21,6 +21,7 @@ func (s *State) installCoreLibrary() {
 	s.installIntegerLibrary()
 	s.installObjectLibrary()
 	s.installSymbolLibrary()
+	s.installProcLibrary()
 	s.installRangeLibrary()
 	s.installAdvancedCoreLibrary()
 }
@@ -2670,6 +2671,9 @@ func (s *State) integerTimesMethod(ctx context.Context, self Value, args []Value
 	}
 	for i := int64(0); i < count; i++ {
 		if _, err := s.callBlock(ctx, block, []Value{IntValue(i)}, Nil); err != nil {
+			if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
+				return br.value, nil
+			}
 			return Nil, err
 		}
 	}
@@ -2693,6 +2697,9 @@ func (s *State) integerUptoMethod(ctx context.Context, self Value, args []Value,
 	}
 	for i := start; i <= end; i++ {
 		if _, err := s.callBlock(ctx, block, []Value{IntValue(i)}, Nil); err != nil {
+			if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
+				return br.value, nil
+			}
 			return Nil, err
 		}
 	}
@@ -2716,6 +2723,9 @@ func (s *State) integerDowntoMethod(ctx context.Context, self Value, args []Valu
 	}
 	for i := start; i >= end; i-- {
 		if _, err := s.callBlock(ctx, block, []Value{IntValue(i)}, Nil); err != nil {
+			if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
+				return br.value, nil
+			}
 			return Nil, err
 		}
 	}

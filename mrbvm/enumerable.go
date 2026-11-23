@@ -49,7 +49,7 @@ func (s *State) installEnumerableLibrary() {
 }
 
 func nativeBlockValue(class *Class, fn func(ctx context.Context, args []Value) (Value, error)) Value {
-	return ObjectValue(&Object{class: class, data: &nativeBlockData{fn: fn}})
+	return ObjectValue(&Object{class: class, data: &nativeBlockData{fn: fn, arity: -1, hasArity: true}})
 }
 
 func (s *State) eachRaw(ctx context.Context, self Value, fn func(args []Value) error) error {

@@ -209,7 +209,10 @@ type enumeratorData struct {
 // nativeBlockData lets Go code act as a Ruby block. Enumerable uses it to
 // pass a collector block to an arbitrary object's each method.
 type nativeBlockData struct {
-	fn func(ctx context.Context, args []Value) (Value, error)
+	fn       func(ctx context.Context, args []Value) (Value, error)
+	strict   bool
+	arity    int
+	hasArity bool
 }
 
 type inlineExceptionObject struct {
