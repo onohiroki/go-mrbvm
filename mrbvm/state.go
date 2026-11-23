@@ -89,6 +89,9 @@ type State struct {
 	FileClass              *Class
 	RegexpClass            *Class
 	MatchDataClass         *Class
+	regexpQuotedSet        bool
+	regexpQuotedLiteral    string
+	regexpQuotedRegexp     Value
 	BacktraceLocationClass *Class
 	FiberClass             *Class
 	BindingClass           *Class
@@ -1179,6 +1182,7 @@ func New(opts Options) *State {
 	s.installFileLibrary()
 	s.installRegexpClass()
 	s.installMatchDataClass()
+	s.installStringRegexpLibrary()
 	s.installFiberClass()
 	s.installFiberStorage()
 	s.installEvalLibrary()
@@ -1942,6 +1946,9 @@ func (s *State) classNewMethod(ctx context.Context, self Value, args []Value, kw
 	class, ok := s.asClass(self)
 	if !ok {
 		return Nil, fmt.Errorf("mrbvm: Class#new receiver is not a class")
+	}
+	if class == s.MatchDataClass || s.classIsSubclass(class, s.MatchDataClass) {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, "undefined method 'new' for Class")}
 	}
 	if class.singletonOf != nil || class.isSingleton {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't create instance of singleton class")}
@@ -3826,6 +3833,13 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 		duplicate = ObjectValue(&Object{class: self.obj.class, data: copyData})
 	case *structData:
 		duplicate = ObjectValue(&Object{class: self.obj.class, data: &structData{values: append([]Value(nil), data.values...)}})
+	case *matchData:
+		copyData := *data
+		copyData.groups = append([]string(nil), data.groups...)
+		copyData.matched = append([]bool(nil), data.matched...)
+		copyData.indices = append([]int(nil), data.indices...)
+		copyData.names = append([]string(nil), data.names...)
+		duplicate = ObjectValue(&Object{class: self.obj.class, data: &copyData})
 	default:
 		duplicate = ObjectValue(&Object{class: self.obj.class})
 	}

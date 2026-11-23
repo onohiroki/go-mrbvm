@@ -101,7 +101,7 @@ func (s *State) symbolSliceMethod(ctx context.Context, self Value, args []Value,
 	if len(args) == 0 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
 	}
-	return s.stringSliceMethod(ctx, StringValue(self.String()), args, kw, block)
+	return s.call(ctx, StringValue(self.String()), "[]", args, kw, block)
 }
 
 func lowerASCII(b byte) byte {

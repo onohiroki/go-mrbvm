@@ -761,6 +761,21 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			name := irep.Syms[in.Operands[1]]
 			if name == "$!" {
 				s.currentException = regs[in.Operands[0]]
+			} else if name == "$~" && !regs[in.Operands[0]].IsNil() {
+				class := s.classOf(regs[in.Operands[0]])
+				if class != s.MatchDataClass && !s.classIsSubclass(class, s.MatchDataClass) {
+					sig := &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type "+class.name+" (expected MatchData)")}
+					np, rv, done, fatal := dispatch(sig, in.Offset)
+					if fatal != nil {
+						return Nil, fatal
+					}
+					if done {
+						return rv, nil
+					}
+					pc = np
+					continue
+				}
+				s.globals[name] = regs[in.Operands[0]]
 			} else {
 				s.globals[name] = regs[in.Operands[0]]
 			}

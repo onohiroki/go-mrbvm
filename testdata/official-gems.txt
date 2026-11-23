@@ -20,3 +20,15 @@ mruby-fiber/test/fiber2.rb
 mruby-set/test/set.rb
 mruby-struct/test/struct.rb
 mruby-data/test/data.rb
+mruby-regexp/test/regexp.rb
+mruby-regexp/test/string_regexp.rb
+mruby-regexp/test/string_index.rb
+mruby-regexp/test/symbol_regexp.rb
+mruby-regexp/test/match_data.rb
+mruby-regexp/test/capture_slots.rb
+mruby-regexp/test/end_anchor_window.rb
+mruby-regexp/test/linebreak_escape.rb
+mruby-regexp/test/required_literal.rb
+mruby-regexp/test/large_program.rb
+mruby-regexp/test/many_classes.rb
+mruby-regexp/test/skipped_search_marks.rb
