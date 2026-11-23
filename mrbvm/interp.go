@@ -2536,7 +2536,7 @@ func (s *State) coerceNumericArgument(ctx context.Context, value Value) (Value, 
 	if value.Kind() == KindInt || value.Kind() == KindFloat || value.Kind() == KindBigInt {
 		return value, true, nil
 	}
-	if isRationalObject(value) {
+	if isRationalObject(value) || isComplexObject(value) {
 		return value, true, nil
 	}
 	class := s.classOf(value)
@@ -2658,7 +2658,7 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 		switch name {
 		case "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^":
 			other := args[0]
-			if other.Kind() != KindInt && other.Kind() != KindFloat && other.Kind() != KindBigInt && !isRationalObject(other) {
+			if other.Kind() != KindInt && other.Kind() != KindFloat && other.Kind() != KindBigInt && !isRationalObject(other) && !isComplexObject(other) {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
 					"no implicit conversion of "+s.classOf(other).name+" into Integer")}
 			}
@@ -3118,6 +3118,26 @@ func compareNative(left, right Value) (int, bool) {
 // carries fewer significant bits than an int64, so converting both to float64
 // would report an integer equal to a Float that stands for a different number.
 func numericCompare(left, right Value) (int, bool) {
+	if isComplexObject(left) || isComplexObject(right) {
+		leftData, leftOK := complexOf(left)
+		rightData, rightOK := complexOf(right)
+		if leftOK && rightOK {
+			if cmp, ok := numericCompare(leftData.imag, rightData.imag); !ok || cmp != 0 {
+				return 0, false
+			}
+			return numericCompare(leftData.real, rightData.real)
+		}
+		if leftOK {
+			if !complexValueImagZero(leftData.imag) {
+				return 0, false
+			}
+			return numericCompare(leftData.real, right)
+		}
+		if !complexValueImagZero(rightData.imag) {
+			return 0, false
+		}
+		return numericCompare(left, rightData.real)
+	}
 	if isRationalObject(left) || isRationalObject(right) {
 		leftRat, leftOK := numericRat(left)
 		rightRat, rightOK := numericRat(right)

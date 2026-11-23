@@ -60,6 +60,8 @@ type State struct {
 	RangeClass             *Class
 	ProcClass              *Class
 	RationalClass          *Class
+	ComplexClass           *Class
+	MathClass              *Class
 	MethodClass            *Class
 	UnboundMethodClass     *Class
 	EnumerableClass        *Class
@@ -220,6 +222,10 @@ func New(opts Options) *State {
 	s.HashClass = newClass("Hash", s.ObjectClass)
 	s.RangeClass = newClass("Range", s.ObjectClass)
 	s.RationalClass = newClass("Rational", s.NumericClass)
+	s.ComplexClass = newClass("Complex", s.NumericClass)
+	s.MathClass = newClass("Math", nil)
+	s.MathClass.isModule = true
+	s.ensureClassObject(s.MathClass)
 	s.ProcClass = newClass("Proc", s.ObjectClass)
 	s.MethodClass = newClass("Method", s.ObjectClass)
 	s.UnboundMethodClass = newClass("UnboundMethod", s.ObjectClass)
@@ -878,7 +884,7 @@ func New(opts Options) *State {
 		"Integer": s.IntegerClass,
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
-		"Rational": s.RationalClass, "Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
+		"Rational": s.RationalClass, "Complex": s.ComplexClass, "Math": s.MathClass, "Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
 		"Enumerator":    s.EnumeratorClass,
 		"Comparable":    s.ComparableClass,
 		"GC":            s.GCClass,
@@ -1139,6 +1145,8 @@ func New(opts Options) *State {
 	s.installKernelModuleFunctions()
 	s.installMethodClasses()
 	s.installRationalLibrary()
+	s.installComplexLibrary()
+	s.installMathLibrary()
 	s.installModuleExtensionLibrary()
 	s.markBuiltinOperatorMethods()
 	s.bopRedefined = false

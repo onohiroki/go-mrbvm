@@ -274,6 +274,13 @@ func (s *State) rationalArithmeticMethod(op string) NativeFunc {
 			return Nil, nil
 		}
 		right := args[0]
+		if isComplexObject(right) {
+			result, err := s.complexArithmetic(self, op, right)
+			if err != nil {
+				return Nil, err
+			}
+			return result, nil
+		}
 		if op == "/" {
 			if rational, ok := numericRat(right); ok && rational.Sign() == 0 {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.ZeroDivisionErrorClass, "divided by 0")}

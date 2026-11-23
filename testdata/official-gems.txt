@@ -13,3 +13,4 @@ mruby-kernel-ext/test/kernel.rb
 mruby-metaprog/test/metaprog.rb
 mruby-method/test/method.rb
 mruby-rational/test/rational.rb
+mruby-complex/test/complex.rb
