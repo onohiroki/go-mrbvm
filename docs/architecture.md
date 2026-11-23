@@ -155,7 +155,7 @@ Immediate values:
 
 Heap objects:
 
-- `String` (UTF-8 bytes, encoding flag)
+- `String` (UTF-8 byte storage, character indexing)
 - `Array`
 - `Hash`
 - `Range`
@@ -437,6 +437,16 @@ var embedded embed.FS
 `go-mrbvm` imports the package and runs the same cases without copying them.
 `conformance.Cases()` returns the case directories, and `conformance.FS`
 contains `main.rb`, `stdout.txt`, and the optional expectation files.
+
+### String encoding
+
+Strings are stored as byte slices but indexed by UTF-8 characters. A valid
+UTF-8 sequence is one character; each byte of an invalid sequence is a
+character of its own, so the original bytes survive. `bytesize`,
+`byteslice`, `bytesplice`, `each_byte`, `byteindex`, and `byterindex` stay
+byte-based. This is a deliberate choice for a Go-hosted macro language and
+differs from mruby 4.0.0's default ASCII-8BIT build (mruby's
+`MRB_UTF8_STRING` mode is the closest reference).
 
 ### Differential execution
 

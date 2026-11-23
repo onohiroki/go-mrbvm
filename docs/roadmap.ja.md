@@ -21,7 +21,7 @@
     両方で成功（`go-mrbc/conformance` パッケージを共有）
   - `Integer` / `Float` の演算子メソッド層、`send` / alias /
     リフレクション、再定義時の opcode フォールバック
-  - 公式テスト **34 ファイル**が成功（`testdata/official.txt`）
+  - 公式テスト **35 ファイル**が成功（`testdata/official.txt`）
   - `Options.LoadMrblib` で 7 ファイルの mrblib subset を opt-in ロード
   - ホスト API（`DefineFunction` / `DefineClass` / `DefineModule` /
     `DefineConst` / `Send` / `Raise`）
@@ -257,7 +257,7 @@
 | `range.rb` | 24 / 26 | 残りは mruby GC テスト用ヘルパー |
 | `class.rb` | 49 / 49 | 全通過 |
 | `module.rb` | 86 / 86 | 全通過 |
-| `string.rb` | 77 / 80 | 残りは Encoding の byte/char 差のみ |
+| `string.rb` | 104 / 104 | 全通過（UTF-8 文字単位モード） |
 
 追加で以下を解決した。
 
@@ -320,11 +320,11 @@
 
 ### 4.14 コア言語ギャップの解消（2026-11-22）
 
-公式テストを 22 ファイルから 34 ファイルへ拡大した。追加で通したもの:
+公式テストを 22 ファイルから 35 ファイルへ拡大した。追加で通したもの:
 
 `argumenterror` / `autoload` / `basicobject` / `bs_block` / `ensure` /
 `enumerable` / `hash` / `integer` / `float` / `methods` / `numeric` /
-`proc` / `shareable_constant` / `symbol`
+`proc` / `shareable_constant` / `string` / `symbol`
 
 - `Proc#[]` / `arity` / `==` / `hash`、`&obj` の `to_proc` 変換
 - `Symbol#to_sym`、`BasicObject#defined?`
@@ -343,17 +343,20 @@
   `inspect` コールバック中の構造変更を `RuntimeError` にし、
   `merge` / `__except` では pair をスナップショットして保持
 - `Hash#inspect` がキー・値の Ruby メソッドを dispatch するように変更
+- String を **UTF-8 文字単位** に正式化（mruby デフォルトの ASCII-8BIT とは
+  異なるプロジェクト判断）。`length` / `[]` / `index` / `inspect` / Regexp の
+  位置 / sprintf の幅を文字単位に統一し、不正 byte は 1 byte = 1 文字として
+  元の byte を保持。byte API は `bytesize` / `byteslice` / `bytesplice` /
+  `each_byte` / `byteindex` / `byterindex` に分離
 - 実行時 NaN に一意の payload を与え、`equal?` / `object_id` を区別
 
 残る失敗は次のカテゴリに限定している:
 
-- `string` の Encoding byte/char 差
 - GC 内部
 - `env` / `gc` / `range` の GC テスト、`sysfail` / `vformat` の C gem ヘルパ
 - `codegen` / `syntax` の 4.0.0 以降の構文
 
-conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケージで共有）。除外している 3 系統（mruby GC 内部、
-Encoding の byte/char、Hash 再入カーソル）は引き続き対象外。
+conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケージで共有）。除外しているのは mruby GC 内部と C テスト gem ヘルパ、4.0.0 以降の構文のみ。
 
 ## 5. 品質ゲート
 
@@ -388,7 +391,7 @@ go run ./cmd/mrbtest <成功している公式テスト>
 ## 7. マイルストーン目安
 
 - **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
-- **VM-4b**: 公式テスト 34 ファイル（達成）
+- **VM-4b**: 公式テスト 35 ファイル（達成）
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
 - **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 完了、デバッガが残り

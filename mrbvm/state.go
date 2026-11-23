@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/onohiroki/go-mrbc/bytecode"
 	"github.com/onohiroki/go-mrbvm/sandbox"
@@ -989,7 +988,7 @@ func New(opts Options) *State {
 	})
 	s.ObjectClass.define("clone", s.objectDupMethod)
 	s.ObjectClass.define("__ENCODING__", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return StringValue("ASCII-8BIT"), nil
+		return StringValue("UTF-8"), nil
 	})
 	s.ObjectClass.define("proc", s.kernelProcMethod)
 	s.ObjectClass.define("lambda", s.kernelLambdaMethod)
@@ -2310,7 +2309,7 @@ func (s *State) index(ctx context.Context, recv, index Value) (Value, error) {
 		case *stringData:
 			if index.Kind() == KindObject && index.obj != nil {
 				if rangeIndex, ok := index.obj.data.(*rangeData); ok {
-					return sliceString(data.str(), rangeIndex), nil
+					return sliceStringChars(data.str(), rangeIndex), nil
 				}
 			}
 			pos, err := s.indexInteger(index)
@@ -2459,17 +2458,7 @@ func (s *State) hashLengthMethod(ctx context.Context, self Value, args []Value, 
 }
 
 func (s *State) stringLengthMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	text := self.String()
-	count := 0
-	for len(text) > 0 {
-		_, size := utf8.DecodeRuneInString(text)
-		if size == 0 {
-			break
-		}
-		text = text[size:]
-		count++
-	}
-	return IntValue(int64(count)), nil
+	return IntValue(int64(stringCharCount(self.String()))), nil
 }
 
 func hashHasKey(hash Value, name string) bool {

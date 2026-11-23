@@ -174,9 +174,11 @@ func (s *State) installAdvancedStringLibrary() {
 		if !ok || data.len() == 0 {
 			return Nil, nil
 		}
-		runes := []rune(data.str())
-		data.set(string(runes[:len(runes)-1]))
-		return self, nil
+		if trimmed, ok := chopString(data.str()); ok {
+			data.set(trimmed)
+			return self, nil
+		}
+		return Nil, nil
 	})
 	class.define("chomp!", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if err := s.ensureMutable(self); err != nil {
@@ -191,14 +193,8 @@ func (s *State) installAdvancedStringLibrary() {
 		if len(args) > 0 {
 			suffix = args[0].String()
 		}
-		trimmed := current
-		switch {
-		case suffix == "\n" && strings.HasSuffix(current, "\r\n"):
-			trimmed = current[:len(current)-2]
-		case suffix != "" && strings.HasSuffix(current, suffix):
-			trimmed = current[:len(current)-len(suffix)]
-		}
-		if trimmed == current {
+		trimmed, changed := chompString(current, suffix)
+		if !changed {
 			return Nil, nil
 		}
 		data.set(trimmed)
@@ -395,22 +391,32 @@ func (s *State) installAdvancedStringLibrary() {
 			return Nil, nil
 		}
 		text := self.String()
+		needle := args[0].String()
+		if !utf8.ValidString(needle) {
+			return Nil, nil
+		}
 		offset := len(text)
 		if len(args) > 1 && args[1].Kind() == KindInt {
 			offset = int(args[1].Int())
 			if offset < 0 {
 				offset += len(text)
 			}
-			if offset < 0 || offset > len(text) {
+			if offset < 0 {
 				return Nil, nil
 			}
-			offset += len(args[0].String())
 		}
 		if offset > len(text) {
 			offset = len(text)
 		}
-		index := strings.LastIndex(text[:offset], args[0].String())
-		if index < 0 {
+		if !stringIsCharBoundary(text, offset) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "offset is not a character boundary")}
+		}
+		end := offset + len(needle)
+		if end > len(text) {
+			end = len(text)
+		}
+		index := strings.LastIndex(text[:end], needle)
+		if index < 0 || index > offset {
 			return Nil, nil
 		}
 		return IntValue(int64(index)), nil
@@ -446,13 +452,13 @@ func (s *State) stringSetIndexMethod(ctx context.Context, self Value, args []Val
 	if err := s.ensureMutable(self); err != nil {
 		return Nil, err
 	}
-	runes := []rune(data.str())
+	text := data.str()
+	count := stringCharCount(text)
 	if args[len(args)-1].Kind() != KindString {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion into String")}
 	}
 	replacement := args[len(args)-1].String()
 	if len(args) == 2 && args[0].Kind() == KindString {
-		text := data.str()
 		pattern := args[0].String()
 		index := strings.Index(text, pattern)
 		if index < 0 {
@@ -465,8 +471,8 @@ func (s *State) stringSetIndexMethod(ctx context.Context, self Value, args []Val
 	switch len(args) {
 	case 2:
 		if rangeIndex, ok := rangeDataOf(args[0]); ok {
-			start, end = rangeBounds(rangeIndex, len(runes))
-			if start > len(runes) {
+			start, end = rangeBounds(rangeIndex, count)
+			if start > count {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
 			}
 			end += start
@@ -476,13 +482,13 @@ func (s *State) stringSetIndexMethod(ctx context.Context, self Value, args []Val
 				return Nil, err
 			}
 			if index < 0 {
-				index += len(runes)
+				index += count
 			}
-			if index < 0 || index > len(runes) {
+			if index < 0 || index > count {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
 			}
 			start, end = index, index+1
-			if index == len(runes) {
+			if index == count {
 				end = index
 			}
 		}
@@ -496,30 +502,38 @@ func (s *State) stringSetIndexMethod(ctx context.Context, self Value, args []Val
 			return Nil, err
 		}
 		if index < 0 {
-			index += len(runes)
+			index += count
 		}
-		if index < 0 || index > len(runes) || length < 0 {
+		if index < 0 || index > count || length < 0 {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index out of string")}
 		}
 		start, end = index, index+length
-		if length > len(runes)-index || end < start {
-			end = len(runes)
+		if length > count-index || end < start {
+			end = count
 		}
 	}
 	if start < 0 {
 		start = 0
 	}
-	if start > len(runes) {
-		start = len(runes)
+	if start > count {
+		start = count
 	}
 	if end < start {
 		end = start
 	}
-	if end > len(runes) {
-		end = len(runes)
+	if end > count {
+		end = count
 	}
-	result := string(runes[:start]) + replacement + string(runes[end:])
-	data.set(result)
+	spans := stringCharSpans(text)
+	startByte := len(text)
+	if start < len(spans) {
+		startByte = spans[start].start
+	}
+	endByte := len(text)
+	if end < len(spans) {
+		endByte = spans[end].start
+	}
+	data.set(text[:startByte] + replacement + text[endByte:])
 	return StringValue(replacement), nil
 }
 
@@ -1520,6 +1534,35 @@ func (s *State) hashAllMethod(ctx context.Context, self Value, args []Value, kw 
 	return True, nil
 }
 
+func chompString(text, separator string) (string, bool) {
+	if separator == "" {
+		trimmed := strings.TrimRight(text, "\r\n")
+		return trimmed, trimmed != text
+	}
+	if !strings.HasSuffix(text, separator) {
+		if separator == "\n" && strings.HasSuffix(text, "\r\n") {
+			separator = "\r\n"
+		} else {
+			return text, false
+		}
+	}
+	if !stringIsCharBoundary(text, len(text)-len(separator)) {
+		return text, false
+	}
+	return text[:len(text)-len(separator)], true
+}
+
+func chopString(text string) (string, bool) {
+	if strings.HasSuffix(text, "\r\n") && stringIsCharBoundary(text, len(text)-2) {
+		return text[:len(text)-2], true
+	}
+	spans := stringCharSpans(text)
+	if len(spans) == 0 {
+		return text, false
+	}
+	return text[:spans[len(spans)-1].start], true
+}
+
 func (s *State) stringChompMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	text := self.String()
 	separator := "\n"
@@ -1529,26 +1572,13 @@ func (s *State) stringChompMethod(ctx context.Context, self Value, args []Value,
 		}
 		separator = args[0].String()
 	}
-	if separator == "" {
-		text = strings.TrimRight(text, "\r\n")
-	} else if strings.HasSuffix(text, separator) {
-		text = text[:len(text)-len(separator)]
-	} else if separator == "\n" && strings.HasSuffix(text, "\r\n") {
-		text = text[:len(text)-2]
-	}
-	return StringValue(text), nil
+	trimmed, _ := chompString(text, separator)
+	return StringValue(trimmed), nil
 }
 
 func (s *State) stringChopMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	text := self.String()
-	if strings.HasSuffix(text, "\r\n") {
-		return StringValue(text[:len(text)-2]), nil
-	}
-	_, size := utf8.DecodeLastRuneInString(text)
-	if size == 0 {
-		return StringValue(""), nil
-	}
-	return StringValue(text[:len(text)-size]), nil
+	trimmed, _ := chopString(self.String())
+	return StringValue(trimmed), nil
 }
 
 func (s *State) stringPad(text string, width int, pad string, left, right bool) string {

@@ -256,7 +256,7 @@ func inspectValue(v Value, seen map[*Object]bool) string {
 	case KindSymbol:
 		return ":" + v.String()
 	case KindString:
-		return strconv.Quote(v.String())
+		return inspectUTF8String(v.String())
 	case KindObject:
 		if v.obj != nil {
 			if c, ok := v.obj.data.(*Class); ok {
@@ -264,7 +264,7 @@ func inspectValue(v Value, seen map[*Object]bool) string {
 			}
 			switch data := v.obj.data.(type) {
 			case *stringData:
-				return strconv.Quote(data.str())
+				return inspectUTF8String(data.str())
 			case *arrayData:
 				if seen[v.obj] {
 					return "[...]"

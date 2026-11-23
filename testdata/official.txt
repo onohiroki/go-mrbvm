@@ -34,3 +34,4 @@ symbol.rb
 numeric.rb
 autoload.rb
 hash.rb
+string.rb

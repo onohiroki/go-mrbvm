@@ -134,7 +134,7 @@ go run ./cmd/vmcompat -corpus
 go run ./cmd/mrbtest -manifest testdata/official.txt
 ```
 
-The manifest currently covers **34** official test files, including
+The VM uses UTF-8 character indexing for `String` (`bytesize` and the byte APIs remain byte-based). The manifest currently covers **35** official test files, including
 `array`, `object`, `superclass`, `version`, `platform`, the exception-class
 tests, `nameerror`, and `nomethoderror`.
 

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // installCoreLibrary adds the pure-Go part of mruby's core library. The
@@ -396,6 +397,7 @@ func (s *State) installHashLibrary() {
 
 func (s *State) installStringLibrary() {
 	class := s.StringClass
+	class.define("inspect", s.stringInspectMethod)
 	class.define("==", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 || args[0].Kind() == KindSymbol {
 			return False, nil
@@ -470,10 +472,11 @@ func (s *State) installStringLibrary() {
 		return FloatValue(parseRubyFloat(self.String())), nil
 	})
 	class.define("chars", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		runes := []rune(self.String())
-		values := make([]Value, len(runes))
-		for i, r := range runes {
-			values[i] = StringValue(string(r))
+		text := self.String()
+		spans := stringCharSpans(text)
+		values := make([]Value, len(spans))
+		for i, span := range spans {
+			values[i] = StringValue(text[span.start:span.end])
 		}
 		return ArrayValue(values), nil
 	})
@@ -486,11 +489,13 @@ func (s *State) installStringLibrary() {
 		return ArrayValue(values), nil
 	})
 	class.define("reverse", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		runes := []rune(self.String())
-		for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
-			runes[i], runes[j] = runes[j], runes[i]
+		text := self.String()
+		spans := stringCharSpans(text)
+		var builder strings.Builder
+		for i := len(spans) - 1; i >= 0; i-- {
+			builder.WriteString(text[spans[i].start:spans[i].end])
 		}
-		return StringValue(string(runes)), nil
+		return StringValue(builder.String()), nil
 	})
 	class.define("concat", s.stringConcatMethod)
 	class.define("<<", s.stringConcatMethod)
@@ -522,14 +527,27 @@ func (s *State) installStringLibrary() {
 		return IntValue(int64(index)), nil
 	})
 	class.define("match", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		if len(args) != 1 {
+		if len(args) < 1 || len(args) > 2 {
 			return Nil, nil
 		}
 		data, ok := regexpOf(args[0])
 		if !ok {
 			return Nil, nil
 		}
-		result := s.newMatchData(data.regexp, self.String())
+		input := self.String()
+		byteStart := 0
+		if len(args) == 2 && args[1].Kind() == KindInt {
+			position := int(args[1].Int())
+			count := stringCharCount(input)
+			if position < 0 {
+				position += count
+			}
+			if position < 0 || position > count {
+				return Nil, nil
+			}
+			byteStart, _ = stringCharIndexToByte(input, position)
+		}
+		result := s.newMatchDataAt(data.regexp, input, byteStart)
 		if !block.IsNil() && !result.IsNil() {
 			return s.callBlock(ctx, block, []Value{result}, Nil)
 		}
@@ -2092,12 +2110,67 @@ func splitWhitespace(text string, limit int) []string {
 	return parts
 }
 
+func (s *State) stringInspectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	return StringValue(inspectUTF8String(self.String())), nil
+}
+
+func inspectUTF8String(text string) string {
+	var builder strings.Builder
+	builder.WriteByte('"')
+	for i := 0; i < len(text); {
+		b := text[i]
+		if b < 0x80 {
+			switch b {
+			case '\a':
+				builder.WriteString(`\a`)
+			case '\b':
+				builder.WriteString(`\b`)
+			case '\t':
+				builder.WriteString(`\t`)
+			case '\n':
+				builder.WriteString(`\n`)
+			case '\v':
+				builder.WriteString(`\v`)
+			case '\f':
+				builder.WriteString(`\f`)
+			case '\r':
+				builder.WriteString(`\r`)
+			case 0x1b:
+				builder.WriteString(`\e`)
+			case '"':
+				builder.WriteString(`\"`)
+			case '\\':
+				builder.WriteString(`\\`)
+			default:
+				if b < 0x20 || b == 0x7f {
+					fmt.Fprintf(&builder, "\\x%02X", b)
+				} else {
+					builder.WriteByte(b)
+				}
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&builder, "\\x%02X", b)
+			i++
+			continue
+		}
+		builder.WriteString(text[i : i+size])
+		i += size
+	}
+	builder.WriteByte('"')
+	return builder.String()
+}
+
 func (s *State) stringEachCharMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if block.IsNil() {
 		return s.toEnum(self, "each_char", nil), nil
 	}
-	for _, r := range self.String() {
-		if _, err := s.callBlock1(ctx, block, StringValue(string(r)), Nil); err != nil {
+	text := self.String()
+	for _, span := range stringCharSpans(text) {
+		if _, err := s.callBlock1(ctx, block, StringValue(text[span.start:span.end]), Nil); err != nil {
 			return Nil, err
 		}
 	}
@@ -2172,7 +2245,7 @@ func (s *State) stringIndexMethod(ctx context.Context, self Value, args []Value,
 			"no implicit conversion of "+s.classOf(args[0]).name+" into String")}
 	}
 	text := self.String()
-	runes := []rune(text)
+	count := stringCharCount(text)
 	offset := 0
 	if len(args) > 1 {
 		if args[1].Kind() != KindInt {
@@ -2180,22 +2253,24 @@ func (s *State) stringIndexMethod(ctx context.Context, self Value, args []Value,
 		}
 		offset = int(args[1].Int())
 		if offset < 0 {
-			offset += len(runes)
+			offset += count
 		}
 	}
-	if offset < 0 || offset > len(runes) {
+	if offset < 0 || offset > count {
 		return Nil, nil
 	}
 	needle := args[0].String()
 	if needle == "" {
 		return IntValue(int64(offset)), nil
 	}
-	tail := string(runes[offset:])
-	index := strings.Index(tail, needle)
-	if index < 0 {
+	if !utf8.ValidString(needle) {
 		return Nil, nil
 	}
-	return IntValue(int64(offset + len([]rune(tail[:index])))), nil
+	byteOffset, _ := stringCharIndexToByte(text, offset)
+	if index, ok := stringCharIndex(text, needle, byteOffset); ok {
+		return IntValue(int64(index)), nil
+	}
+	return Nil, nil
 }
 
 func (s *State) stringRindexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -2207,110 +2282,109 @@ func (s *State) stringRindexMethod(ctx context.Context, self Value, args []Value
 			"no implicit conversion of "+s.classOf(args[0]).name+" into String")}
 	}
 	text := self.String()
-	runes := []rune(text)
-	position := len(runes)
+	count := stringCharCount(text)
+	position := count
 	if len(args) > 1 {
 		if args[1].Kind() != KindInt {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "position must be an integer")}
 		}
 		position = int(args[1].Int())
 		if position < 0 {
-			position += len(runes)
+			position += count
 		}
 	}
 	if position < 0 {
 		return Nil, nil
 	}
-	if position > len(runes) {
-		position = len(runes)
+	if position > count {
+		position = count
 	}
 	needle := args[0].String()
 	if needle == "" {
 		return IntValue(int64(position)), nil
 	}
-	end := position + len([]rune(needle))
-	if end > len(text) {
-		end = len(text)
-	}
-	index := strings.LastIndex(text[:end], needle)
-	if index < 0 {
+	if !utf8.ValidString(needle) {
 		return Nil, nil
 	}
-	start := len([]rune(text[:index]))
-	if start > position {
-		return Nil, nil
+	byteLimit, _ := stringCharIndexToByte(text, position)
+	if index, ok := stringCharRindex(text, needle, byteLimit); ok {
+		return IntValue(int64(index)), nil
 	}
-	return IntValue(int64(start)), nil
+	return Nil, nil
 }
 
 func (s *State) stringSliceMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	text := self.String()
 	if len(args) == 1 {
 		if args[0].Kind() == KindObject && args[0].obj != nil {
 			if data, ok := args[0].obj.data.(*rangeData); ok {
-				return sliceString(self.String(), data), nil
+				return sliceStringChars(text, data), nil
 			}
 		}
 		if args[0].Kind() == KindString {
-			text := self.String()
 			pattern := args[0].String()
 			if strings.Contains(text, pattern) {
 				return StringValue(pattern), nil
 			}
 			return Nil, nil
 		}
+		if args[0].Kind() == KindInt {
+			index := int(args[0].Int())
+			count := stringCharCount(text)
+			if index < 0 {
+				index += count
+			}
+			if index < 0 || index >= count {
+				return Nil, nil
+			}
+			span := stringCharSpans(text)[index]
+			return StringValue(text[span.start:span.end]), nil
+		}
 		return s.index(ctx, self, args[0])
 	}
 	if len(args) == 2 && args[0].Kind() == KindInt && args[1].Kind() == KindInt {
-		runes := []rune(self.String())
-		start := int(args[0].Int())
-		length := int(args[1].Int())
-		if start < 0 {
-			start += len(runes)
+		if sliced, ok := stringCharSlice(text, int(args[0].Int()), int(args[1].Int())); ok {
+			return StringValue(sliced), nil
 		}
-		if start < 0 || start > len(runes) || length < 0 {
-			return Nil, nil
-		}
-		end := start + length
-		if end > len(runes) {
-			end = len(runes)
-		}
-		return StringValue(string(runes[start:end])), nil
 	}
 	return Nil, nil
 }
 
-func sliceString(text string, data *rangeData) Value {
-	runes := []rune(text)
+func sliceStringChars(text string, data *rangeData) Value {
+	spans := stringCharSpans(text)
+	length := len(spans)
 	low := 0
-	high := len(runes) - 1
+	high := length - 1
+	originalLow := 0
 	if !data.low.IsNil() && data.low.Kind() == KindInt {
-		low = int(data.low.Int())
+		originalLow = int(data.low.Int())
+		low = originalLow
 		if low < 0 {
-			low += len(runes)
+			low += length
 		}
 	}
 	if !data.high.IsNil() && data.high.Kind() == KindInt {
 		high = int(data.high.Int())
 		if high < 0 {
-			high += len(runes)
+			high += length
 		}
 		if data.exclusive {
 			high--
 		}
 	}
+	if originalLow < -length || originalLow > length {
+		return Nil
+	}
 	if low < 0 {
 		low = 0
 	}
-	if low > len(runes) {
-		return Nil
+	if high >= length {
+		high = length - 1
 	}
-	if high >= len(runes) {
-		high = len(runes) - 1
-	}
-	if high < low {
+	if high < low || length == 0 {
 		return StringValue("")
 	}
-	return StringValue(string(runes[low : high+1]))
+	return StringValue(text[spans[low].start:spans[high].end])
 }
 
 func (s *State) stringConcatMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -2370,7 +2444,7 @@ func (s *State) stringBytesliceMethod(ctx context.Context, self Value, args []Va
 		}
 		if args[0].Kind() == KindObject && args[0].obj != nil {
 			if data, ok := args[0].obj.data.(*rangeData); ok {
-				return sliceString(string(bytes), data), nil
+				return sliceStringBytes(string(bytes), data), nil
 			}
 		}
 	}
@@ -2392,19 +2466,65 @@ func (s *State) stringBytesliceMethod(ctx context.Context, self Value, args []Va
 	return Nil, nil
 }
 
+func sliceStringBytes(text string, data *rangeData) Value {
+	length := len(text)
+	low := 0
+	high := length - 1
+	originalLow := 0
+	if !data.low.IsNil() && data.low.Kind() == KindInt {
+		originalLow = int(data.low.Int())
+		low = originalLow
+		if low < 0 {
+			low += length
+		}
+	}
+	if !data.high.IsNil() && data.high.Kind() == KindInt {
+		high = int(data.high.Int())
+		if high < 0 {
+			high += length
+		}
+		if data.exclusive {
+			high--
+		}
+	}
+	if originalLow < -length || originalLow > length {
+		return Nil
+	}
+	if low < 0 {
+		low = 0
+	}
+	if high >= length {
+		high = length - 1
+	}
+	if high < low || length == 0 {
+		return StringValue("")
+	}
+	return StringValue(text[low : high+1])
+}
+
 func (s *State) stringByteindexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) < 1 {
 		return Nil, nil
 	}
-	bytes := []byte(self.String())
+	text := self.String()
+	needle := args[0].String()
+	if !utf8.ValidString(needle) {
+		return Nil, nil
+	}
 	offset := 0
 	if len(args) > 1 && args[1].Kind() == KindInt {
 		offset = int(args[1].Int())
+		if offset < 0 {
+			offset += len(text)
+		}
 	}
-	if offset < 0 || offset > len(bytes) {
+	if offset < 0 || offset > len(text) {
 		return Nil, nil
 	}
-	index := strings.Index(string(bytes[offset:]), args[0].String())
+	if !stringIsCharBoundary(text, offset) {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "offset is not a character boundary")}
+	}
+	index := strings.Index(text[offset:], needle)
 	if index < 0 {
 		return Nil, nil
 	}
