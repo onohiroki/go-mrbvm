@@ -4,13 +4,12 @@ Status: living architecture document (2026-11-20)
 
 This document describes the architecture and design constraints of
 **`go-mrbvm`**, a pure-Go implementation of the mruby 4.0.0 virtual machine.
-It is kept in the `go-mrbc` repository because the compiler and the VM share a
-bytecode contract, but the VM itself is a separate project and repository.
+The compiler and the VM are separate repositories that share a bytecode
+contract. The repository relationship, versioning, and test ownership are in
+[ecosystem.md](ecosystem.md).
 
 The maintained implementation plan is written in Japanese in
 [implementation-plan.ja.md](implementation-plan.ja.md).
-
-New repository: `github.com/onohiroki/go-mrbvm`
 
 Related repositories:
 

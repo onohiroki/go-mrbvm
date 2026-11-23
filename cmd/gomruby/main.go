@@ -17,7 +17,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Println("gomruby 0.0.0 (go-mrbvm, mruby 4.0.0 / RITE 04.00)")
+		fmt.Printf("gomruby %s (go-mrbvm, %s)\n", mrbvm.Version, mrbvm.Target)
 		return
 	}
 	if flag.NArg() != 1 {

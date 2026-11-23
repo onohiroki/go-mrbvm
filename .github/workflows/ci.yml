@@ -45,6 +45,7 @@ jobs:
       - name: Vet and test
         working-directory: go-mrbvm
         run: |
+          test -z "$(gofmt -l .)"
           go vet ./...
           go test ./...
 
@@ -52,6 +53,10 @@ jobs:
         working-directory: go-mrbvm
         run: go run ./cmd/vmcompat -corpus
 
-      - name: Official test manifest
+      - name: Official core test manifest
         working-directory: go-mrbvm
         run: go run ./cmd/mrbtest -manifest testdata/official.txt
+
+      - name: Official mrbgem test manifest
+        working-directory: go-mrbvm
+        run: go run ./cmd/mrbtest -manifest testdata/official-gems.txt

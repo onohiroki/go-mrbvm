@@ -82,53 +82,98 @@ The shared conformance corpus (53 cases) lives in the sibling `go-mrbc`
 repository as the importable `conformance` package. Every case passes with
 bytecode from both `go-mrbc` and the official mruby 4.0.0 `mrbc`.
 
-VM-3 leftovers are backtraces and richer exception introspection. VM-4 has
-started with the native core library and the differential runner; the next
-step is loading mruby's Ruby-level `mrblib` and widening official test
-coverage.
+The VM is tested against the official mruby 4.0.0 core and mrbgem suites.
+The current manifests cover **42 core files** and **34 mrbgem suites**.
+`mruby-eval` passes 45/48 in `eval.rb` (one C-helper skip, two stress cases
+not run) and 14/14 in `binding.rb`. Remaining Regexp exclusions are listed in
+the roadmap; they are constructs the pure-Go `regexp2` engine cannot express,
+such as Onigmo subroutine calls and absent repeaters.
 
 Design and plan:
 
+- [docs/ecosystem.md](docs/ecosystem.md) — how go-mrbc and go-mrbvm fit together
+- [docs/ecosystem.ja.md](docs/ecosystem.ja.md) — リポジトリの関係（日本語）
+- [docs/releasing.md](docs/releasing.md) — release order and module tagging
 - [docs/architecture.md](docs/architecture.md) — architecture and design
 - [docs/implementation-plan.ja.md](docs/implementation-plan.ja.md) — implementation plan (Japanese)
 - [docs/roadmap.ja.md](docs/roadmap.ja.md) — phases, sprint plan, and quality gates (Japanese)
 - [docs/benchmarks.ja.md](docs/benchmarks.ja.md) — microbenchmarks and C mruby comparison (Japanese)
 - [docs/bytecode-format.md](docs/bytecode-format.md) — RITE 04.00 format
+- [CONTRIBUTING.md](CONTRIBUTING.md) — patch checklist and repository routing
 
 ## Relationship to go-mrbc
+
+```text
+Ruby source ──▶ go-mrbc ──▶ RITE 04.00 ──▶ go-mrbvm
+                                      └──▶ mruby 4.0.0 (reference)
+```
 
 ```text
 go-mrbvm ──imports──▶ go-mrbc/bytecode
 go-mrbc  ──no dependency on──▶ go-mrbvm
 ```
 
-The core `mrbvm` package consumes only `go-mrbc/bytecode`. `eval`, `load`, and
-`require` compile through `Options.Compiler`, so embedding the VM does not link
-the compiler into the runtime.
+`go-mrbc` is the compiler; `go-mrbvm` is the runtime. The VM imports only
+`go-mrbc/bytecode`, the shared RITE model and opcode codec. It does not import
+the parser or compiler. `eval`, `load`, and `require` compile through
+`Options.Compiler`, so an embedding that does not use those operations does not
+link a compiler.
 
-The shared contract is the `bytecode` package:
+The `gomruby` and `gomirb` commands do link both modules: they accept Ruby
+source, compile it with `go-mrbc`, and execute the result with `mrbvm`.
 
-- RITE 04.00 container
-- `Irep`, pools, symbols, catch handlers
+The shared contract is deliberately small:
+
+- RITE 04.00 container and `Irep`
+- pools, symbols, catch handlers, and debug lines
 - instruction encoding/decoding
+- the conformance corpus owned by `go-mrbc` and consumed by both
 
-`go-mrbvm` does not copy the bytecode implementation. During local
-development, `go.mod` uses a `replace` directive for the sibling
-`../go-mrbc` checkout. Once `go-mrbc` has a tagged release, the replace will
-be removed.
+During local development, `go.mod` has a `replace` for the sibling
+`../go-mrbc` checkout. A published release removes the replace and pins a
+tagged compiler version; the order is described in
+[docs/releasing.md](docs/releasing.md) and the full split in
+[docs/ecosystem.md](docs/ecosystem.md).
 
 ## Layout
 
 ```text
 go-mrbvm/
-├── mrbvm/                 public embedding API
-├── internal/              interpreter, objects, GC, core library
+├── mrbvm/                 public embedding API, interpreter, object model,
+│                          core library, Regexp, Fiber, eval, Set/Struct/Data
 ├── sandbox/               resource limits and capability policy
 ├── cmd/                   gomruby, gomirb, vmcompat, mrbtest, vmbench
-├── docs/                  plan and bytecode format
+├── docs/                  architecture, ecosystem, roadmap, release process
 ├── examples/              sample macro scripts
-└── testdata/official.txt  manifest of passing official mruby tests
+├── testdata/              official mruby test manifests
+└── internal/              toolchain checks used by tests
 ```
+
+The mruby and ChibiRuby directories used by the reference test harness are
+not part of the module and are not required to build it.
+
+## Getting started
+
+The repositories are not yet tagged for `go install`. Build from sibling
+checkouts while the local `replace` is in place:
+
+```sh
+git clone https://github.com/onohiroki/go-mrbc.git
+git clone https://github.com/onohiroki/go-mrbvm.git
+cd go-mrbvm
+go build -o gomruby ./cmd/gomruby
+./gomruby -v
+```
+
+After the first tagged release, the install path is:
+
+```sh
+go install github.com/onohiroki/go-mrbvm/cmd/gomruby@latest
+go install github.com/onohiroki/go-mrbvm/cmd/gomirb@latest
+```
+
+`gomruby` runs `.mrb` bytecode directly and compiles `.rb` through the linked
+`go-mrbc`. `gomirb` is the persistent REPL.
 
 ## Development
 
@@ -138,20 +183,28 @@ Requirements:
 - mruby 4.0.0 (`mruby`, `mrbc`) for differential tests
 
 ```sh
-go build ./...
+gofmt -l .
+go vet ./...
 go test ./...
 
 # Differential run against the reference mruby.
 go run ./cmd/vmcompat -corpus
 
-# Run the manifest of official mruby tests that currently pass.
+# Run the official mruby test manifests that currently pass.
 go run ./cmd/mrbtest -manifest testdata/official.txt
+go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ```
 
-The VM uses UTF-8 character indexing for `String` (`bytesize` and the byte APIs remain byte-based). The core manifest currently covers **42** official test files. The gem
-manifest (`testdata/official-gems.txt`) covers **18** passing mrbgem suites,
-including the Array/Hash/String/Enumerable extensions, Enumerator, Method,
-metaprogramming, Rational, Complex, Regexp, and Fiber.
+The VM uses UTF-8 character indexing for `String` (`bytesize` and the byte APIs
+remain byte-based). The core manifest covers **42** official test files and the
+gem manifest (`testdata/official-gems.txt`) covers **34** mrbgem suites,
+including Array/Hash/String/Enumerable extensions, Enumerator, Method,
+metaprogramming, Rational, Complex, Regexp/MatchData, Fiber, Set, Struct,
+Data, and eval/Binding.
+
+The manifests are allowlists of suites that currently pass, not claims that
+every mruby test passes. The roadmap records each intentional exclusion and
+the reason.
 
 ## Host API
 

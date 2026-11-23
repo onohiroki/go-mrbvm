@@ -25,7 +25,7 @@ func main() {
 	}
 	flag.Parse()
 	if *version {
-		fmt.Println("gomirb 0.0.0 (go-mrbvm, mruby 4.0.0)")
+		fmt.Printf("gomirb %s (go-mrbvm, %s)\n", mrbvm.Version, mrbvm.Target)
 		return
 	}
 
