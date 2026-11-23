@@ -507,6 +507,8 @@ func (s *State) classOf(v Value) *Class {
 			return s.ClassClass
 		case *blockData:
 			return s.ProcClass
+		case *setData:
+			return s.SetClass
 		case *enumeratorData:
 			return s.EnumeratorClass
 		case *timeData:

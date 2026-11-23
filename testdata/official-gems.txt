@@ -17,3 +17,4 @@ mruby-complex/test/complex.rb
 mruby-regexp/test/regexp.rb
 mruby-fiber/test/fiber.rb
 mruby-fiber/test/fiber2.rb
+mruby-set/test/set.rb

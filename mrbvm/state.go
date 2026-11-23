@@ -74,6 +74,7 @@ type State struct {
 	RationalClass          *Class
 	ComplexClass           *Class
 	MathClass              *Class
+	SetClass               *Class
 	MethodClass            *Class
 	UnboundMethodClass     *Class
 	EnumerableClass        *Class
@@ -246,6 +247,7 @@ func New(opts Options) *State {
 	s.RationalClass = newClass("Rational", s.NumericClass)
 	s.ComplexClass = newClass("Complex", s.NumericClass)
 	s.MathClass = newClass("Math", nil)
+	s.SetClass = newClass("Set", s.ObjectClass)
 	s.MathClass.isModule = true
 	s.ensureClassObject(s.MathClass)
 	s.ProcClass = newClass("Proc", s.ObjectClass)
@@ -918,7 +920,7 @@ func New(opts Options) *State {
 		"Integer": s.IntegerClass,
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
-		"Rational": s.RationalClass, "Complex": s.ComplexClass, "Math": s.MathClass, "Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
+		"Rational": s.RationalClass, "Complex": s.ComplexClass, "Math": s.MathClass, "Set": s.SetClass, "Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
 		"Enumerator": s.EnumeratorClass,
 		"Comparable": s.ComparableClass,
 		"GC":         s.GCClass,
@@ -1184,6 +1186,7 @@ func New(opts Options) *State {
 	s.installRationalLibrary()
 	s.installComplexLibrary()
 	s.installMathLibrary()
+	s.installSetLibrary()
 	s.installModuleExtensionLibrary()
 	s.markBuiltinOperatorMethods()
 	s.bopRedefined = false
@@ -3810,6 +3813,10 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 	case *blockData:
 		copyData := *data
 		duplicate = ObjectValue(&Object{data: &copyData})
+	case *setData:
+		copyData := newSetData()
+		copyData.entries.entries = append([]hashEntry(nil), data.entries.entries...)
+		duplicate = ObjectValue(&Object{class: self.obj.class, data: copyData})
 	default:
 		duplicate = ObjectValue(&Object{class: self.obj.class})
 	}
