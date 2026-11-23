@@ -59,6 +59,7 @@ type State struct {
 	HashClass              *Class
 	RangeClass             *Class
 	ProcClass              *Class
+	RationalClass          *Class
 	MethodClass            *Class
 	UnboundMethodClass     *Class
 	EnumerableClass        *Class
@@ -218,6 +219,7 @@ func New(opts Options) *State {
 	s.ArrayClass = newClass("Array", s.ObjectClass)
 	s.HashClass = newClass("Hash", s.ObjectClass)
 	s.RangeClass = newClass("Range", s.ObjectClass)
+	s.RationalClass = newClass("Rational", s.NumericClass)
 	s.ProcClass = newClass("Proc", s.ObjectClass)
 	s.MethodClass = newClass("Method", s.ObjectClass)
 	s.UnboundMethodClass = newClass("UnboundMethod", s.ObjectClass)
@@ -876,7 +878,7 @@ func New(opts Options) *State {
 		"Integer": s.IntegerClass,
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
-		"Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
+		"Rational": s.RationalClass, "Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
 		"Enumerator":    s.EnumeratorClass,
 		"Comparable":    s.ComparableClass,
 		"GC":            s.GCClass,
@@ -1136,6 +1138,7 @@ func New(opts Options) *State {
 	s.installBacktraceLibrary()
 	s.installKernelModuleFunctions()
 	s.installMethodClasses()
+	s.installRationalLibrary()
 	s.installModuleExtensionLibrary()
 	s.markBuiltinOperatorMethods()
 	s.bopRedefined = false

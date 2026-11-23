@@ -2536,6 +2536,9 @@ func (s *State) coerceNumericArgument(ctx context.Context, value Value) (Value, 
 	if value.Kind() == KindInt || value.Kind() == KindFloat || value.Kind() == KindBigInt {
 		return value, true, nil
 	}
+	if isRationalObject(value) {
+		return value, true, nil
+	}
 	class := s.classOf(value)
 	if class == nil || !s.classIsSubclass(class, s.NumericClass) {
 		return Nil, false, nil
@@ -2655,7 +2658,7 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 		switch name {
 		case "+", "-", "*", "/", "%", "**", "<<", ">>", "&", "|", "^":
 			other := args[0]
-			if other.Kind() != KindInt && other.Kind() != KindFloat && other.Kind() != KindBigInt {
+			if other.Kind() != KindInt && other.Kind() != KindFloat && other.Kind() != KindBigInt && !isRationalObject(other) {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
 					"no implicit conversion of "+s.classOf(other).name+" into Integer")}
 			}
@@ -3115,6 +3118,29 @@ func compareNative(left, right Value) (int, bool) {
 // carries fewer significant bits than an int64, so converting both to float64
 // would report an integer equal to a Float that stands for a different number.
 func numericCompare(left, right Value) (int, bool) {
+	if isRationalObject(left) || isRationalObject(right) {
+		leftRat, leftOK := numericRat(left)
+		rightRat, rightOK := numericRat(right)
+		if !leftOK || !rightOK {
+			return 0, false
+		}
+		if left.Kind() == KindFloat || right.Kind() == KindFloat {
+			lf, _ := leftRat.Float64()
+			rf, _ := rightRat.Float64()
+			if math.IsNaN(lf) || math.IsNaN(rf) {
+				return 0, false
+			}
+			switch {
+			case lf < rf:
+				return -1, true
+			case lf > rf:
+				return 1, true
+			default:
+				return 0, true
+			}
+		}
+		return leftRat.Cmp(rightRat), true
+	}
 	switch left.Kind() {
 	case KindFloat:
 		switch right.Kind() {

@@ -37,12 +37,25 @@ func (s *State) installGCLibrary() {
 			{key: SymbolValue("total_alloc"), value: IntValue(int64(stats.TotalAlloc))},
 			{key: SymbolValue("mallocs"), value: IntValue(int64(stats.Mallocs))},
 			{key: SymbolValue("frees"), value: IntValue(int64(stats.Frees))},
+			{key: SymbolValue("debt"), value: IntValue(0)},
+			{key: SymbolValue("live"), value: IntValue(0)},
 		}
 		return HashValue(entries), nil
 	}}
 	class.classMethods["interval_ratio"] = &method{owner: class, name: "interval_ratio", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) > 0 {
+			return args[0], nil
+		}
 		return IntValue(0), nil
 	}}
+	class.classMethods["generational_mode"] = &method{owner: class, name: "generational_mode", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) > 0 {
+			return args[0], nil
+		}
+		return False, nil
+	}}
+	class.classMethods["generational_mode="] = class.classMethods["generational_mode"]
+	class.classMethods["interval_ratio="] = class.classMethods["interval_ratio"]
 	class.classMethods["step_ratio"] = &method{owner: class, name: "step_ratio", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return IntValue(0), nil
 	}}

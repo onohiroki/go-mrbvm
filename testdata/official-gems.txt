@@ -12,3 +12,4 @@ mruby-class-ext/test/module.rb
 mruby-kernel-ext/test/kernel.rb
 mruby-metaprog/test/metaprog.rb
 mruby-method/test/method.rb
+mruby-rational/test/rational.rb

@@ -89,6 +89,9 @@ func (s *State) numericBinaryOperator(self Value, name string, args []Value) (Va
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
 	}
 	right := args[0]
+	if value, handled, err := s.rationalBinaryOperator(self, name, right); handled {
+		return value, err
+	}
 	switch name {
 	case "/":
 		if isIntegerValue(self) && isIntegerValue(right) && isNumericZero(right) {
