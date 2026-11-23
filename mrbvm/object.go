@@ -12,6 +12,9 @@ type stringData struct {
 	// rather than touching raw directly.
 	raw    string
 	buffer []byte
+	// binary marks a string whose characters are bytes (String#b and
+	// friends). The default UTF-8 reading decodes characters instead.
+	binary bool
 }
 
 type arrayData struct {

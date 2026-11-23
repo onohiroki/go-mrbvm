@@ -110,6 +110,34 @@ func StringValue(v string) Value {
 	return newStringObject(KindString, v)
 }
 
+// BinaryStringValue returns a string whose characters are its bytes.
+func BinaryStringValue(v string) Value {
+	value := StringValue(v)
+	if data, ok := value.obj.data.(*stringData); ok {
+		data.binary = true
+	}
+	return value
+}
+
+// stringBinaryOf reports whether a value is read as bytes rather than UTF-8.
+func stringBinaryOf(value Value) bool {
+	if value.obj == nil {
+		return false
+	}
+	if data, ok := value.obj.data.(*stringData); ok {
+		return data.binary
+	}
+	return false
+}
+
+// stringValueLike returns a string with the same reading as the receiver.
+func stringValueLike(receiver Value, text string) Value {
+	if stringBinaryOf(receiver) {
+		return BinaryStringValue(text)
+	}
+	return StringValue(text)
+}
+
 // ObjectValue returns an object value.
 func ObjectValue(v *Object) Value {
 	return Value{kind: KindObject, obj: v}
