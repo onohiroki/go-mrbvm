@@ -88,7 +88,7 @@ func runManifest(t *testing.T, manifestPath, root, assertSource string) {
 }
 
 func compileEvalSource(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
-	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset})
+	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset, Eval: opts.Eval, EvalInMethod: opts.EvalInMethod})
 }
 
 func testPrelude(assertSource string) string {
@@ -107,6 +107,9 @@ func testPrelude(assertSource string) string {
 	program.WriteString("module AryShared\n")
 	program.WriteString("  def self.heap_empty?(ary); ary.empty?; end\n")
 	program.WriteString("  def self.copy_ptr_null?(ary); false; end\n")
+	program.WriteString("end\n")
+	program.WriteString("module ConstCacheTest\n")
+	program.WriteString("  def self.dangles_after_irep_free?(name); nil; end\n")
 	program.WriteString("end\n")
 	program.WriteString("module Mrbtest\n")
 	program.WriteString("  FLOAT_TOLERANCE = 1e-10\n")

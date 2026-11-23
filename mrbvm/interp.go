@@ -36,6 +36,17 @@ type callFrame struct {
 	self        Value
 	targetClass *Class
 	owner       *Class
+	args        []Value
+	kw          Value
+	// evalForward carries the caller's arguments, keywords and block for a
+	// forwarding super in evaluated source.
+	evalForward *evalForward
+}
+
+type evalForward struct {
+	args  []Value
+	kw    Value
+	block Value
 }
 
 type exceptionScope struct {
@@ -172,7 +183,18 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	lineAt := program.lineAt
 	jumpAt := program.jumpAt
 	binaryOps := program.binaryOps
-	frame := callFrame{file: irep.Filename, method: mid, env: frameEnv, cref: cref, superStart: superStart, superBase: superBase, self: self, targetClass: targetClass, owner: owner}
+	evalForward := s.pendingEvalForward
+	s.pendingEvalForward = nil
+	// The prologue consumes the keyword hash with OPKARG, so a forwarding
+	// super or an eval needs the entries as they arrived.
+	kwSnapshot := kw
+	if data, ok := hashDataOf(kw); ok {
+		kwSnapshot = HashValue(append([]hashEntry(nil), data.entries...))
+	}
+	if evalForward != nil {
+		frameEnv.evalForward = evalForward
+	}
+	frame := callFrame{file: irep.Filename, method: mid, env: frameEnv, cref: cref, superStart: superStart, superBase: superBase, self: self, targetClass: targetClass, owner: owner, args: args, kw: kwSnapshot, evalForward: evalForward}
 	var evalFrame *evalScope
 	for i := len(s.evalScopes) - 1; i >= 0; i-- {
 		scope := s.evalScopes[i]
@@ -670,6 +692,16 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				targetClass.moduleFunction = false
 			}
 			targetClass.defineIrep(name, irep.Reps[childIndex])
+			if targetClass == s.ObjectClass && s.TopSelf.obj != nil && self.obj == s.TopSelf.obj {
+				if !targetClass.privateMethods[name] {
+					targetClass.privateMethods[name] = true
+					s.privateMethodCount++
+				}
+				delete(targetClass.protectedMethods, name)
+			}
+			if targetClass.bodyMethods != nil {
+				targetClass.bodyMethods[name] = true
+			}
 			if err := s.notifyMethodDefinition(ctx, targetClass, name); err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
@@ -1086,8 +1118,24 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				return Nil, fmt.Errorf("mrbvm: EXEC target is not a class")
 			}
 			savedVisibility := class.defaultVisibility
+			savedEscaped := class.visibilityEscaped
+			class.visibilityEscaped = false
+			savedBodyMethods := class.bodyMethods
+			class.bodyMethods = make(map[string]bool)
 			result, err := s.executeFrame(ctx, irep.Reps[childIndex], regs[a], class, nil, Nil, Nil, nil, "", class, class, false)
-			class.defaultVisibility = savedVisibility
+			finalVisibility := class.defaultVisibility
+			for name := range class.bodyMethods {
+				if m, ok := class.methods[name]; ok {
+					m.bodyVisibility = finalVisibility
+					m.hasBodyVisibility = true
+				}
+			}
+			escaped := class.visibilityEscaped
+			class.bodyMethods = savedBodyMethods
+			class.visibilityEscaped = savedEscaped
+			if !escaped {
+				class.defaultVisibility = savedVisibility
+			}
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
 				if fatal != nil {
@@ -1468,7 +1516,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 		case bytecode.OpSUPER:
 			a := int(in.Operands[0])
 			if definedCallAfter(instructions, pc, a, irep.Syms) {
-				s.definedKind, s.definedSet, s.definedNil = "", true, true
+				found := s.superMethodExists(self, owner, mid, superStart, superBase)
+				if found {
+					s.definedKind = "super"
+					s.definedNil = false
+				} else {
+					s.definedKind = ""
+					s.definedNil = true
+				}
+				s.definedSet = true
 				regs[a] = Nil
 				continue
 			}
@@ -1560,9 +1616,27 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 				pc = np - 1
 				continue
 			}
-			args, kw, block, err := s.sendArguments(ctx, irep, regs, a, argInfo, true)
-			if err != nil {
-				return Nil, err
+			var args []Value
+			var kw Value
+			var block Value
+			if argInfo&evalSuperForwardArgInfo != 0 {
+				evalForward := frame.evalForward
+				for env := frame.env; evalForward == nil && env != nil; env = env.parent {
+					evalForward = env.evalForward
+				}
+				if evalForward != nil {
+					args = append([]Value(nil), evalForward.args...)
+					kw = refreshForwardKeywords(evalForward.kw, frame.env)
+					block = evalForward.block
+				} else {
+					kw = Nil
+				}
+			} else {
+				var err error
+				args, kw, block, err = s.sendArguments(ctx, irep, regs, a, argInfo, true)
+				if err != nil {
+					return Nil, err
+				}
 			}
 			if line := lineAt[pc]; line != 0 {
 				s.frames[len(s.frames)-1].line = int(line)
@@ -2319,6 +2393,77 @@ func resolveUpvar(frameEnv *environment, level int, adjust bool) *environment {
 	return env
 }
 
+const evalSuperForwardArgInfo = uint32(0x100)
+
+// refreshForwardKeywords reads the evaluated string's locals back into the
+// keywords a forwarding super passes on. A keyword parameter changed by the
+// string is the value the caller's own zsuper would forward.
+func refreshForwardKeywords(kw Value, env *environment) Value {
+	data, ok := hashDataOf(kw)
+	if !ok {
+		return kw
+	}
+	entries := append([]hashEntry(nil), data.entries...)
+	for i, entry := range entries {
+		if entry.key.Kind() != KindSymbol {
+			continue
+		}
+		if value, ok := environmentLocal(env, entry.key.String()); ok {
+			entries[i].value = value
+		}
+	}
+	return HashValue(entries)
+}
+
+func environmentLocal(env *environment, name string) (Value, bool) {
+	for current := env; current != nil; current = current.parent {
+		for slot, localName := range current.names {
+			if localName == name && slot < len(current.regs) {
+				return current.regs[slot], true
+			}
+		}
+	}
+	return Nil, false
+}
+
+// superMethodExists answers defined?(super) without invoking anything.
+func (s *State) superMethodExists(self Value, owner *Class, mid string, superStart int, superBase *Class) bool {
+	if owner == nil {
+		return false
+	}
+	if _, isClassMethod := owner.classMethods[mid]; isClassMethod {
+		if owner.super != nil {
+			if _, ok := owner.super.lookupClassMethod(mid); ok {
+				return true
+			}
+		}
+		_, ok := s.classOf(self).lookupClassMethod(mid)
+		return ok
+	}
+	chainClass := s.classOf(self)
+	if superBase != nil {
+		chainClass = superBase
+	}
+	chain := classAncestors(chainClass)
+	start := 0
+	if superStart >= 0 {
+		start = superStart + 1
+	} else {
+		for i, ancestor := range chain {
+			if ancestor == owner {
+				start = i + 1
+				break
+			}
+		}
+	}
+	for i := start; i < len(chain); i++ {
+		if _, ok := chain[i].methods[mid]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func nearestMethodEnv(env *environment) *environment {
 	for current := env; current != nil; current = current.parent {
 		if current.methodFrame {
@@ -2454,6 +2599,7 @@ func (s *State) acquireEnvironment() *environment {
 	if n := len(s.envFree); n > 0 {
 		env := s.envFree[n-1]
 		s.envFree = s.envFree[:n-1]
+		env.evalForward = nil
 		return env
 	}
 	return &environment{}
@@ -2467,6 +2613,7 @@ func (s *State) releaseEnvironment(env *environment) {
 	env.regs = nil
 	env.block = Nil
 	env.methodFrame = false
+	env.evalForward = nil
 	s.envFree = append(s.envFree, env)
 }
 

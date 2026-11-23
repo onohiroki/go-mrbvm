@@ -11,9 +11,11 @@ import (
 
 func compileEvalForTest(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
 	return mrbc.Compile(ctx, source, mrbc.Options{
-		FilePath:   opts.FilePath,
-		LocalNames: opts.LocalNames,
-		LineOffset: opts.LineOffset,
+		FilePath:     opts.FilePath,
+		LocalNames:   opts.LocalNames,
+		LineOffset:   opts.LineOffset,
+		Eval:         opts.Eval,
+		EvalInMethod: opts.EvalInMethod,
 	})
 }
 

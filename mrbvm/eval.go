@@ -25,6 +25,10 @@ type bindingData struct {
 	file        string
 	line        int
 	visibility  string
+	args        []Value
+	kw          Value
+	block       Value
+	inMethod    bool
 }
 
 func (s *State) installEvalLibrary() {
@@ -94,16 +98,49 @@ type evalContext struct {
 	method      string
 	visibility  string
 	isolate     bool
+	args        []Value
+	kw          Value
+	block       Value
+	inMethod    bool
+}
+
+// evalForwardFor answers what a forwarding super or a yield in evaluated
+// source borrows from the frame its env belongs to: the method's arguments,
+// keywords, and block.
+func (s *State) evalForwardFor(env *environment) ([]Value, Value, Value, bool) {
+	methodEnv := nearestMethodEnv(env)
+	if methodEnv == nil {
+		if env != nil {
+			return nil, Nil, env.block, false
+		}
+		return nil, Nil, Nil, false
+	}
+	for i := len(s.frames) - 1; i >= 0; i-- {
+		frame := &s.frames[i]
+		if frame.env == methodEnv {
+			return frame.args, frame.kw, methodEnv.block, true
+		}
+	}
+	return nil, Nil, methodEnv.block, true
 }
 
 func (s *State) currentEvalContext() evalContext {
-	context := evalContext{self: s.TopSelf, targetClass: s.ObjectClass, cref: s.ObjectClass, owner: s.ObjectClass, env: s.topLevelEnv}
+	context := evalContext{self: s.TopSelf, targetClass: s.ObjectClass, cref: s.ObjectClass, owner: s.ObjectClass, env: s.topLevelEnv, block: Nil}
 	if len(s.frames) == 0 {
 		return context
 	}
 	frame := &s.frames[len(s.frames)-1]
 	context.env = frame.env
 	context.method = frame.method
+	context.args, context.kw, context.block, context.inMethod = s.evalForwardFor(frame.env)
+	if frame.method != "" && frame.owner != nil {
+		if m, ok := frame.owner.lookup(frame.method); ok && m.hasBodyVisibility {
+			context.visibility = m.bodyVisibility
+			if context.visibility == "" {
+				context.visibility = "public"
+			}
+		}
+	}
 	context.cref = frame.cref
 	context.owner = frame.owner
 	context.targetClass = frame.targetClass
@@ -126,6 +163,9 @@ func (s *State) evalString(ctx context.Context, source, filename string, line in
 	}
 	if filename == "" {
 		filename = "(eval)"
+	}
+	if len(filename) > 0xfffe {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "filename too long")}
 	}
 	if line < 1 {
 		line = 1
@@ -164,11 +204,23 @@ func (s *State) evalString(ctx context.Context, source, filename string, line in
 			defer func(saved string) { scope.targetClass.defaultVisibility = saved }(savedVisibility)
 		}
 	}
-	irep, err := s.compiler(ctx, []byte(source), CompileOptions{
-		FilePath:   filename,
-		LocalNames: names,
-		LineOffset: lineOffset,
-	})
+	compile := func(text string) (*Irep, error) {
+		return s.compiler(ctx, []byte(text), CompileOptions{
+			FilePath:     filename,
+			LocalNames:   names,
+			LineOffset:   lineOffset,
+			Eval:         true,
+			EvalInMethod: scope.inMethod,
+		})
+	}
+	irep, err := compile(source)
+	if err != nil && strings.Contains(err.Error(), "reserved for numbered parameters") {
+		rewritten := source
+		for i := 1; i <= 9; i++ {
+			rewritten = strings.ReplaceAll(rewritten, "_"+fmt.Sprint(i), "self._"+fmt.Sprint(i))
+		}
+		irep, err = compile(rewritten)
+	}
 	if err != nil {
 		message := err.Error()
 		if strings.Contains(message, "PostExecutionNode") {
@@ -188,7 +240,16 @@ func (s *State) evalString(ctx context.Context, source, filename string, line in
 	}
 	eval := &evalScope{irep: irep, initial: values}
 	s.evalScopes = append(s.evalScopes, eval)
-	result, runErr := s.executeFrame(ctx, irep, scope.self, scope.targetClass, nil, Nil, Nil, scope.env, scope.method, scope.owner, scope.cref, false)
+	block := scope.block
+	if block.obj == nil {
+		block = Nil
+	}
+	s.pendingEvalForward = &evalForward{args: append([]Value(nil), scope.args...), kw: scope.kw, block: block}
+	result, runErr := s.executeFrame(ctx, irep, scope.self, scope.targetClass, nil, Nil, block, scope.env, scope.method, scope.owner, scope.cref, false)
+	s.pendingEvalForward = nil
+	if !scope.isolate && scope.targetClass != nil && scope.targetClass.defaultVisibility != targetVisibility {
+		scope.targetClass.visibilityEscaped = true
+	}
 	s.evalScopes = s.evalScopes[:len(s.evalScopes)-1]
 	if eval.captured != nil {
 		writeEvalLocals(scope.env, eval.captured)
@@ -216,6 +277,14 @@ func evalVisibleLocals(env *environment) ([]string, map[string]Value) {
 				values[name] = Nil
 			}
 		}
+		for name, value := range current.extras {
+			if name == "" || seen[name] || strings.HasPrefix(name, "__gomrbc_") {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+			values[name] = value
+		}
 	}
 	return names, values
 }
@@ -227,6 +296,9 @@ func findEvalLocal(env *environment, name string) (*environment, int, bool) {
 				return current, slot, true
 			}
 		}
+		if _, ok := current.extras[name]; ok {
+			return current, -1, true
+		}
 	}
 	return nil, 0, false
 }
@@ -237,7 +309,9 @@ func writeEvalLocals(env *environment, captured map[string]Value) {
 			continue
 		}
 		if owner, slot, ok := findEvalLocal(env, name); ok {
-			if slot < len(owner.regs) {
+			if slot < 0 {
+				owner.extras[name] = value
+			} else if slot < len(owner.regs) {
 				owner.regs[slot] = value
 			}
 			continue
@@ -245,13 +319,10 @@ func writeEvalLocals(env *environment, captured map[string]Value) {
 		if env == nil {
 			continue
 		}
-		slot := len(env.names)
-		env.names = append(env.names, name)
-		if slot < len(env.regs) {
-			env.regs[slot] = value
-		} else {
-			env.regs = append(env.regs, value)
+		if env.extras == nil {
+			env.extras = make(map[string]Value)
 		}
+		env.extras[name] = value
 	}
 }
 
@@ -265,11 +336,13 @@ func (s *State) kernelEvalMethod(ctx context.Context, self Value, args []Value, 
 	filename := "(eval)"
 	line := 1
 	scope := s.currentEvalContext()
+	hasBinding := false
 	if len(args) > 1 && !args[1].IsNil() {
 		binding, ok := bindingOf(args[1])
 		if !ok {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type "+s.classOf(args[1]).name+" (expected Binding)")}
 		}
+		hasBinding = true
 		scope = evalContext{
 			self:        binding.self,
 			targetClass: binding.targetClass,
@@ -277,6 +350,11 @@ func (s *State) kernelEvalMethod(ctx context.Context, self Value, args []Value, 
 			owner:       binding.owner,
 			env:         binding.env,
 			method:      binding.method,
+			visibility:  binding.visibility,
+			args:        binding.args,
+			kw:          binding.kw,
+			block:       binding.block,
+			inMethod:    binding.inMethod,
 		}
 	}
 	if len(args) > 2 && !args[2].IsNil() {
@@ -291,7 +369,9 @@ func (s *State) kernelEvalMethod(ctx context.Context, self Value, args []Value, 
 		}
 		line = int(args[3].Int())
 	}
-	scope.isolate = true
+	if !hasBinding {
+		scope.isolate = true
+	}
 	return s.evalString(ctx, args[0].String(), filename, line, scope)
 }
 
@@ -498,8 +578,8 @@ func (s *State) kernelBindingMethod(ctx context.Context, self Value, args []Valu
 	for env := scope.env; env != nil; env = env.parent {
 		env.pinned = true
 	}
-	visibility := ""
-	if scope.targetClass != nil {
+	visibility := scope.visibility
+	if visibility == "" && scope.targetClass != nil {
 		visibility = scope.targetClass.defaultVisibility
 	}
 	data := &bindingData{
@@ -512,6 +592,10 @@ func (s *State) kernelBindingMethod(ctx context.Context, self Value, args []Valu
 		file:        file,
 		line:        line,
 		visibility:  visibility,
+		args:        scope.args,
+		kw:          scope.kw,
+		block:       scope.block,
+		inMethod:    scope.inMethod,
 	}
 	return ObjectValue(&Object{class: s.BindingClass, data: data}), nil
 }
@@ -582,7 +666,7 @@ func (s *State) bindingEvalMethod(ctx context.Context, self Value, args []Value,
 		}
 		line = int(args[2].Int())
 	}
-	scope := evalContext{self: data.self, targetClass: data.targetClass, cref: data.cref, owner: data.owner, env: data.env, method: data.method, visibility: data.visibility}
+	scope := evalContext{self: data.self, targetClass: data.targetClass, cref: data.cref, owner: data.owner, env: data.env, method: data.method, visibility: data.visibility, args: data.args, kw: data.kw, block: data.block, inMethod: data.inMethod}
 	return s.evalString(ctx, args[0].String(), filename, line, scope)
 }
 
@@ -622,6 +706,13 @@ func (s *State) bindingLocalVariablesMethod(ctx context.Context, self Value, arg
 			seen[name] = true
 			values = append(values, SymbolValue(name))
 		}
+		for name := range env.extras {
+			if name == "" || seen[name] || strings.HasPrefix(name, "__gomrbc_") {
+				continue
+			}
+			seen[name] = true
+			values = append(values, SymbolValue(name))
+		}
 	}
 	return ArrayValue(values), nil
 }
@@ -638,6 +729,9 @@ func (s *State) bindingLocalVariableGetMethod(ctx context.Context, self Value, a
 	env, slot, found := findEvalLocal(data.env, name)
 	if !found {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NameErrorClass, "local variable "+name+" not defined")}
+	}
+	if slot < 0 {
+		return env.extras[name], nil
 	}
 	if slot >= len(env.regs) {
 		return Nil, nil

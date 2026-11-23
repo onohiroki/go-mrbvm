@@ -18,9 +18,11 @@ import (
 // Options controls VM construction.
 // CompileOptions controls evaluator compilation.
 type CompileOptions struct {
-	FilePath   string
-	LocalNames []string
-	LineOffset int
+	FilePath     string
+	LocalNames   []string
+	LineOffset   int
+	Eval         bool
+	EvalInMethod bool
 }
 
 // CompileFunc compiles Ruby source for eval/load. The VM core does not link a
@@ -93,6 +95,7 @@ type State struct {
 	regexpQuotedLiteral    string
 	regexpQuotedRegexp     Value
 	topLevelEnv            *environment
+	pendingEvalForward     *evalForward
 	BacktraceLocationClass *Class
 	FiberClass             *Class
 	BindingClass           *Class

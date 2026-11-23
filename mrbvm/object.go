@@ -94,6 +94,8 @@ type Class struct {
 	isModule              bool
 	moduleFunction        bool
 	defaultVisibility     string
+	visibilityEscaped     bool
+	bodyMethods           map[string]bool
 	privateClassMethods   map[string]bool
 	protectedClassMethods map[string]bool
 	undefMethods          map[string]bool
@@ -125,6 +127,11 @@ type method struct {
 	native         NativeFunc
 	irep           *Irep
 	builtin        bool
+	// bodyVisibility is the visibility a class body had when it closed, for
+	// a method defined in that body. Evaluated source inside the method
+	// starts there.
+	bodyVisibility    string
+	hasBodyVisibility bool
 }
 
 // NativeFunc is a Go function exposed as a Ruby method.
@@ -142,6 +149,14 @@ type environment struct {
 	// recycle it when its frame returns.
 	pinned bool
 	names  []string
+	// evalForward is set on the frame environment of evaluated source so
+	// that a block made by the string can still forward the caller's
+	// arguments through a super.
+	evalForward *evalForward
+	// extras holds locals an eval added to a frame whose register file is
+	// already full of temporaries. Writing them into regs would clobber a
+	// temporary the caller is using.
+	extras map[string]Value
 }
 
 type blockData struct {

@@ -48,5 +48,5 @@ func load(ctx context.Context, path string) ([]byte, error) {
 }
 
 func compileEvalSource(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
-	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset})
+	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset, Eval: opts.Eval, EvalInMethod: opts.EvalInMethod})
 }

@@ -102,7 +102,7 @@ func compileSource(ctx context.Context, source, fileName string) ([]byte, error)
 }
 
 func compileEvalSource(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
-	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset})
+	return mrbc.Compile(ctx, source, mrbc.Options{FilePath: opts.FilePath, LocalNames: opts.LocalNames, LineOffset: opts.LineOffset, Eval: opts.Eval, EvalInMethod: opts.EvalInMethod})
 }
 
 func runFile(ctx context.Context, path, assertSource string, verbose, stress bool) error {
@@ -129,6 +129,9 @@ func runFile(ctx context.Context, path, assertSource string, verbose, stress boo
 	prelude.WriteString("end\n")
 	// The official runner links the mruby-test C gem, which provides these
 	// test-support constants. Per-file runs need the same names to exist.
+	prelude.WriteString("module ConstCacheTest\n")
+	prelude.WriteString("  def self.dangles_after_irep_free?(name); nil; end\n")
+	prelude.WriteString("end\n")
 	prelude.WriteString("module Mrbtest\n")
 	prelude.WriteString("  FLOAT_TOLERANCE = 1e-10\n")
 	prelude.WriteString("  def self.nofree_cstr?; true; end\n")
