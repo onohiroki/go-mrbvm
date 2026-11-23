@@ -203,11 +203,45 @@ type signalData struct {
 }
 
 type enumeratorData struct {
-	collect func(ctx context.Context, yield func([]Value) (Value, error)) error
-	items   [][]Value
-	loaded  bool
-	index   int
-	result  Value
+	receiver  Value
+	method    string
+	args      []Value
+	generator Value
+	produce   func(ctx context.Context, yield func([]Value) (Value, error)) (Value, error)
+	collect   func(ctx context.Context, yield func([]Value) (Value, error)) (Value, error)
+	lazy      *enumeratorLazy
+	result    Value
+}
+
+type enumeratorLazy struct {
+	resume     chan enumeratorResume
+	out        chan enumeratorOut
+	started    bool
+	done       bool
+	pending    []Value
+	hasPending bool
+	feedSet    bool
+	feed       Value
+}
+
+type enumeratorResume struct {
+	values []Value
+	cancel bool
+}
+
+type enumeratorOut struct {
+	values []Value
+	done   bool
+	err    error
+}
+
+type yielderData struct {
+	block Value
+	fn    func(ctx context.Context, args []Value) (Value, error)
+}
+
+type generatorData struct {
+	block Value
 }
 
 // nativeBlockData lets Go code act as a Ruby block. Enumerable uses it to

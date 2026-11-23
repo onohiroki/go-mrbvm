@@ -1445,6 +1445,9 @@ func (s *State) hashTransformKeysMethod(ctx context.Context, self Value, args []
 }
 
 func (s *State) hashSelectBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "select!", nil), nil
+	}
 	selected, err := s.hashSelectMethod(ctx, self, args, kw, block)
 	if err != nil {
 		return Nil, err
@@ -1468,6 +1471,9 @@ func (s *State) hashSelectBangMethod(ctx context.Context, self Value, args []Val
 }
 
 func (s *State) hashRejectBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "reject!", nil), nil
+	}
 	rejected, err := s.hashRejectMethod(ctx, self, args, kw, block)
 	if err != nil {
 		return Nil, err

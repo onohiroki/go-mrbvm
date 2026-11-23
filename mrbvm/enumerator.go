@@ -2,50 +2,61 @@ package mrbvm
 
 import "context"
 
-// installEnumeratorLibrary provides the minimal Enumerator used by blockless
-// collection methods. Enumeration is eager: next/peek materialize the source
-// on first use, then serve items from the cached list.
+// installEnumeratorLibrary provides Enumerator and its external iteration
+// protocol. External iteration runs the source in a goroutine that suspends at
+// each yield, so next/peek work for any Ruby method, not just materialised
+// collections.
 func (s *State) installEnumeratorLibrary() {
 	class := s.EnumeratorClass
 	class.define("each", s.enumeratorEachMethod)
 	class.define("next", s.enumeratorNextMethod)
+	class.define("next_values", s.enumeratorNextValuesMethod)
 	class.define("peek", s.enumeratorPeekMethod)
+	class.define("peek_values", s.enumeratorPeekValuesMethod)
+	class.define("feed", s.enumeratorFeedMethod)
 	class.define("rewind", s.enumeratorRewindMethod)
 	class.define("size", s.enumeratorSizeMethod)
 	class.define("with_index", s.enumeratorWithIndexMethod)
 	class.define("each_with_index", s.enumeratorWithIndexMethod)
-	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return StringValue("#<Enumerator>"), nil
-	})
-	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return StringValue("#<Enumerator>"), nil
-	})
+	class.define("with_object", s.enumeratorWithObjectMethod)
+	class.define("inspect", s.enumeratorInspectMethod)
+	class.define("to_s", s.enumeratorInspectMethod)
+	class.define("dup", s.enumeratorDupMethod)
+	class.define("initialize_copy", s.enumeratorDupMethod)
+
+	class.classMethods["new"] = &method{owner: class, name: "new", native: s.enumeratorNewMethod}
+	class.classMethods["produce"] = &method{owner: class, name: "produce", native: s.enumeratorProduceMethod}
+
+	yielder := newClass("Enumerator::Yielder", s.ObjectClass)
+	s.ensureClassObject(yielder)
+	s.EnumeratorClass.constants["Yielder"] = s.classValue(yielder)
+	yielder.classMethods["new"] = &method{owner: yielder, name: "new", native: s.yielderNewMethod}
+	yielder.define("yield", s.yielderYieldMethod)
+	yielder.define("<<", s.yielderPushMethod)
+	yielder.define("call", s.yielderYieldMethod)
+
+	generator := newClass("Enumerator::Generator", s.ObjectClass)
+	s.ensureClassObject(generator)
+	s.EnumeratorClass.constants["Generator"] = s.classValue(generator)
+	generator.classMethods["new"] = &method{owner: generator, name: "new", native: s.generatorNewMethod}
+	generator.define("each", s.generatorEachMethod)
+	generator.define("dup", s.generatorDupMethod)
+	generator.define("initialize_copy", s.generatorDupMethod)
 
 	s.ObjectClass.define("to_enum", s.objectToEnumMethod)
 	s.ObjectClass.define("enum_for", s.objectToEnumMethod)
 }
 
-func (s *State) newEnumerator(collect func(ctx context.Context, yield func([]Value) (Value, error)) error) Value {
+func (s *State) newEnumerator(collect func(ctx context.Context, yield func([]Value) (Value, error)) (Value, error)) Value {
 	return ObjectValue(&Object{class: s.EnumeratorClass, data: &enumeratorData{collect: collect}})
 }
 
 func (s *State) toEnum(receiver Value, method string, args []Value) Value {
-	// The enumerator outlives the call, so detach from the caller's argument
-	// buffer (which may be pooled).
-	argsCopy := append([]Value(nil), args...)
-	var data *enumeratorData
-	enumerator := s.newEnumerator(func(ctx context.Context, yield func([]Value) (Value, error)) error {
-		block := nativeBlockValue(s.ProcClass, func(ctx context.Context, raw []Value) (Value, error) {
-			return yield(raw)
-		})
-		result, err := s.call(ctx, receiver, method, argsCopy, Nil, block)
-		if data != nil {
-			data.result = result
-		}
-		return err
-	})
-	data, _ = enumeratorOf(enumerator)
-	return enumerator
+	return ObjectValue(&Object{class: s.EnumeratorClass, data: &enumeratorData{
+		receiver: receiver,
+		method:   method,
+		args:     append([]Value(nil), args...),
+	}})
 }
 
 func enumeratorOf(value Value) (*enumeratorData, bool) {
@@ -56,28 +67,136 @@ func enumeratorOf(value Value) (*enumeratorData, bool) {
 	return nil, false
 }
 
-func (s *State) enumeratorItems(ctx context.Context, data *enumeratorData) error {
-	if data.loaded {
-		return nil
+func yielderOf(value Value) (*yielderData, bool) {
+	if value.Kind() == KindObject && value.obj != nil {
+		data, ok := value.obj.data.(*yielderData)
+		return data, ok
 	}
-	data.items = nil
-	if err := data.collect(ctx, func(raw []Value) (Value, error) {
-		copied := make([]Value, len(raw))
-		copy(copied, raw)
-		data.items = append(data.items, copied)
-		return Nil, nil
-	}); err != nil {
-		return err
+	return nil, false
+}
+
+func generatorOf(value Value) (*generatorData, bool) {
+	if value.Kind() == KindObject && value.obj != nil {
+		data, ok := value.obj.data.(*generatorData)
+		return data, ok
 	}
-	data.loaded = true
-	return nil
+	return nil, false
+}
+
+func (s *State) isStopIteration(err error) bool {
+	sig, ok := err.(*unwindSignal)
+	if !ok || sig.kind != unwindException || sig.value.obj == nil {
+		return false
+	}
+	class := s.classOf(sig.value)
+	return class == s.StopIterationClass || s.classIsSubclass(class, s.StopIterationClass)
+}
+
+func (s *State) enumeratorRun(ctx context.Context, data *enumeratorData, yield func([]Value) (Value, error)) (Value, error) {
+	switch {
+	case data.collect != nil:
+		return data.collect(ctx, yield)
+	case data.produce != nil:
+		return data.produce(ctx, yield)
+	case !data.generator.IsNil():
+		yielder := s.newYielder(Nil, func(ctx context.Context, args []Value) (Value, error) {
+			return yield(args)
+		})
+		result, err := s.callBlock(ctx, data.generator, []Value{yielder}, Nil)
+		data.result = result
+		return result, err
+	case data.method != "":
+		block := nativeBlockValue(s.ProcClass, func(ctx context.Context, raw []Value) (Value, error) {
+			return yield(raw)
+		})
+		result, err := s.call(ctx, data.receiver, data.method, data.args, Nil, block)
+		data.result = result
+		return result, err
+	}
+	return Nil, nil
+}
+
+func (s *State) newYielder(block Value, fn func(ctx context.Context, args []Value) (Value, error)) Value {
+	return ObjectValue(&Object{class: s.yielderClass(), data: &yielderData{block: block, fn: fn}})
+}
+
+func (s *State) yielderClass() *Class {
+	value := s.EnumeratorClass.constants["Yielder"]
+	if class, ok := s.asClass(value); ok {
+		return class
+	}
+	return s.ObjectClass
+}
+
+func (s *State) generatorClass() *Class {
+	value := s.EnumeratorClass.constants["Generator"]
+	if class, ok := s.asClass(value); ok {
+		return class
+	}
+	return s.ObjectClass
 }
 
 func (s *State) objectToEnumMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-	if len(args) == 0 {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "to_enum expects a method name")}
+	method := "each"
+	rest := args
+	if len(args) > 0 {
+		method = args[0].String()
+		rest = args[1:]
 	}
-	return s.toEnum(self, args[0].String(), args[1:]), nil
+	return s.toEnum(self, method, rest), nil
+}
+
+func (s *State) enumeratorNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "Enumerator.new requires a block")}
+	}
+	class, _ := s.asClass(self)
+	if class == nil {
+		class = s.EnumeratorClass
+	}
+	return ObjectValue(&Object{class: class, data: &enumeratorData{generator: block}}), nil
+}
+
+func (s *State) enumeratorProduceMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "Enumerator.produce requires a block")}
+	}
+	if len(args) > 1 {
+		return Nil, argumentCountError(s, len(args), "0..1")
+	}
+	hasInitial := len(args) == 1
+	initial := Nil
+	if hasInitial {
+		initial = args[0]
+	}
+	produce := func(ctx context.Context, yield func([]Value) (Value, error)) (Value, error) {
+		current := initial
+		if !hasInitial {
+			var err error
+			value, err := s.callBlock(ctx, block, []Value{current}, Nil)
+			if err != nil {
+				if s.isStopIteration(err) {
+					return Nil, nil
+				}
+				return Nil, err
+			}
+			current = value
+		}
+		for {
+			if _, err := yield([]Value{current}); err != nil {
+				return Nil, err
+			}
+			next, err := s.callBlock(ctx, block, []Value{current}, Nil)
+			if err != nil {
+				if s.isStopIteration(err) {
+					return Nil, nil
+				}
+				return Nil, err
+			}
+			current = next
+		}
+	}
+	return ObjectValue(&Object{class: s.EnumeratorClass, data: &enumeratorData{produce: produce}}), nil
 }
 
 func (s *State) enumeratorEachMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -86,16 +205,98 @@ func (s *State) enumeratorEachMethod(ctx context.Context, self Value, args []Val
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
 	if block.IsNil() {
+		if len(args) > 0 && data.method != "" && data.collect == nil && data.produce == nil && data.generator.IsNil() {
+			combined := append(append([]Value(nil), data.args...), args...)
+			return s.toEnum(data.receiver, data.method, combined), nil
+		}
 		return self, nil
 	}
-	err := data.collect(ctx, func(raw []Value) (Value, error) {
-		_, err := s.callBlock(ctx, block, raw, Nil)
-		return Nil, err
+	callArgs := args
+	if data.method != "" && data.collect == nil && data.produce == nil && data.generator.IsNil() && len(args) > 0 {
+		original := data.args
+		data.args = append(append([]Value(nil), data.args...), args...)
+		defer func() { data.args = original }()
+		callArgs = nil
+	}
+	_ = callArgs
+	result, err := s.enumeratorRun(ctx, data, func(raw []Value) (Value, error) {
+		return s.callBlock(ctx, block, raw, Nil)
 	})
 	if err != nil {
+		if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
+			return br.value, nil
+		}
+		if s.isStopIteration(err) {
+			return Nil, nil
+		}
 		return Nil, err
 	}
-	return self, nil
+	return result, nil
+}
+
+func (s *State) enumeratorEnsureLazy(ctx context.Context, data *enumeratorData) *enumeratorLazy {
+	if data.lazy != nil {
+		return data.lazy
+	}
+	lazy := &enumeratorLazy{resume: make(chan enumeratorResume), out: make(chan enumeratorOut)}
+	data.lazy = lazy
+	return lazy
+}
+
+func (s *State) enumeratorStartLazy(ctx context.Context, data *enumeratorData, lazy *enumeratorLazy) {
+	lazy.started = true
+	go func() {
+		yield := func(values []Value) (Value, error) {
+			lazy.out <- enumeratorOut{values: append([]Value(nil), values...)}
+			reply := <-lazy.resume
+			if reply.cancel {
+				return Nil, errStopEnumeration
+			}
+			if len(reply.values) == 0 {
+				return Nil, nil
+			}
+			return reply.values[0], nil
+		}
+		result, err := s.enumeratorRun(ctx, data, yield)
+		data.result = result
+		lazy.out <- enumeratorOut{done: true, err: err}
+	}()
+}
+
+func (s *State) enumeratorNextValueList(ctx context.Context, self Value, data *enumeratorData) ([]Value, error) {
+	lazy := s.enumeratorEnsureLazy(ctx, data)
+	if lazy.hasPending {
+		values := lazy.pending
+		lazy.pending = nil
+		lazy.hasPending = false
+		return values, nil
+	}
+	if lazy.done {
+		return nil, &unwindSignal{kind: unwindException, value: newException(s.StopIterationClass, "iteration reached an end")}
+	}
+	if !lazy.started {
+		s.enumeratorStartLazy(ctx, data, lazy)
+	} else {
+		message := enumeratorResume{}
+		if lazy.feedSet {
+			message.values = []Value{lazy.feed}
+			lazy.feedSet = false
+			lazy.feed = Nil
+		}
+		lazy.resume <- message
+	}
+	out := <-lazy.out
+	if out.done {
+		lazy.done = true
+		if out.err != nil {
+			if out.err == errStopEnumeration || s.isStopIteration(out.err) {
+				return nil, &unwindSignal{kind: unwindException, value: newException(s.StopIterationClass, "iteration reached an end")}
+			}
+			return nil, out.err
+		}
+		return nil, &unwindSignal{kind: unwindException, value: newException(s.StopIterationClass, "iteration reached an end")}
+	}
+	return out.values, nil
 }
 
 func (s *State) enumeratorNextMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -103,15 +304,23 @@ func (s *State) enumeratorNextMethod(ctx context.Context, self Value, args []Val
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
-	if err := s.enumeratorItems(ctx, data); err != nil {
+	values, err := s.enumeratorNextValueList(ctx, self, data)
+	if err != nil {
 		return Nil, err
 	}
-	if data.index >= len(data.items) {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.StopIterationClass, "iteration reached an end")}
+	return svalueOf(values), nil
+}
+
+func (s *State) enumeratorNextValuesMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := enumeratorOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
-	value := svalueOf(data.items[data.index])
-	data.index++
-	return value, nil
+	values, err := s.enumeratorNextValueList(ctx, self, data)
+	if err != nil {
+		return Nil, err
+	}
+	return ArrayValue(values), nil
 }
 
 func (s *State) enumeratorPeekMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -119,13 +328,51 @@ func (s *State) enumeratorPeekMethod(ctx context.Context, self Value, args []Val
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
-	if err := s.enumeratorItems(ctx, data); err != nil {
-		return Nil, err
+	lazy := s.enumeratorEnsureLazy(ctx, data)
+	if !lazy.hasPending {
+		values, err := s.enumeratorNextValueList(ctx, self, data)
+		if err != nil {
+			return Nil, err
+		}
+		lazy.pending = values
+		lazy.hasPending = true
 	}
-	if data.index >= len(data.items) {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.StopIterationClass, "iteration reached an end")}
+	return svalueOf(lazy.pending), nil
+}
+
+func (s *State) enumeratorPeekValuesMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := enumeratorOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
-	return svalueOf(data.items[data.index]), nil
+	lazy := s.enumeratorEnsureLazy(ctx, data)
+	if !lazy.hasPending {
+		values, err := s.enumeratorNextValueList(ctx, self, data)
+		if err != nil {
+			return Nil, err
+		}
+		lazy.pending = values
+		lazy.hasPending = true
+	}
+	return ArrayValue(append([]Value(nil), lazy.pending...)), nil
+}
+
+func (s *State) enumeratorFeedMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := enumeratorOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
+	}
+	lazy := s.enumeratorEnsureLazy(ctx, data)
+	if lazy.feedSet {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "feed value already set")}
+	}
+	value := Nil
+	if len(args) > 0 {
+		value = args[0]
+	}
+	lazy.feedSet = true
+	lazy.feed = value
+	return Nil, nil
 }
 
 func (s *State) enumeratorRewindMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -133,7 +380,11 @@ func (s *State) enumeratorRewindMethod(ctx context.Context, self Value, args []V
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
-	data.index = 0
+	if lazy := data.lazy; lazy != nil && lazy.started && !lazy.done {
+		go func() { lazy.resume <- enumeratorResume{cancel: true} }()
+	}
+	data.lazy = nil
+	data.result = Nil
 	return self, nil
 }
 
@@ -142,10 +393,12 @@ func (s *State) enumeratorSizeMethod(ctx context.Context, self Value, args []Val
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
-	if err := s.enumeratorItems(ctx, data); err != nil {
-		return Nil, err
+	if data.collect == nil && data.produce == nil && data.generator.IsNil() && data.method != "" && len(data.args) == 0 {
+		if _, found := s.classOf(data.receiver).lookup("size"); found {
+			return s.call(ctx, data.receiver, "size", nil, Nil, Nil)
+		}
 	}
-	return IntValue(int64(len(data.items))), nil
+	return Nil, nil
 }
 
 func (s *State) enumeratorWithIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -162,23 +415,168 @@ func (s *State) enumeratorWithIndexMethod(ctx context.Context, self Value, args 
 		offset = int(args[0].Int())
 	}
 	if block.IsNil() {
-		return s.newEnumerator(func(ctx context.Context, yield func([]Value) (Value, error)) error {
+		return s.newEnumerator(func(ctx context.Context, yield func([]Value) (Value, error)) (Value, error) {
 			index := offset
-			return data.collect(ctx, func(raw []Value) (Value, error) {
-				combined := append(append([]Value(nil), raw...), IntValue(int64(index)))
+			return s.enumeratorRun(ctx, data, func(raw []Value) (Value, error) {
+				combined := []Value{svalueOf(raw), IntValue(int64(index))}
 				index++
 				return yield(combined)
 			})
 		}), nil
 	}
 	index := offset
-	err := data.collect(ctx, func(raw []Value) (Value, error) {
-		combined := append(append([]Value(nil), raw...), IntValue(int64(index)))
+	result, err := s.enumeratorRun(ctx, data, func(raw []Value) (Value, error) {
+		combined := []Value{svalueOf(raw), IntValue(int64(index))}
 		index++
 		return s.callBlock(ctx, block, combined, Nil)
 	})
 	if err != nil {
+		if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
+			return br.value, nil
+		}
+		if s.isStopIteration(err) {
+			return Nil, nil
+		}
 		return Nil, err
 	}
-	return data.result, nil
+	return result, nil
+}
+
+func (s *State) enumeratorWithObjectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := enumeratorOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
+	}
+	if len(args) != 1 {
+		return Nil, argumentCountError(s, len(args), "1")
+	}
+	object := args[0]
+	if block.IsNil() {
+		return s.toEnum(self, "with_object", args), nil
+	}
+	_, err := s.enumeratorRun(ctx, data, func(raw []Value) (Value, error) {
+		pair := ArrayValue([]Value{svalueOf(raw), object})
+		_, err := s.callBlock1(ctx, block, pair, Nil)
+		return Nil, err
+	})
+	if err != nil {
+		if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
+			return br.value, nil
+		}
+		if s.isStopIteration(err) {
+			return object, nil
+		}
+		return Nil, err
+	}
+	return object, nil
+}
+
+func (s *State) enumeratorInspectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := enumeratorOf(self)
+	if !ok || data.method == "" {
+		return StringValue("#<Enumerator>"), nil
+	}
+	text := "#<Enumerator: " + data.receiver.Inspect() + ":" + data.method
+	if len(data.args) > 0 {
+		parts := make([]string, len(data.args))
+		for i, arg := range data.args {
+			parts[i] = arg.Inspect()
+		}
+		text += "(" + joinStrings(parts, ", ") + ")"
+	}
+	return StringValue(text + ">"), nil
+}
+
+func joinStrings(parts []string, separator string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	result := parts[0]
+	for _, part := range parts[1:] {
+		result += separator + part
+	}
+	return result
+}
+
+func (s *State) enumeratorDupMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := enumeratorOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
+	}
+	if data.lazy != nil && data.lazy.started {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "can't copy already started enumerator")}
+	}
+	copyData := *data
+	copyData.lazy = nil
+	copyData.result = Nil
+	return ObjectValue(&Object{class: s.classOf(self), data: &copyData}), nil
+}
+
+func (s *State) yielderNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.LocalJumpErrorClass, "no block given")}
+	}
+	class, _ := s.asClass(self)
+	if class == nil {
+		class = s.yielderClass()
+	}
+	return ObjectValue(&Object{class: class, data: &yielderData{block: block}}), nil
+}
+
+func (s *State) yielderCall(ctx context.Context, self Value, args []Value) (Value, error) {
+	data, ok := yielderOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a yielder")}
+	}
+	if data.fn != nil {
+		return data.fn(ctx, args)
+	}
+	if data.block.IsNil() {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.LocalJumpErrorClass, "no block given")}
+	}
+	return s.callBlock(ctx, data.block, args, Nil)
+}
+
+func (s *State) yielderYieldMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	return s.yielderCall(ctx, self, args)
+}
+
+func (s *State) yielderPushMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if _, err := s.yielderCall(ctx, self, args); err != nil {
+		return Nil, err
+	}
+	return self, nil
+}
+
+func (s *State) generatorNewMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.LocalJumpErrorClass, "no block given")}
+	}
+	class, _ := s.asClass(self)
+	if class == nil {
+		class = s.generatorClass()
+	}
+	return ObjectValue(&Object{class: class, data: &generatorData{block: block}}), nil
+}
+
+func (s *State) generatorEachMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := generatorOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a generator")}
+	}
+	if block.IsNil() {
+		return self, nil
+	}
+	yielder := s.newYielder(block, nil)
+	callArgs := append([]Value{yielder}, args...)
+	return s.callBlock(ctx, data.block, callArgs, Nil)
+}
+
+func (s *State) generatorDupMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	data, ok := generatorOf(self)
+	if !ok {
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a generator")}
+	}
+	copyData := *data
+	return ObjectValue(&Object{class: s.classOf(self), data: &copyData}), nil
 }

@@ -2712,14 +2712,7 @@ func (s *State) stringGsubMethod(ctx context.Context, self Value, args []Value, 
 func (s *State) integerTimesMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	count := self.Int()
 	if block.IsNil() {
-		if count < 0 {
-			return ArrayValue(nil), nil
-		}
-		values := make([]Value, count)
-		for i := int64(0); i < count; i++ {
-			values[i] = IntValue(i)
-		}
-		return ArrayValue(values), nil
+		return s.toEnum(self, "times", nil), nil
 	}
 	for i := int64(0); i < count; i++ {
 		if _, err := s.callBlock(ctx, block, []Value{IntValue(i)}, Nil); err != nil {

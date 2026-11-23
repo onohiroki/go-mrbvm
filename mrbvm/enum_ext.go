@@ -2,7 +2,9 @@ package mrbvm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 )
 
 func (s *State) installEnumerableExtensionLibrary() {
@@ -26,6 +28,8 @@ func (s *State) installEnumerableExtensionLibrary() {
 	class.define("grep_v", s.enumerableExtGrepVMethod)
 	class.define("each_entry", s.enumerableExtEachEntryMethod)
 	class.define("zip", s.enumerableExtZipMethod)
+	class.define("chunk", s.enumerableExtChunkMethod)
+	class.define("chunk_while", s.enumerableExtChunkWhileMethod)
 
 	array := s.ArrayClass
 	array.define("each_slice", s.enumerableExtEachSliceMethod)
@@ -37,12 +41,15 @@ func (s *State) installEnumerableExtensionLibrary() {
 	array.define("count", s.arrayExtCountMethod)
 	array.define("sort_by!", s.arrayExtSortByBangMethod)
 	array.define("zip", s.arrayExtZipMethod)
+	array.define("chunk", s.enumerableExtChunkMethod)
+	array.define("chunk_while", s.enumerableExtChunkWhileMethod)
 
 	// The built-in classes copy Enumerable's methods when they include it, so
 	// the methods defined above have to be placed on them explicitly.
 	names := []string{"each_slice", "each_cons", "take", "drop", "none?", "one?",
 		"minmax_by", "reverse_each", "cycle", "find_index", "filter_map", "tally",
 		"grep_v", "each_entry", "zip"}
+	s.ObjectClass.define("loop", s.kernelLoopMethod)
 	for _, name := range names {
 		if m, ok := class.methods[name]; ok {
 			s.RangeClass.methods[name] = m
@@ -596,7 +603,9 @@ func (s *State) enumerableExtEachEntryMethod(ctx context.Context, self Value, ar
 	return self, nil
 }
 
-func (s *State) enumZipArgument(ctx context.Context, arg Value) ([]Value, error) {
+var errStopEnumeration = errors.New("stop enumeration")
+
+func (s *State) enumZipArgument(ctx context.Context, arg Value, limit int) ([]Value, error) {
 	if data, ok := arrayDataOf(arg); ok {
 		return data.values, nil
 	}
@@ -606,12 +615,22 @@ func (s *State) enumZipArgument(ctx context.Context, arg Value) ([]Value, error)
 	if _, ok := s.asClass(arg); ok {
 		return nil, s.newArrayError(s.TypeErrorClass, fmt.Sprintf("wrong argument type %s (must respond to to_ary)", s.classOf(arg).name))
 	}
-	if _, err := s.call(ctx, arg, "each", nil, Nil, Nil); err != nil {
+	if _, ok := s.classOf(arg).lookup("each"); !ok {
 		return nil, s.newArrayError(s.TypeErrorClass, fmt.Sprintf("wrong argument type %s (must respond to to_ary)", s.classOf(arg).name))
 	}
-	values, err := s.enumCollectValues(ctx, arg)
-	if err != nil {
-		return nil, err
+	var values []Value
+	err := s.eachRaw(ctx, arg, func(raw []Value) error {
+		values = append(values, svalueOf(raw))
+		if len(values) >= limit {
+			return errStopEnumeration
+		}
+		return nil
+	})
+	if err != nil && err != errStopEnumeration {
+		if _, ok := err.(*unwindSignal); ok {
+			return nil, err
+		}
+		return nil, s.newArrayError(s.TypeErrorClass, fmt.Sprintf("wrong argument type %s (must respond to to_ary)", s.classOf(arg).name))
 	}
 	return values, nil
 }
@@ -619,7 +638,7 @@ func (s *State) enumZipArgument(ctx context.Context, arg Value) ([]Value, error)
 func (s *State) enumZipValues(ctx context.Context, values []Value, args []Value) ([]Value, error) {
 	lists := make([][]Value, len(args))
 	for i, arg := range args {
-		list, err := s.enumZipArgument(ctx, arg)
+		list, err := s.enumZipArgument(ctx, arg, len(values))
 		if err != nil {
 			return nil, err
 		}
@@ -721,4 +740,137 @@ func (s *State) arrayExtSortByBangMethod(ctx context.Context, self Value, args [
 		data.values[i] = pairs[i].value
 	}
 	return self, nil
+}
+
+func (s *State) kernelLoopMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if block.IsNil() {
+		return s.toEnum(self, "loop", nil), nil
+	}
+	for {
+		_, err := s.callBlock(ctx, block, nil, Nil)
+		if err != nil {
+			if br, ok := err.(*unwindSignal); ok && br.kind == unwindBreak {
+				return br.value, nil
+			}
+			if s.isStopIteration(err) {
+				return Nil, nil
+			}
+			return Nil, err
+		}
+	}
+}
+
+func (s *State) enumerableExtChunkMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 0 {
+		return Nil, argumentCountError(s, len(args), "0")
+	}
+	if block.IsNil() {
+		return s.toEnum(self, "chunk", nil), nil
+	}
+	return s.newEnumerator(func(ctx context.Context, yield func([]Value) (Value, error)) (Value, error) {
+		var currentKey Value
+		var current []Value
+		have := false
+		flush := func() error {
+			if !have {
+				return nil
+			}
+			have = false
+			_, err := yield([]Value{ArrayValue([]Value{currentKey, ArrayValue(current)})})
+			current = nil
+			return err
+		}
+		err := s.eachRaw(ctx, self, func(raw []Value) error {
+			value := svalueOf(raw)
+			key, err := s.callBlock(ctx, block, raw, Nil)
+			if err != nil {
+				return err
+			}
+			if key.Kind() == KindSymbol {
+				switch key.String() {
+				case "_alone":
+					if err := flush(); err != nil {
+						return err
+					}
+					_, err := yield([]Value{ArrayValue([]Value{key, ArrayValue([]Value{value})})})
+					return err
+				case "_separator":
+					return flush()
+				default:
+					if strings.HasPrefix(key.String(), "_") {
+						return &unwindSignal{kind: unwindException, value: newException(s.RuntimeErrorClass, "invalid chunk state")}
+					}
+				}
+			}
+			if key.IsNil() {
+				return flush()
+			}
+			if have && arrayEql(currentKey, key) {
+				current = append(current, value)
+				return nil
+			}
+			if err := flush(); err != nil {
+				return err
+			}
+			currentKey = key
+			current = []Value{value}
+			have = true
+			return nil
+		})
+		if err != nil {
+			return Nil, err
+		}
+		if err := flush(); err != nil {
+			return Nil, err
+		}
+		return Nil, nil
+	}), nil
+}
+
+func (s *State) enumerableExtChunkWhileMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) != 0 {
+		return Nil, argumentCountError(s, len(args), "0")
+	}
+	if block.IsNil() {
+		return s.toEnum(self, "chunk_while", nil), nil
+	}
+	return s.newEnumerator(func(ctx context.Context, yield func([]Value) (Value, error)) (Value, error) {
+		var current []Value
+		var previous Value
+		havePrevious := false
+		flush := func() error {
+			if len(current) == 0 {
+				return nil
+			}
+			chunk := ArrayValue(append([]Value(nil), current...))
+			current = nil
+			_, err := yield([]Value{chunk})
+			return err
+		}
+		err := s.eachRaw(ctx, self, func(raw []Value) error {
+			value := svalueOf(raw)
+			if havePrevious {
+				join, err := s.callBlock2(ctx, block, previous, value, Nil)
+				if err != nil {
+					return err
+				}
+				if !join.IsTruthy() {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+			}
+			current = append(current, value)
+			previous = value
+			havePrevious = true
+			return nil
+		})
+		if err != nil {
+			return Nil, err
+		}
+		if err := flush(); err != nil {
+			return Nil, err
+		}
+		return Nil, nil
+	}), nil
 }
