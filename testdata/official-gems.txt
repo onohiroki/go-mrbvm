@@ -32,3 +32,4 @@ mruby-regexp/test/large_program.rb
 mruby-regexp/test/many_classes.rb
 mruby-regexp/test/skipped_search_marks.rb
 mruby-eval/test/eval.rb
+mruby-eval/test/binding.rb
