@@ -9,7 +9,7 @@ compiler and the reference implementation is always C mruby 4.0.0.
 
 ## Status
 
-**VM-4b, VM-4c, VM-5, and the VM-6 core are implemented; VM-7 has started.** The VM loads RITE 04.00 through
+**VM-4 through VM-6 are implemented; VM-7 has started.** The VM loads RITE 04.00 through
 `go-mrbc/bytecode` and supports:
 
 - values, objects, classes, methods, blocks, closures, and upvars
@@ -32,8 +32,9 @@ compiler and the reference implementation is always C mruby 4.0.0.
   `reject` / `find` / `inject` / `min` / `max` / `sort`, `group_by`,
   `sort_by`, `each_with_object`, `zip`, and `flat_map`
 - a native `Enumerable` module that works with user-defined `each`
-- a minimal eager `Enumerator` for blockless `each` / `map` / `times`
-  and friends, including `next`, `peek`, `rewind`, `size`, and `with_index`
+- lazy `Enumerator` for blockless `each` / `map` / `times` and friends:
+  `next`, `peek`, `feed`, `rewind`, `with_index`, `with_object`,
+  `Enumerator.new`, `Enumerator.produce`, and the Yielder/Generator classes
 - a native `Comparable` module, `Symbol#to_proc`, and working
   `attr_reader` / `attr_writer` / `attr_accessor`
 - singleton classes for arbitrary objects (`class << obj`, `def obj.m`),
@@ -54,14 +55,23 @@ compiler and the reference implementation is always C mruby 4.0.0.
   array/hash/string sizes
 - a capability policy package (`sandbox.Policy`) for IO, files, network,
   process, OS, eval, load, and require
+- `Rational` (arbitrary-precision exact parts), `Complex`, and the `Math`
+  module
+- `Method` / `UnboundMethod` reflection (`call`, `arity`, `parameters`,
+  `owner`, `receiver`, `unbind` / `bind` / `bind_call`, `super_method`)
+- injected-compiler `eval`, `Binding`, `instance_eval` / `class_eval`
+  strings, and `load` / `require` / `require_relative`
 - `Time` (`now`, `at`, components, `strftime`, arithmetic)
 - `JSON` (`parse`, `generate`, `dump`, `pretty_generate`)
 - capability-gated `IO` / `File` with `STDIN` / `STDOUT` / `STDERR`,
   read/write/open/close, path helpers, size, and delete
-- `Regexp` / `MatchData` backed by Go regexp, including flags, named
-  captures, `String#=~`, `#match`, `#scan`, and regexp `sub` / `gsub`
-- cooperative `Fiber` (`current` / `resume` / `yield` / `raise`) with
-  nested stacks and ensure cleanup
+- `Regexp` / `MatchData` backed by the pure-Go `dlclark/regexp2` engine,
+  including Ruby option semantics, `inspect` / `to_s` folding, `escape`,
+  `union`, named captures, `$~` and `$1`-style globals, and regexp
+  `String#index` / `rindex` / `match` / `scan` / `sub` / `gsub`
+- cooperative `Fiber` (`current` / `resume` / `yield` / `transfer` /
+  `raise`) with per-fiber VM stacks, caller tracking, ensure cleanup, and
+  `Fiber[]` / `storage`
 - `gomirb`, a persistent-State REPL with multi-line continuation,
   history persistence, and completion candidates
 - VM-7 benchmark tooling, register pooling, and a GC shim
@@ -91,6 +101,10 @@ Design and plan:
 go-mrbvm ──imports──▶ go-mrbc/bytecode
 go-mrbc  ──no dependency on──▶ go-mrbvm
 ```
+
+The core `mrbvm` package consumes only `go-mrbc/bytecode`. `eval`, `load`, and
+`require` compile through `Options.Compiler`, so embedding the VM does not link
+the compiler into the runtime.
 
 The shared contract is the `bytecode` package:
 
@@ -134,9 +148,10 @@ go run ./cmd/vmcompat -corpus
 go run ./cmd/mrbtest -manifest testdata/official.txt
 ```
 
-The VM uses UTF-8 character indexing for `String` (`bytesize` and the byte APIs remain byte-based). The manifest currently covers **35** official test files, including
-`array`, `object`, `superclass`, `version`, `platform`, the exception-class
-tests, `nameerror`, and `nomethoderror`.
+The VM uses UTF-8 character indexing for `String` (`bytesize` and the byte APIs remain byte-based). The core manifest currently covers **42** official test files. The gem
+manifest (`testdata/official-gems.txt`) covers **18** passing mrbgem suites,
+including the Array/Hash/String/Enumerable extensions, Enumerator, Method,
+metaprogramming, Rational, Complex, Regexp, and Fiber.
 
 ## Host API
 

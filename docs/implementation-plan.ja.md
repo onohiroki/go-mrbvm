@@ -336,7 +336,8 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 ### VM-4b / VM-4c / VM-5（2026-11-22 完了）
 
 - **VM-4b**
-  - 公式テスト 35 ファイルを `testdata/official.txt` に固定
+  - 公式テスト 42 ファイルを `testdata/official.txt` に固定
+  - mrbgem 18 スイートを `testdata/official-gems.txt` に固定
   - mrblib subset を `10error` / `compar` / `enum` / `array` / `hash` /
     `string` / `range` に拡張
 - **VM-4c**
@@ -359,12 +360,16 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   - `Time`（`now` / `at` / 成分 / `strftime` / 演算）
   - `JSON`（`parse` / `generate` / `dump` / `pretty_generate`）
   - IO / File（標準ストリーム、path helper、size/delete）
-  - Regexp / MatchData（フラグ、名前付きキャプチャ）
-  - Fiber（current / raise / ensure）
+  - Regexp / MatchData（regexp2、`inspect` / `to_s` 畳み込み、
+    `escape` / `union`、`$~` と後方参照）
+  - Fiber（current / resume / yield / transfer / raise / storage）
+  - `Rational` / `Complex` / `Math`
+  - `Method` / `UnboundMethod`
+  - `Options.Compiler` 注入による `eval` / `Binding` / `load` / `require`
   - `gomirb` の履歴永続化・補完候補
 - 次の作業
   1. デバッガ連携
-  2. Regexp / Fiber / IO の gem 公式テスト拡大
+  2. Onigmo 構文 suite、`Set` / `Struct` / `Data`、eval 完全 suite
   3. VM-7 のベンチマーク
 
 ### VM-7 初期計測（2026-11-22）
@@ -408,8 +413,10 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   `TestOperatorRedefinition` で CRuby / 開発ツリーの挙動を固定
 - Phase 10（コア言語）: Proc/Enumerable/BasicObject/defined?/メソッドフック/
   block 引数/ensure/Int・Float の厳密比較/Numeric#step/autoload/Hash 再入ガード/
-  UTF-8 文字単位 String を実装し、公式テストを 35 ファイルへ拡大。残りは
-  GC/REnv/C gem ヘルパ、4.0.0 以降の構文
+  UTF-8 文字単位 String を実装し、公式テストを 35 ファイルへ拡大。続く
+  言語意味論 L0–L4 で 42 ファイル・mrbgem 18 スイートへ拡大。残りは
+  GC/REnv/C gem ヘルパ、4.0.0 以降の構文、Onigmo 構文 suite、
+  `Set` / `Struct` / `Data`
 - `Float::NAN == Float::NAN` は 4.0.0 の `OP_EQ` が `true`、開発ツリーと
   CRuby が `false`。共有コーパスはこの参照バグを表明せず、VM は CRuby に従う
 - 結果は [benchmarks.ja.md](benchmarks.ja.md) に記録

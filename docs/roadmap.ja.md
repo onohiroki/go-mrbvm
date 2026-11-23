@@ -5,7 +5,7 @@
 [implementation-plan.ja.md](implementation-plan.ja.md)、設計は
 [architecture.md](architecture.md) を参照。
 
-最終更新: 2026-11-22
+最終更新: 2026-11-23
 
 ## 1. 現状
 
@@ -21,7 +21,11 @@
     両方で成功（`go-mrbc/conformance` パッケージを共有）
   - `Integer` / `Float` の演算子メソッド層、`send` / alias /
     リフレクション、再定義時の opcode フォールバック
-  - 公式テスト **35 ファイル**が成功（`testdata/official.txt`）
+  - 公式テスト **42 ファイル**が成功（`testdata/official.txt`）
+  - mrbgem テスト **18 スイート**が成功（`testdata/official-gems.txt`）
+  - 言語意味論 L0–L4 完了（Symbol/Proc/Array/Hash/String/Enumerable/
+    Enumerator/Kernel/メタプログラミング/Method/Rational/Complex/
+    Regexp/Fiber/eval 基盤）
   - `Options.LoadMrblib` で 7 ファイルの mrblib subset を opt-in ロード
   - ホスト API（`DefineFunction` / `DefineClass` / `DefineModule` /
     `DefineConst` / `Send` / `Raise`）
@@ -358,6 +362,59 @@
 
 conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケージで共有）。除外しているのは mruby GC 内部と C テスト gem ヘルパ、4.0.0 以降の構文のみ。
 
+### 4.15 言語意味論 L0–L4（2026-11-23）
+
+公式コアテストを 35 から **42 ファイル**、mrbgem テストを **18 スイート**
+まで拡大した。L0–L4 の順に、各マイルストーンをコミットで固定している。
+
+- **L0** 通過済みコアテストのマニフェスト化
+- **L1** `Symbol` 拡張、`Proc` 拡張（`source_location` / `inspect` /
+  `lambda?` / `arity` / `curry` / `<<` / `>>`、`break` の
+  `LocalJumpError` 化）
+- **L2** `Array` / `Hash` / `String` / `Enumerable` 拡張、
+  遅延 `Enumerator`（`next` / `peek` / `feed` / `rewind` /
+  `Enumerator.new` / `produce`）
+- **L3** `Kernel` / メタプログラミング / `Method` / `UnboundMethod`
+  （`caller`、`Binding` なしのフレーム情報、`define_method` の
+  Method 受け取り、`super` のモジュール位置追跡）
+- **L4**
+  - `Rational`（`big.Rat`、正確な比較・演算・丸め）
+  - `Complex`（部品クラスを保持、scaled division、`hash` / `eql?`、
+    `Math` モジュール）
+  - `Regexp` / `MatchData`（`dlclark/regexp2`、オプション畳み込み、
+    `escape` / `union`、`$~` / `$1`–`$9` / `` $& `` / `` $` `` / `$'` /
+    `$+`、`String` の regexp メソッド）
+  - `Fiber`（goroutine + 協調スケジューラ、`transfer` / `raise` /
+    `storage`、per-fiber VM スタック）
+  - `eval` / `Binding` / `load` / `require`（`Options.Compiler` 注入。
+    VM コアはコンパイラをリンクしない）
+
+通過状況（このスプリントの計測）:
+
+| スイート | OK / Total | 備考 |
+| --- | ---: | --- |
+| `mruby-proc-ext` | 10 / 14 | 残り 4 件は C ヘルパ依存 |
+| `mruby-enum-ext` | 44 / 44 | ObjectSpace テストは skip |
+| `mruby-enumerator` | 52 / 52 | 全通過 |
+| `mruby-method` | 39 / 40 | ObjectSpace テスト 1 件 skip |
+| `mruby-rational` | 150 / 150 | Complex 連携を含む |
+| `mruby-complex` | 82 / 82 | Math 連携を含む |
+| `mruby-regexp/regexp.rb` | 45 / 45 | Onigmo 構文の全 suite は未対応 |
+| `mruby-fiber/fiber.rb` | 24 / 25 | GC stress 1 件 skip |
+| `mruby-fiber/fiber2.rb` | 6 / 6 | 全通過 |
+
+### 4.16 残作業（2026-11-23 時点）
+
+- `Regexp` の Onigmo 構文 suite（`regexp_syntax` / `string_regexp` /
+  `match_data` など）は未対応。`regexp2` と Onigmo の構文差を吸収する
+  翻訳層が必要。
+- `Set` / `Struct` / `Data` は C gem 実装が未移植。mrblib だけでは
+  動かないため、ネイティブ実装が必要。
+- `mruby-eval` の完全 suite は可視性・`super` / `yield` / `return`・
+  長さ上限のケースが残る（現在 25/48）。
+- GC 内部・`ObjectSpace`・C テストヘルパに依存するテストは引き続き除外。
+- VM-7 の性能・GC 作業は継続。
+
 ## 5. 品質ゲート
 
 各コミットで必ず実行する。
@@ -367,7 +424,8 @@ gofmt -l .
 go vet ./...
 go test ./...
 go run ./cmd/vmcompat -corpus
-go run ./cmd/mrbtest <成功している公式テスト>
+go run ./cmd/mrbtest -manifest testdata/official.txt
+go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ```
 
 追加ルール:
@@ -383,7 +441,7 @@ go run ./cmd/mrbtest <成功している公式テスト>
 | --- | --- |
 | mrblib が C プリミティブに依存 | ネイティブ実装を優先し、mrblib は段階導入 |
 | 公式テストが GC / Fiber / Regexp に依存 | subset マニフェストで分離 |
-| `Enumerator#next` の完全な遅延評価 | 現状は eager。必要になったら状態機械化 |
+| `Enumerator#next` の完全な遅延評価 | goroutine による suspend/resume で実装済み |
 | 例外 backtrace の情報不足 | irep の debug info を整備 |
 | 性能劣化 | VM-7 まで保留。まず正しさ |
 | C API 互換 | mruby C API 全体ではなく、ホスト API として再設計 |
@@ -391,10 +449,10 @@ go run ./cmd/mrbtest <成功している公式テスト>
 ## 7. マイルストーン目安
 
 - **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
-- **VM-4b**: 公式テスト 35 ファイル（達成）
+- **VM-4b**: 公式テスト 42 ファイル、mrbgem 18 スイート（達成）
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
-- **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 完了、デバッガが残り
+- **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 / 言語意味論 L0–L4 完了、デバッガと残りの gem suite が残り
 - **VM-7**: ベンチマーク基盤と初期最適化（進行中）
 
 ## 8. 関連ドキュメント
