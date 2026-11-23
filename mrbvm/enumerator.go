@@ -25,7 +25,7 @@ func (s *State) installEnumeratorLibrary() {
 	s.ObjectClass.define("enum_for", s.objectToEnumMethod)
 }
 
-func (s *State) newEnumerator(collect func(ctx context.Context, yield func([]Value) error) error) Value {
+func (s *State) newEnumerator(collect func(ctx context.Context, yield func([]Value) (Value, error)) error) Value {
 	return ObjectValue(&Object{class: s.EnumeratorClass, data: &enumeratorData{collect: collect}})
 }
 
@@ -33,13 +33,19 @@ func (s *State) toEnum(receiver Value, method string, args []Value) Value {
 	// The enumerator outlives the call, so detach from the caller's argument
 	// buffer (which may be pooled).
 	argsCopy := append([]Value(nil), args...)
-	return s.newEnumerator(func(ctx context.Context, yield func([]Value) error) error {
+	var data *enumeratorData
+	enumerator := s.newEnumerator(func(ctx context.Context, yield func([]Value) (Value, error)) error {
 		block := nativeBlockValue(s.ProcClass, func(ctx context.Context, raw []Value) (Value, error) {
-			return Nil, yield(raw)
+			return yield(raw)
 		})
-		_, err := s.call(ctx, receiver, method, argsCopy, Nil, block)
+		result, err := s.call(ctx, receiver, method, argsCopy, Nil, block)
+		if data != nil {
+			data.result = result
+		}
 		return err
 	})
+	data, _ = enumeratorOf(enumerator)
+	return enumerator
 }
 
 func enumeratorOf(value Value) (*enumeratorData, bool) {
@@ -55,11 +61,11 @@ func (s *State) enumeratorItems(ctx context.Context, data *enumeratorData) error
 		return nil
 	}
 	data.items = nil
-	if err := data.collect(ctx, func(raw []Value) error {
+	if err := data.collect(ctx, func(raw []Value) (Value, error) {
 		copied := make([]Value, len(raw))
 		copy(copied, raw)
 		data.items = append(data.items, copied)
-		return nil
+		return Nil, nil
 	}); err != nil {
 		return err
 	}
@@ -82,9 +88,9 @@ func (s *State) enumeratorEachMethod(ctx context.Context, self Value, args []Val
 	if block.IsNil() {
 		return self, nil
 	}
-	err := data.collect(ctx, func(raw []Value) error {
+	err := data.collect(ctx, func(raw []Value) (Value, error) {
 		_, err := s.callBlock(ctx, block, raw, Nil)
-		return err
+		return Nil, err
 	})
 	if err != nil {
 		return Nil, err
@@ -147,11 +153,18 @@ func (s *State) enumeratorWithIndexMethod(ctx context.Context, self Value, args 
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
-	offset := intArg(args, 0, 0)
+	offset := 0
+	if len(args) > 0 {
+		if args[0].Kind() != KindInt {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
+				"no implicit conversion into Integer")}
+		}
+		offset = int(args[0].Int())
+	}
 	if block.IsNil() {
-		return s.newEnumerator(func(ctx context.Context, yield func([]Value) error) error {
+		return s.newEnumerator(func(ctx context.Context, yield func([]Value) (Value, error)) error {
 			index := offset
-			return data.collect(ctx, func(raw []Value) error {
+			return data.collect(ctx, func(raw []Value) (Value, error) {
 				combined := append(append([]Value(nil), raw...), IntValue(int64(index)))
 				index++
 				return yield(combined)
@@ -159,14 +172,13 @@ func (s *State) enumeratorWithIndexMethod(ctx context.Context, self Value, args 
 		}), nil
 	}
 	index := offset
-	err := data.collect(ctx, func(raw []Value) error {
+	err := data.collect(ctx, func(raw []Value) (Value, error) {
 		combined := append(append([]Value(nil), raw...), IntValue(int64(index)))
 		index++
-		_, err := s.callBlock(ctx, block, combined, Nil)
-		return err
+		return s.callBlock(ctx, block, combined, Nil)
 	})
 	if err != nil {
 		return Nil, err
 	}
-	return self, nil
+	return data.result, nil
 }

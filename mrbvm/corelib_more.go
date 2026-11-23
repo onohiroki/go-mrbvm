@@ -20,6 +20,7 @@ func (s *State) installAdvancedCoreLibrary() {
 	s.installStringExtensionLibrary()
 	s.installAdvancedIntegerLibrary()
 	s.installFloatLibrary()
+	s.installEnumerableExtensionLibrary()
 }
 
 func (s *State) installAdvancedArrayLibrary() {

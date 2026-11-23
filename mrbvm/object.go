@@ -203,10 +203,11 @@ type signalData struct {
 }
 
 type enumeratorData struct {
-	collect func(ctx context.Context, yield func([]Value) error) error
+	collect func(ctx context.Context, yield func([]Value) (Value, error)) error
 	items   [][]Value
 	loaded  bool
 	index   int
+	result  Value
 }
 
 // nativeBlockData lets Go code act as a Ruby block. Enumerable uses it to
