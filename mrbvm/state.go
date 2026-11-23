@@ -77,6 +77,9 @@ type State struct {
 	BacktraceLocationClass *Class
 	FiberClass             *Class
 	RootFiber              Value
+	rootFiber              *fiberData
+	fiberSwitchCh          chan fiberSwitchRequest
+	fiberCBoundary         int
 
 	ExceptionClass              *Class
 	StandardErrorClass          *Class
@@ -1149,6 +1152,7 @@ func New(opts Options) *State {
 	s.installRegexpClass()
 	s.installMatchDataClass()
 	s.installFiberClass()
+	s.installFiberStorage()
 	s.installNumericOperatorMethods()
 	s.installMetaprogLibrary()
 	s.installBacktraceLibrary()
@@ -1170,9 +1174,12 @@ func New(opts Options) *State {
 			s.ModuleClass.methods[name] = m
 		}
 	}
-	rootData := &fiberData{resumeCh: make(chan fiberMessage), outCh: make(chan fiberMessage)}
+	rootData := &fiberData{ch: make(chan fiberEvent), status: fiberRunning, storage: HashValue(nil)}
 	s.RootFiber = ObjectValue(&Object{class: s.FiberClass, data: rootData})
 	rootData.self = s.RootFiber
+	s.rootFiber = rootData
+	s.fiberSwitchCh = make(chan fiberSwitchRequest)
+	go s.fiberScheduler()
 	if opts.LoadMrblib {
 		irep, err := s.LoadBytecode(mrblibBytecode)
 		if err == nil {
