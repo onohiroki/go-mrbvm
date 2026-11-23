@@ -103,6 +103,11 @@ type Class struct {
 	included              []*Class
 	prepended             []*Class
 	subclasses            []*Class
+	isStruct              bool
+	isData                bool
+	structMembers         []string
+	structKeywordInit     Value
+	structKeywordInitSet  bool
 	temporaryName         bool
 	permanentName         bool
 	privateMethods        map[string]bool
@@ -509,6 +514,8 @@ func (s *State) classOf(v Value) *Class {
 			return s.ProcClass
 		case *setData:
 			return s.SetClass
+		case *structData:
+			return s.StructClass
 		case *enumeratorData:
 			return s.EnumeratorClass
 		case *timeData:

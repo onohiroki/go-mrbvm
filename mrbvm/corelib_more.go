@@ -1192,6 +1192,15 @@ func (s *State) digValue(ctx context.Context, receiver, key Value) (Value, error
 				}
 			}
 			return Nil, nil
+		case *structData:
+			index, err := s.structResolveMember(receiver, key)
+			if err != nil {
+				return Nil, err
+			}
+			if index < len(data.values) {
+				return data.values[index], nil
+			}
+			return Nil, nil
 		}
 	}
 	return Nil, nil

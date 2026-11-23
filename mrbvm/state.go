@@ -75,6 +75,8 @@ type State struct {
 	ComplexClass           *Class
 	MathClass              *Class
 	SetClass               *Class
+	StructClass            *Class
+	DataClass              *Class
 	MethodClass            *Class
 	UnboundMethodClass     *Class
 	EnumerableClass        *Class
@@ -248,6 +250,8 @@ func New(opts Options) *State {
 	s.ComplexClass = newClass("Complex", s.NumericClass)
 	s.MathClass = newClass("Math", nil)
 	s.SetClass = newClass("Set", s.ObjectClass)
+	s.StructClass = newClass("Struct", s.ObjectClass)
+	s.DataClass = newClass("Data", s.ObjectClass)
 	s.MathClass.isModule = true
 	s.ensureClassObject(s.MathClass)
 	s.ProcClass = newClass("Proc", s.ObjectClass)
@@ -920,7 +924,7 @@ func New(opts Options) *State {
 		"Integer": s.IntegerClass,
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
-		"Rational": s.RationalClass, "Complex": s.ComplexClass, "Math": s.MathClass, "Set": s.SetClass, "Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
+		"Rational": s.RationalClass, "Complex": s.ComplexClass, "Math": s.MathClass, "Set": s.SetClass, "Struct": s.StructClass, "Data": s.DataClass, "Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
 		"Enumerator": s.EnumeratorClass,
 		"Comparable": s.ComparableClass,
 		"GC":         s.GCClass,
@@ -1187,6 +1191,9 @@ func New(opts Options) *State {
 	s.installComplexLibrary()
 	s.installMathLibrary()
 	s.installSetLibrary()
+	s.installStructLibrary()
+	s.installDataLibrary()
+	s.installDataInstanceMethods()
 	s.installModuleExtensionLibrary()
 	s.markBuiltinOperatorMethods()
 	s.bopRedefined = false
@@ -3817,12 +3824,17 @@ func (s *State) objectDupMethod(ctx context.Context, self Value, args []Value, k
 		copyData := newSetData()
 		copyData.entries.entries = append([]hashEntry(nil), data.entries.entries...)
 		duplicate = ObjectValue(&Object{class: self.obj.class, data: copyData})
+	case *structData:
+		duplicate = ObjectValue(&Object{class: self.obj.class, data: &structData{values: append([]Value(nil), data.values...)}})
 	default:
 		duplicate = ObjectValue(&Object{class: self.obj.class})
 	}
 	if duplicate.obj != nil {
 		duplicate.obj.class = self.obj.class
 		duplicate.obj.ivars = copyObjectIvars(self.obj)
+		if classIsData(self.obj.class) {
+			duplicate.obj.frozen = true
+		}
 	}
 	return duplicate, nil
 }
