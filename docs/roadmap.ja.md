@@ -364,7 +364,7 @@ conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケー
 
 ### 4.15 言語意味論 L0–L4（2026-11-23）
 
-公式コアテストを 35 から **42 ファイル**、mrbgem テストを **32 スイート**
+公式コアテストを 35 から **42 ファイル**、mrbgem テストを **33 スイート**
 まで拡大した。L0–L4 の順に、各マイルストーンをコミットで固定している。
 
 - **L0** 通過済みコアテストのマニフェスト化
@@ -417,7 +417,7 @@ conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケー
 | `mruby-regexp/required_literal.rb` | 7 / 7 | 全通過 |
 | `mruby-fiber/fiber.rb` | 24 / 25 | GC stress 1 件 skip |
 | `mruby-fiber/fiber2.rb` | 6 / 6 | 全通過 |
-| `mruby-eval/eval.rb` | 28 / 48 | `super` / `yield` / `return`、長さ上限が残る |
+| `mruby-eval/eval.rb` | 45 / 48 | C テストヘルパ 1 件 skip、stress 2 件は未実行 |
 | `mruby-eval/binding.rb` | 13 / 14 | eval 内 proc の共有スコープ 1 件 |
 
 `mruby-regexp` の翻訳層は、Ruby の `^` / `$`、Onigmo の `{,n}` と
@@ -440,9 +440,10 @@ possessive quantifier、`\R` / `\h` / `\H`、`\u{...}`、POSIX bracket、
   - `unicode_case` / `unicode_ctype` / `unicode_property`（Unicode の
     property table と emoji property。`regexp2` の一般カテゴリだけでは
     POSIX bracket の全メンバーを再現できない）
-- `mruby-eval` は可視性の伝播と Binding のスコープを拡張した。残るのは
-  `super` / `yield` / `return` の呼び出しフレームへの転送、名前・pool の
-  長さ上限、`_1` の予約名、irep 解放後の定数キャッシュ。
+- `mruby-eval` は `super` / `yield` / `return` の呼び出しフレーム転送、
+  可視性の伝播、名前・pool の長さ上限、`_1` の扱いまで対応した。
+  `binding.rb` の残り 1 件は、eval が追加したローカルを eval 内で作った
+  proc が共有するケース。定数キャッシュの C テストヘルパは skip する。
 - GC 内部・`ObjectSpace`・C テストヘルパに依存するテストは引き続き除外。
 - VM-7 の性能・GC 作業は継続。
 
@@ -480,7 +481,7 @@ go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ## 7. マイルストーン目安
 
 - **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
-- **VM-4b**: 公式テスト 42 ファイル、mrbgem 32 スイート（達成）
+- **VM-4b**: 公式テスト 42 ファイル、mrbgem 33 スイート（達成）
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
 - **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 / 言語意味論 L0–L4 完了、デバッガと残りの gem suite が残り
