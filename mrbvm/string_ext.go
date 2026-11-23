@@ -797,6 +797,11 @@ func (s *State) stringRemoveSubstring(text string, start, length int) string {
 }
 
 func (s *State) stringExtIndexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) > 0 {
+		if _, ok := regexpOf(args[0]); ok {
+			return s.stringIndexMethod(ctx, self, args, kw, block)
+		}
+	}
 	if len(args) < 1 || len(args) > 2 {
 		return Nil, argumentCountError(s, len(args), "1..2")
 	}
@@ -844,6 +849,11 @@ func (s *State) stringExtIndexMethod(ctx context.Context, self Value, args []Val
 }
 
 func (s *State) stringExtRindexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if len(args) > 0 {
+		if _, ok := regexpOf(args[0]); ok {
+			return s.stringRindexMethod(ctx, self, args, kw, block)
+		}
+	}
 	if len(args) < 1 || len(args) > 2 {
 		return Nil, argumentCountError(s, len(args), "1..2")
 	}

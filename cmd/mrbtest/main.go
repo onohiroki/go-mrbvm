@@ -111,6 +111,7 @@ func runFile(ctx context.Context, path, assertSource string, verbose, stress boo
 	prelude.WriteString("RUBY_ENGINE = \"mruby\"\n")
 	prelude.WriteString("def t_print(*args); print(*args); end\n")
 	prelude.WriteString("def instance_exec_from_c(*args, &block); instance_exec(*args, &block); end\n")
+	prelude.WriteString("def need_backtracking_stack; true; end\n")
 	prelude.WriteString("module AryShared\n")
 	prelude.WriteString("  def self.heap_empty?(ary); ary.empty?; end\n")
 	prelude.WriteString("  def self.copy_ptr_null?(ary); false; end\n")

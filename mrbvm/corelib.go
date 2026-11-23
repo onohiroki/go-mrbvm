@@ -521,67 +521,75 @@ func (s *State) installStringLibrary() {
 		if len(args) != 1 {
 			return Nil, nil
 		}
-		data, ok := regexpOf(args[0])
-		if !ok {
+		if _, ok := regexpOf(args[0]); !ok {
 			return Nil, nil
 		}
-		index := regexpIndex(data.regexp, self.String())
-		if index < 0 {
-			return Nil, nil
-		}
-		return IntValue(int64(index)), nil
+		return s.regexpMatchOperatorMethod(ctx, args[0], []Value{self}, kw, block)
 	})
 	class.define("match", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) < 1 || len(args) > 2 {
 			return Nil, nil
 		}
-		data, ok := regexpOf(args[0])
-		if !ok {
+		if _, ok := regexpOf(args[0]); !ok {
 			return Nil, nil
 		}
-		input := self.String()
-		byteStart := 0
-		if len(args) == 2 && args[1].Kind() == KindInt {
-			position := int(args[1].Int())
-			count := stringCharCount(input)
-			if position < 0 {
-				position += count
-			}
-			if position < 0 || position > count {
-				return Nil, nil
-			}
-			byteStart, _ = stringCharIndexToByte(input, position)
-		}
-		result := s.newMatchDataAt(data.regexp, input, byteStart)
-		if !block.IsNil() && !result.IsNil() {
-			return s.callBlock(ctx, block, []Value{result}, Nil)
-		}
-		return result, nil
+		callArgs := append([]Value{self}, args[1:]...)
+		return s.regexpMatchMethod(ctx, args[0], callArgs, kw, block)
 	})
 	class.define("scan", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 {
 			return ArrayValue(nil), nil
 		}
-		data, ok := regexpOf(args[0])
-		if !ok {
+		if _, ok := regexpOf(args[0]); !ok {
 			return ArrayValue(nil), nil
 		}
-		matches := data.regexp.FindAllStringSubmatch(self.String(), -1)
+		data, err := s.regexpCompiled(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		matches, err := s.regexpAllMatches(args[0], data, self.String())
+		if err != nil {
+			return Nil, err
+		}
+		if len(matches) > 0 {
+			s.regexpSetGlobals(matches[len(matches)-1])
+		} else {
+			s.regexpClearGlobals()
+		}
 		values := make([]Value, 0, len(matches))
 		for _, match := range matches {
-			if len(match) > 1 {
-				captures := make([]Value, len(match)-1)
-				for i, capture := range match[1:] {
-					captures[i] = StringValue(capture)
+			var value Value
+			if len(match.groups) > 2 {
+				captures := make([]Value, len(match.groups)-1)
+				for i := 1; i < len(match.groups); i++ {
+					if match.matched[i] {
+						captures[i-1] = StringValue(match.groups[i])
+					} else {
+						captures[i-1] = Nil
+					}
 				}
-				if len(captures) == 1 {
-					values = append(values, captures[0])
+				value = ArrayValue(captures)
+			} else if len(match.groups) == 2 {
+				if match.matched[1] {
+					value = StringValue(match.groups[1])
 				} else {
-					values = append(values, ArrayValue(captures))
+					value = Nil
 				}
+			} else if match.matched[0] {
+				value = StringValue(match.groups[0])
 			} else {
-				values = append(values, StringValue(match[0]))
+				value = Nil
 			}
+			if !block.IsNil() {
+				if _, err := s.callBlock1(ctx, block, value, Nil); err != nil {
+					return Nil, err
+				}
+				continue
+			}
+			values = append(values, value)
+		}
+		if !block.IsNil() {
+			return self, nil
 		}
 		return ArrayValue(values), nil
 	})
@@ -2309,6 +2317,39 @@ func (s *State) stringIndexMethod(ctx context.Context, self Value, args []Value,
 	if len(args) < 1 || len(args) > 2 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
 	}
+	if _, ok := regexpOf(args[0]); ok {
+		data, err := s.regexpCompiled(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		text := self.String()
+		count := stringCharCount(text)
+		offset := 0
+		if len(args) > 1 {
+			if args[1].Kind() != KindInt {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "offset must be an integer")}
+			}
+			offset = int(args[1].Int())
+			if offset < 0 {
+				offset += count
+			}
+		}
+		if offset < 0 || offset > count {
+			s.regexpClearGlobals()
+			return Nil, nil
+		}
+		byteOffset, _ := stringCharIndexToByte(text, offset)
+		match, err := s.regexpSearch(args[0], data, text, byteOffset)
+		if err != nil {
+			return Nil, err
+		}
+		if match == nil {
+			s.regexpClearGlobals()
+			return Nil, nil
+		}
+		s.regexpSetGlobals(match)
+		return IntValue(int64(charOffsetOfByte(text, match.start))), nil
+	}
 	if args[0].Kind() != KindString {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
 			"no implicit conversion of "+s.classOf(args[0]).name+" into String")}
@@ -2345,6 +2386,48 @@ func (s *State) stringIndexMethod(ctx context.Context, self Value, args []Value,
 func (s *State) stringRindexMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) < 1 || len(args) > 2 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "wrong number of arguments")}
+	}
+	if _, ok := regexpOf(args[0]); ok {
+		data, err := s.regexpCompiled(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		text := self.String()
+		count := stringCharCount(text)
+		position := count
+		if len(args) > 1 {
+			if args[1].Kind() != KindInt {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "position must be an integer")}
+			}
+			position = int(args[1].Int())
+			if position < 0 {
+				position += count
+			}
+		}
+		if position < 0 {
+			s.regexpClearGlobals()
+			return Nil, nil
+		}
+		if position > count {
+			position = count
+		}
+		byteLimit, _ := stringCharIndexToByte(text, position)
+		matches, err := s.regexpAllMatches(args[0], data, text)
+		if err != nil {
+			return Nil, err
+		}
+		var found *matchData
+		for _, match := range matches {
+			if match.start <= byteLimit {
+				found = match
+			}
+		}
+		if found == nil {
+			s.regexpClearGlobals()
+			return Nil, nil
+		}
+		s.regexpSetGlobals(found)
+		return IntValue(int64(charOffsetOfByte(text, found.start))), nil
 	}
 	if args[0].Kind() != KindString {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass,
@@ -2612,22 +2695,32 @@ func (s *State) stringSubMethod(ctx context.Context, self Value, args []Value, k
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "sub expects one or two arguments")}
 	}
 	text := self.String()
-	if data, ok := regexpOf(args[0]); ok {
-		location := data.regexp.FindStringIndex(text)
-		if location == nil {
+	if _, ok := regexpOf(args[0]); ok {
+		data, err := s.regexpCompiled(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		matches, err := s.regexpAllMatches(args[0], data, text)
+		if err != nil {
+			return Nil, err
+		}
+		if len(matches) == 0 {
+			s.regexpClearGlobals()
 			return StringValue(text), nil
 		}
+		match := matches[0]
+		s.regexpSetGlobals(match)
 		var replacement string
 		if !block.IsNil() {
-			result, err := s.callBlock(ctx, block, []Value{StringValue(text[location[0]:location[1]])}, Nil)
+			result, err := s.callBlock(ctx, block, []Value{StringValue(match.groups[0])}, Nil)
 			if err != nil {
 				return Nil, err
 			}
 			replacement = result.ToS()
 		} else if len(args) == 2 {
-			replacement = data.regexp.ReplaceAllString(text[location[0]:location[1]], rubyReplacement(args[1].String()))
+			replacement = expandRegexpReplacement(args[1].String(), match)
 		}
-		return StringValue(text[:location[0]] + replacement + text[location[1]:]), nil
+		return StringValue(text[:match.start] + replacement + text[match.end:]), nil
 	}
 	pattern := args[0].String()
 	if pattern == "" {
@@ -2665,20 +2758,37 @@ func (s *State) stringGsubMethod(ctx context.Context, self Value, args []Value, 
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "gsub expects one or two arguments")}
 	}
 	text := self.String()
-	if data, ok := regexpOf(args[0]); ok {
-		if !block.IsNil() {
-			return StringValue(data.regexp.ReplaceAllStringFunc(text, func(match string) string {
-				result, err := s.callBlock(ctx, block, []Value{StringValue(match)}, Nil)
-				if err != nil || result.IsNil() {
-					return match
+	if _, ok := regexpOf(args[0]); ok {
+		data, err := s.regexpCompiled(args[0])
+		if err != nil {
+			return Nil, err
+		}
+		matches, err := s.regexpAllMatches(args[0], data, text)
+		if err != nil {
+			return Nil, err
+		}
+		if len(matches) == 0 {
+			s.regexpClearGlobals()
+			return StringValue(text), nil
+		}
+		var builder strings.Builder
+		position := 0
+		for _, match := range matches {
+			builder.WriteString(text[position:match.start])
+			if !block.IsNil() {
+				result, err := s.callBlock(ctx, block, []Value{StringValue(match.groups[0])}, Nil)
+				if err != nil {
+					return Nil, err
 				}
-				return result.ToS()
-			})), nil
+				builder.WriteString(result.ToS())
+			} else if len(args) == 2 {
+				builder.WriteString(expandRegexpReplacement(args[1].String(), match))
+			}
+			position = match.end
 		}
-		if len(args) == 2 {
-			return StringValue(data.regexp.ReplaceAllString(text, rubyReplacement(args[1].String()))), nil
-		}
-		return StringValue(text), nil
+		builder.WriteString(text[position:])
+		s.regexpSetGlobals(matches[len(matches)-1])
+		return StringValue(builder.String()), nil
 	}
 	pattern := args[0].String()
 	if pattern == "" {

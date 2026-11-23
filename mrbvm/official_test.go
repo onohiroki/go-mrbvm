@@ -92,6 +92,7 @@ func testPrelude(assertSource string) string {
 	program.WriteString("RUBY_ENGINE = \"mruby\"\n")
 	program.WriteString("def t_print(*args); print(*args); end\n")
 	program.WriteString("def instance_exec_from_c(*args, &block); instance_exec(*args, &block); end\n")
+	program.WriteString("def need_backtracking_stack; true; end\n")
 	program.WriteString("module AryShared\n")
 	program.WriteString("  def self.heap_empty?(ary); ary.empty?; end\n")
 	program.WriteString("  def self.copy_ptr_null?(ary); false; end\n")

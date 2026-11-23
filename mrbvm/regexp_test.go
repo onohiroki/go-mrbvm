@@ -42,7 +42,7 @@ p m2.named_captures
 	if _, err := state.Run(context.Background(), data); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}
-	want := "\"a(b+)c\"\n2\ntrue\ntrue\n\"abbbc\"\n\"bbb\"\n[\"abbbc\", \"bbb\"]\n\"xx\"\n\"yy\"\n1\n\"aXc\"\n\"a#b#\"\n\"a<1>b<2>\"\n[\"1\", \"2\", \"3\"]\n\"a\\\\.b\"\ntrue\ntrue\n1\n\"A\"\n[:letter, :digit]\n{\"letter\" => \"A\", \"digit\" => \"1\"}\n"
+	want := "\"a(b+)c\"\n2\ntrue\ntrue\n\"abbbc\"\n\"bbb\"\n[\"abbbc\", \"bbb\"]\n\"xx\"\n\"yy\"\n1\n\"aXc\"\n\"a#b#\"\n\"a<1>b<2>\"\n[\"1\", \"2\", \"3\"]\n\"a\\\\.b\"\ntrue\ntrue\n1\n\"A\"\n[\"letter\", \"digit\"]\n{\"letter\" => \"A\", \"digit\" => \"1\"}\n"
 	if got := out.String(); got != want {
 		t.Fatalf("output mismatch:\n got %q\nwant %q", got, want)
 	}

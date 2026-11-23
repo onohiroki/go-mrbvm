@@ -299,6 +299,16 @@ func New(opts Options) *State {
 	})
 	s.BasicObjectClass.define("__send__", s.objectSendMethod)
 	s.ClassClass.define("new", s.classNewMethod)
+	s.ClassClass.define("allocate", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		class, ok := s.asClass(self)
+		if !ok {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a class")}
+		}
+		if class == s.MatchDataClass || s.classIsSubclass(class, s.MatchDataClass) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.NoMethodErrorClass, "undefined method 'allocate' for Class")}
+		}
+		return ObjectValue(&Object{class: class}), nil
+	})
 	s.ClassClass.define("superclass", s.classSuperclassMethod)
 	s.ModuleClass.define("name", s.classDisplayNameMethod)
 	s.ClassClass.define("name", s.classNameMethod)
