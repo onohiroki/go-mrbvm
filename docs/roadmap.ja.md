@@ -364,7 +364,7 @@ conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケー
 
 ### 4.15 言語意味論 L0–L4（2026-11-23）
 
-公式コアテストを 35 から **42 ファイル**、mrbgem テストを **18 スイート**
+公式コアテストを 35 から **42 ファイル**、mrbgem テストを **32 スイート**
 まで拡大した。L0–L4 の順に、各マイルストーンをコミットで固定している。
 
 - **L0** 通過済みコアテストのマニフェスト化
@@ -383,13 +383,17 @@ conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケー
     `Math` モジュール）
   - `Regexp` / `MatchData`（`dlclark/regexp2`、オプション畳み込み、
     `escape` / `union`、`$~` / `$1`–`$9` / `` $& `` / `` $` `` / `$'` /
-    `$+`、`String` の regexp メソッド）
+    `$+`、`String` / `Symbol` の regexp メソッド、Onigmo 構文の翻訳層）
   - `Fiber`（goroutine + 協調スケジューラ、`transfer` / `raise` /
     `storage`、per-fiber VM スタック）
   - `eval` / `Binding` / `load` / `require`（`Options.Compiler` 注入。
     VM コアはコンパイラをリンクしない）
+- **L5 相当（C gem のネイティブ移植）**
+  - `Set`（挿入順 Hash 表、再入時の比較、集合演算）
+  - `Struct`（クラス生成、位置/keyword 初期化、値等価、パターンマッチ）
+  - `Data`（不変メンバー、`with`、`deconstruct_keys`、freeze）
 
-通過状況（このスプリントの計測）:
+通過状況（2026-11-23 時点）:
 
 | スイート | OK / Total | 備考 |
 | --- | ---: | --- |
@@ -399,19 +403,46 @@ conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケー
 | `mruby-method` | 39 / 40 | ObjectSpace テスト 1 件 skip |
 | `mruby-rational` | 150 / 150 | Complex 連携を含む |
 | `mruby-complex` | 82 / 82 | Math 連携を含む |
-| `mruby-regexp/regexp.rb` | 45 / 45 | Onigmo 構文の全 suite は未対応 |
+| `mruby-set/set.rb` | 49 / 50 | ObjectSpace 1 件 skip |
+| `mruby-struct/struct.rb` | 47 / 50 | ObjectSpace 3 件 skip |
+| `mruby-data/data.rb` | 19 / 21 | ObjectSpace 2 件 skip |
+| `mruby-regexp/regexp.rb` | 45 / 45 | 全通過 |
+| `mruby-regexp/string_regexp.rb` | 73 / 74 | C engine の step/stack limit 1 件 skip |
+| `mruby-regexp/string_index.rb` | 40 / 43 | 上記 1 件 + ObjectSpace 2 件 skip |
+| `mruby-regexp/symbol_regexp.rb` | 11 / 11 | 全通過 |
+| `mruby-regexp/match_data.rb` | 55 / 55 | 全通過 |
+| `mruby-regexp/capture_slots.rb` | 5 / 5 | 全通過 |
+| `mruby-regexp/end_anchor_window.rb` | 10 / 10 | 全通過 |
+| `mruby-regexp/linebreak_escape.rb` | 4 / 4 | `\R` 翻訳を含む |
+| `mruby-regexp/required_literal.rb` | 7 / 7 | 全通過 |
 | `mruby-fiber/fiber.rb` | 24 / 25 | GC stress 1 件 skip |
 | `mruby-fiber/fiber2.rb` | 6 / 6 | 全通過 |
+| `mruby-eval/eval.rb` | 28 / 48 | `super` / `yield` / `return`、長さ上限が残る |
+| `mruby-eval/binding.rb` | 13 / 14 | eval 内 proc の共有スコープ 1 件 |
+
+`mruby-regexp` の翻訳層は、Ruby の `^` / `$`、Onigmo の `{,n}` と
+possessive quantifier、`\R` / `\h` / `\H`、`\u{...}`、POSIX bracket、
+名前付きグループの番号規則（同名グループの分離、名前付きがある場合の
+無名グループの非捕捉化）を `regexp2` の構文に写す。byte-indexed 文字列は
+1 byte = 1 rune に写して検索する。
 
 ### 4.16 残作業（2026-11-23 時点）
 
-- `Regexp` の Onigmo 構文 suite（`regexp_syntax` / `string_regexp` /
-  `match_data` など）は未対応。`regexp2` と Onigmo の構文差を吸収する
-  翻訳層が必要。
-- `Set` / `Struct` / `Data` は C gem 実装が未移植。mrblib だけでは
-  動かないため、ネイティブ実装が必要。
-- `mruby-eval` の完全 suite は可視性・`super` / `yield` / `return`・
-  長さ上限のケースが残る（現在 25/48）。
+- `mruby-regexp` の次の suite は `regexp2` が表現できない構文、または
+  C engine の内部状態に依存するため除外している:
+  - `regexp_call`（`\g<name>` のサブルーチン呼び出し・再帰）
+  - `regexp_syntax`（absent repeater `(?~...)`、conditional、`\K`、
+    class intersection、nested class、C の stack/step limit）
+  - `regexp_utf8`（invalid UTF-8 の byte 単位マッチ、`\x` byte と
+    character の区別、C engine の byte-mode）
+  - `backref_scope`（呼び出しスコープごとの `$~` 保存と C テストヘルパ）
+  - `ascii_case` / `ascii_ctype`（ASCII ctype build 専用）
+  - `unicode_case` / `unicode_ctype` / `unicode_property`（Unicode の
+    property table と emoji property。`regexp2` の一般カテゴリだけでは
+    POSIX bracket の全メンバーを再現できない）
+- `mruby-eval` は可視性の伝播と Binding のスコープを拡張した。残るのは
+  `super` / `yield` / `return` の呼び出しフレームへの転送、名前・pool の
+  長さ上限、`_1` の予約名、irep 解放後の定数キャッシュ。
 - GC 内部・`ObjectSpace`・C テストヘルパに依存するテストは引き続き除外。
 - VM-7 の性能・GC 作業は継続。
 
@@ -449,7 +480,7 @@ go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ## 7. マイルストーン目安
 
 - **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
-- **VM-4b**: 公式テスト 42 ファイル、mrbgem 18 スイート（達成）
+- **VM-4b**: 公式テスト 42 ファイル、mrbgem 32 スイート（達成）
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
 - **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 / 言語意味論 L0–L4 完了、デバッガと残りの gem suite が残り
