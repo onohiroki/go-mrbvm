@@ -35,3 +35,9 @@ numeric.rb
 autoload.rb
 hash.rb
 string.rb
+class.rb
+iterations.rb
+lang.rb
+literals.rb
+module.rb
+unicode.rb
