@@ -31,6 +31,8 @@ type callFrame struct {
 	lineTextFor int
 	env         *environment
 	cref        *Class
+	superStart  int
+	superBase   *Class
 }
 
 type exceptionScope struct {
@@ -113,6 +115,10 @@ func leaveFrame(s *State, entryException Value, regs []Value, env *environment, 
 }
 
 func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, targetClass *Class, args []Value, kw Value, block Value, capturedEnv *environment, mid string, owner *Class, cref *Class, strict bool) (Value, error) {
+	superStart := s.pendingSuperStart
+	s.pendingSuperStart = -1
+	superBase := s.pendingSuperBase
+	s.pendingSuperBase = nil
 	s.callDepth++
 	if s.maxDepth > 0 && s.callDepth > s.maxDepth {
 		s.callDepth--
@@ -163,7 +169,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 	lineAt := program.lineAt
 	jumpAt := program.jumpAt
 	binaryOps := program.binaryOps
-	frame := callFrame{file: irep.Filename, method: mid, env: frameEnv, cref: cref}
+	frame := callFrame{file: irep.Filename, method: mid, env: frameEnv, cref: cref, superStart: superStart, superBase: superBase}
 	entryException := s.currentException
 	var exceptionScopes []exceptionScope
 	s.frames = append(s.frames, frame)
@@ -1438,6 +1444,7 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			}
 			var m *method
 			var ok bool
+			superIndex := -1
 			if _, isClassMethod := owner.classMethods[mid]; isClassMethod {
 				if owner.super != nil {
 					m, ok = owner.super.lookupClassMethod(mid)
@@ -1446,17 +1453,26 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 					m, ok = s.classOf(self).lookup(mid)
 				}
 			} else {
-				chain := classAncestors(s.classOf(self))
+				chainClass := s.classOf(self)
+				if superBase != nil {
+					chainClass = superBase
+				}
+				chain := classAncestors(chainClass)
 				start := 0
-				for i, ancestor := range chain {
-					if ancestor == owner {
-						start = i + 1
-						break
+				if superStart >= 0 {
+					start = superStart + 1
+				} else {
+					for i, ancestor := range chain {
+						if ancestor == owner {
+							start = i + 1
+							break
+						}
 					}
 				}
 				for i := start; i < len(chain); i++ {
 					if candidate, found := chain[i].methods[mid]; found {
 						m, ok = candidate, true
+						superIndex = i
 						break
 					}
 				}
@@ -1508,7 +1524,15 @@ func (s *State) executeFrame(ctx context.Context, irep *Irep, self Value, target
 			if line := lineAt[pc]; line != 0 {
 				s.frames[len(s.frames)-1].line = int(line)
 			}
+			if superIndex >= 0 {
+				s.pendingSuperStart = superIndex
+			}
+			if superBase != nil {
+				s.pendingSuperBase = superBase
+			}
 			result, err := s.invoke(ctx, m, self, args, kw, block)
+			s.pendingSuperStart = -1
+			s.pendingSuperBase = nil
 			s.releaseValues(args)
 			if err != nil {
 				np, rv, done, fatal := dispatch(err, in.Offset)
@@ -2645,6 +2669,15 @@ func (s *State) call(ctx context.Context, recv Value, name string, args []Value,
 }
 
 func (s *State) invoke(ctx context.Context, m *method, recv Value, args []Value, kw Value, block Value) (Value, error) {
+	if m.body != nil {
+		copyData := *m.body
+		frameName := m.name
+		if m.originalName != "" {
+			frameName = m.originalName
+		}
+		copyData.mid = frameName
+		return s.executeFrame(ctx, copyData.irep, recv, copyData.targetClass, args, kw, block, copyData.env, frameName, m.owner, copyData.cref, copyData.strict)
+	}
 	if m.native != nil {
 		// Callers may pass a pooled buffer that is reused once the call
 		// returns. Native methods must copy the slice if they retain it; see
@@ -2655,7 +2688,11 @@ func (s *State) invoke(ctx context.Context, m *method, recv Value, args []Value,
 	if methodCref == nil {
 		methodCref = m.owner
 	}
-	return s.executeFrame(ctx, m.irep, recv, m.owner, args, kw, block, nil, m.name, m.owner, methodCref, true)
+	frameName := m.name
+	if m.originalName != "" {
+		frameName = m.originalName
+	}
+	return s.executeFrame(ctx, m.irep, recv, m.owner, args, kw, block, nil, frameName, m.owner, methodCref, true)
 }
 
 type binaryOp uint8

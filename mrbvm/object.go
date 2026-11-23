@@ -112,6 +112,8 @@ type Class struct {
 
 type method struct {
 	notImplemented bool
+	body           *blockData
+	originalName   string
 	owner          *Class
 	cref           *Class
 	name           string
@@ -255,6 +257,7 @@ type generatorData struct {
 // pass a collector block to an arbitrary object's each method.
 type nativeBlockData struct {
 	fn       func(ctx context.Context, args []Value) (Value, error)
+	fnFull   func(ctx context.Context, args []Value, kw Value, block Value) (Value, error)
 	strict   bool
 	arity    int
 	hasArity bool

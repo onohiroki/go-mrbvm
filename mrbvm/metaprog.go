@@ -370,10 +370,11 @@ func (s *State) metaprogDefineSingletonMethod(ctx context.Context, self Value, a
 	if len(args) == 2 {
 		switch args[1].Kind() {
 		case KindObject:
-			if data, ok := args[1].obj.data.(*blockData); ok {
+			if _, ok := args[1].obj.data.(*blockData); ok {
 				body = args[1]
-				_ = data
 			} else if _, ok := args[1].obj.data.(*nativeBlockData); ok {
+				body = args[1]
+			} else if _, ok := args[1].obj.data.(*methodObjectData); ok {
 				body = args[1]
 			} else {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type")}
@@ -393,12 +394,52 @@ func (s *State) metaprogDefineSingletonMethod(ctx context.Context, self Value, a
 		s.ensureClassObject(singleton)
 		self.obj.singleton = singleton
 	}
-	singleton.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		if data, ok := body.obj.data.(*blockData); ok {
-			copyData := *data
-			copyData.mid = name
-			return s.executeFrame(ctx, copyData.irep, self, copyData.targetClass, args, kw, block, copyData.env, name, copyData.owner, copyData.cref, copyData.strict)
+	if data, ok := methodObjectOf(body); ok {
+		if class, isClass := s.asClass(self); isClass {
+			if data.method == nil || data.owner == nil || !s.isA(self, data.owner) {
+				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "bind argument must be an instance of Class")}
+			}
+			copied := *data.method
+			copied.owner = class
+			copied.name = name
+			if copied.originalName == "" {
+				copied.originalName = data.method.name
+			}
+			class.classMethods[name] = &copied
+			if err := s.notifyMethodDefinition(ctx, class, name); err != nil {
+				return Nil, err
+			}
+			return SymbolValue(name), nil
 		}
+		copied, err := s.methodFromBody(body, singleton, name)
+		if err != nil {
+			return Nil, err
+		}
+		singleton.methods[name] = copied
+		if err := s.notifyMethodDefinition(ctx, singleton, name); err != nil {
+			return Nil, err
+		}
+		return SymbolValue(name), nil
+	}
+	if data, ok := body.obj.data.(*blockData); ok {
+		copyData := *data
+		copyData.mid = name
+		if class, isClass := s.asClass(self); isClass {
+			methodValue := &method{owner: class, name: name, irep: data.irep, body: &copyData}
+			class.classMethods[name] = methodValue
+			if err := s.notifyMethodDefinition(ctx, class, name); err != nil {
+				return Nil, err
+			}
+		} else {
+			methodValue := &method{owner: singleton, name: name, irep: data.irep, body: &copyData}
+			singleton.methods[name] = methodValue
+			if err := s.notifyMethodDefinition(ctx, singleton, name); err != nil {
+				return Nil, err
+			}
+		}
+		return SymbolValue(name), nil
+	}
+	singleton.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return s.callBlockWithSelfAndBlock(ctx, body, self, args, kw, block)
 	})
 	if err := s.notifyMethodDefinition(ctx, singleton, name); err != nil {

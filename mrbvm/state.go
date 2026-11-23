@@ -59,6 +59,8 @@ type State struct {
 	HashClass              *Class
 	RangeClass             *Class
 	ProcClass              *Class
+	MethodClass            *Class
+	UnboundMethodClass     *Class
 	EnumerableClass        *Class
 	EnumeratorClass        *Class
 	ComparableClass        *Class
@@ -100,13 +102,15 @@ type State struct {
 
 	TopSelf Value
 
-	globals          map[string]Value
-	constants        map[string]Value
-	stdin            io.Reader
-	stdout           io.Writer
-	stderr           io.Writer
-	currentException Value
-	initErr          error
+	globals           map[string]Value
+	pendingSuperStart int
+	pendingSuperBase  *Class
+	constants         map[string]Value
+	stdin             io.Reader
+	stdout            io.Writer
+	stderr            io.Writer
+	currentException  Value
+	initErr           error
 
 	arrayIndexBuiltin   *method
 	arraySetBuiltin     *method
@@ -168,6 +172,7 @@ func New(opts Options) *State {
 		eqSeen:              make(map[objectPair]bool),
 		immediateSingletons: make(map[Kind]*Class),
 		globals:             make(map[string]Value),
+		pendingSuperStart:   -1,
 		constants:           make(map[string]Value),
 		stdin:               stdin,
 		stdout:              stdout,
@@ -214,6 +219,8 @@ func New(opts Options) *State {
 	s.HashClass = newClass("Hash", s.ObjectClass)
 	s.RangeClass = newClass("Range", s.ObjectClass)
 	s.ProcClass = newClass("Proc", s.ObjectClass)
+	s.MethodClass = newClass("Method", s.ObjectClass)
+	s.UnboundMethodClass = newClass("UnboundMethod", s.ObjectClass)
 	s.EnumerableClass = newClass("Enumerable", nil)
 	s.EnumerableClass.isModule = true
 	s.EnumeratorClass = newClass("Enumerator", s.ObjectClass)
@@ -276,6 +283,13 @@ func New(opts Options) *State {
 		s.ensureClassObject(class)
 	}
 
+	s.BasicObjectClass.define("__id__", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		if len(args) != 0 || !kw.IsNil() {
+			return Nil, argumentCountError(s, len(args), "0")
+		}
+		return IntValue(objectIdentityID(self)), nil
+	})
+	s.BasicObjectClass.define("__send__", s.objectSendMethod)
 	s.ClassClass.define("new", s.classNewMethod)
 	s.ClassClass.define("superclass", s.classSuperclassMethod)
 	s.ModuleClass.define("name", s.classDisplayNameMethod)
@@ -561,7 +575,11 @@ func New(opts Options) *State {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type (expected Proc)")}
 			}
 			if _, ok := body.obj.data.(*blockData); !ok {
-				return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type (expected Proc)")}
+				if _, ok := body.obj.data.(*methodObjectData); !ok {
+					if _, ok := body.obj.data.(*nativeBlockData); !ok {
+						return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "wrong argument type (expected Proc)")}
+					}
+				}
 			}
 		} else if body.IsNil() {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "no block given")}
@@ -569,14 +587,49 @@ func New(opts Options) *State {
 		if err := s.ensureMutable(self); err != nil {
 			return Nil, err
 		}
-		class.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-			if data, ok := body.obj.data.(*blockData); ok {
-				copyData := *data
-				copyData.mid = name
-				return s.executeFrame(ctx, copyData.irep, self, copyData.targetClass, args, kw, block, copyData.env, name, copyData.owner, copyData.cref, copyData.strict)
+		if _, ok := body.obj.data.(*methodObjectData); ok {
+			copied, err := s.methodFromBody(body, class, name)
+			if err != nil {
+				return Nil, err
 			}
-			return s.callBlockWithSelfAndBlock(ctx, body, self, args, kw, block)
-		})
+			if class.singletonOf != nil {
+				class.singletonOf.classMethods[name] = copied
+				if class.defaultVisibility == "private" {
+					class.singletonOf.privateClassMethods[name] = true
+				} else if class.defaultVisibility == "protected" {
+					class.singletonOf.protectedClassMethods[name] = true
+				}
+			} else {
+				class.methods[name] = copied
+				delete(class.undefMethods, name)
+				class.applyVisibility(name)
+			}
+			if err := s.notifyMethodDefinition(ctx, class, name); err != nil {
+				return Nil, err
+			}
+			return SymbolValue(name), nil
+		}
+		if data, ok := body.obj.data.(*blockData); ok {
+			copyData := *data
+			copyData.mid = name
+			methodValue := &method{owner: class, name: name, irep: data.irep, body: &copyData}
+			if class.singletonOf != nil {
+				class.singletonOf.classMethods[name] = methodValue
+				if class.defaultVisibility == "private" {
+					class.singletonOf.privateClassMethods[name] = true
+				} else if class.defaultVisibility == "protected" {
+					class.singletonOf.protectedClassMethods[name] = true
+				}
+			} else {
+				class.methods[name] = methodValue
+				delete(class.undefMethods, name)
+				class.applyVisibility(name)
+			}
+		} else {
+			class.define(name, func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+				return s.callBlockWithSelfAndBlock(ctx, body, self, args, kw, block)
+			})
+		}
 		if err := s.notifyMethodDefinition(ctx, class, name); err != nil {
 			return Nil, err
 		}
@@ -823,7 +876,7 @@ func New(opts Options) *State {
 		"Integer": s.IntegerClass,
 		"Float":   s.FloatClass, "String": s.StringClass, "Symbol": s.SymbolClass,
 		"Array": s.ArrayClass, "Hash": s.HashClass, "Range": s.RangeClass,
-		"Proc": s.ProcClass, "Enumerable": s.EnumerableClass,
+		"Proc": s.ProcClass, "Method": s.MethodClass, "UnboundMethod": s.UnboundMethodClass, "Enumerable": s.EnumerableClass,
 		"Enumerator":    s.EnumeratorClass,
 		"Comparable":    s.ComparableClass,
 		"GC":            s.GCClass,
@@ -1082,6 +1135,7 @@ func New(opts Options) *State {
 	s.installMetaprogLibrary()
 	s.installBacktraceLibrary()
 	s.installKernelModuleFunctions()
+	s.installMethodClasses()
 	s.installModuleExtensionLibrary()
 	s.markBuiltinOperatorMethods()
 	s.bopRedefined = false
@@ -4417,6 +4471,11 @@ func (s *State) procCallMethod(ctx context.Context, self Value, args []Value, kw
 			return result, err
 		}
 	}
+	if self.obj != nil {
+		if native, ok := self.obj.data.(*nativeBlockData); ok && native.fnFull != nil {
+			return native.fnFull(ctx, args, kw, block)
+		}
+	}
 	return s.callBlock(ctx, self, args, kw)
 }
 
@@ -4496,11 +4555,14 @@ func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Val
 		return s.callBlock(ctx, proc, args, kw)
 	}
 	if block.Kind() != KindObject || block.obj == nil {
-		return Nil, fmt.Errorf("mrbvm: no block given")
+		return Nil, &unwindSignal{kind: unwindException, value: newException(s.LocalJumpErrorClass, "no block given (yield)")}
 	}
 	if data, ok := block.obj.data.(*nativeBlockData); ok {
 		// Native blocks may retain the slice; callers such as callBlock1
 		// pass stack-backed buffers.
+		if data.fnFull != nil {
+			return data.fnFull(ctx, append([]Value(nil), args...), kw, Nil)
+		}
 		return data.fn(ctx, append([]Value(nil), args...))
 	}
 	data, ok := block.obj.data.(*blockData)
