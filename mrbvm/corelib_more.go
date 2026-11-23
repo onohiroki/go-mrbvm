@@ -15,6 +15,7 @@ func (s *State) installAdvancedCoreLibrary() {
 	s.installAdvancedArrayLibrary()
 	s.installArrayExtensionLibrary()
 	s.installAdvancedHashLibrary()
+	s.installHashExtensionLibrary()
 	s.installAdvancedStringLibrary()
 	s.installAdvancedIntegerLibrary()
 	s.installFloatLibrary()

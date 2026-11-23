@@ -1955,6 +1955,9 @@ func (s *State) hashMergeBangMethod(ctx context.Context, self Value, args []Valu
 	if err := s.ensureMutable(self); err != nil {
 		return Nil, err
 	}
+	if len(args) == 0 {
+		return Nil, argumentCountError(s, 0, "1+")
+	}
 	for _, arg := range args {
 		other, ok := hashDataOf(arg)
 		if !ok {
