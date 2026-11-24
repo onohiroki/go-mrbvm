@@ -84,6 +84,37 @@ corpus は `go-mrbc` の `conformance` パッケージに埋め込まれ、`go-m
 テストからも同じケースが実行される。片方だけ通るコンパイラ変更を防ぐためで
 ある。
 
+## ライセンスと依存ファイル
+
+2 つのリポジトリはどちらも MIT License で公開する。ライセンス関連の
+ファイルは次のとおり。
+
+| ファイル | 内容 |
+| --- | --- |
+| `LICENSE` | オリジナルのソースとドキュメントの MIT License |
+| `NOTICE` | 配布バイナリ向けの帰属表示 |
+| `THIRD_PARTY_LICENSES.md` | コンポーネント、バージョン、ライセンス、著作権 |
+| `third_party/` | 同梱コンポーネントのライセンス全文と NOTICE |
+
+直接依存・リンクするコンポーネント:
+
+| コンポーネント | 利用箇所 | ライセンス |
+| --- | --- | --- |
+| `go-mrbc/bytecode` | `go-mrbvm` コア | MIT |
+| [dlclark/regexp2](https://github.com/dlclark/regexp2) | `go-mrbvm` の Regexp/MatchData | MIT |
+| [go-ruby-prism](https://github.com/danielgatis/go-ruby-prism) | `go-mrbc`、`gomruby`、`gomirb` | MIT |
+| [Prism](https://github.com/ruby/prism)（`prism.wasm` として同梱） | go-ruby-prism 経由 | MIT |
+| [wazero](https://github.com/tetratelabs/wazero) | Prism の WebAssembly ランタイム | Apache-2.0 |
+
+mruby (MIT) はバイトコードと VM の仕様、およびテスト入力として参照する。
+mruby の C コードはリンクしない。ChibiRuby (MIT) は先行実装の参照のみで、
+コードはコピーしていない。
+
+ソース配布では `go.mod`、`go.sum`、`LICENSE`、`NOTICE`、
+`THIRD_PARTY_LICENSES.md`、`third_party/` を保持する。バイナリ配布では、
+リンクしたコードに対応するライセンスと NOTICE を含める。詳細な
+コンポーネント表は各リポジトリの `THIRD_PARTY_LICENSES.md` にある。
+
 ## 互換ターゲット
 
 - mruby 4.0.0

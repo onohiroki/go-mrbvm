@@ -7,9 +7,11 @@ This product includes knowledge derived from the mruby project. The RITE
 binary format, opcode definitions, argument specifications, and bytecode
 semantics implemented by this project follow mruby 4.0.0.
 
-The VM library consumes the bytecode package from go-mrbc:
+The VM library consumes the bytecode package from go-mrbc and links the
+regexp2 engine:
 
 - go-mrbc (MIT), Copyright (c) 2026 go-mrbc contributors
+- dlclark/regexp2 v1.11.5 (MIT), Copyright (c) Doug Clark
 
 The gomruby command can also link the compiler stack:
 
@@ -25,6 +27,7 @@ The Apache-2.0 license and NOTICE for wazero, and the MIT license texts for
 the other components, are included in THIRD_PARTY_LICENSES.md and third_party/.
 
 https://github.com/onohiroki/go-mrbc
+https://github.com/dlclark/regexp2
 https://github.com/ruby/prism
 https://github.com/danielgatis/go-ruby-prism
 https://github.com/tetratelabs/wazero

@@ -91,6 +91,35 @@ The corpus is embedded by the `conformance` package in `go-mrbc`.
 `go-mrbvm` runs the same cases in its own tests, so a compiler change cannot
 silently pass only one side.
 
+## Licensing and dependency files
+
+Both repositories are released under the MIT License. The licensing files are:
+
+| File | Purpose |
+| --- | --- |
+| `LICENSE` | MIT license for the original source and documentation |
+| `NOTICE` | Attribution summary for the distributed binaries |
+| `THIRD_PARTY_LICENSES.md` | Component list, versions, licenses, and copyright |
+| `third_party/` | Full license texts and notices for bundled components |
+
+Direct and linked dependencies:
+
+| Component | Used by | License |
+| --- | --- | --- |
+| `go-mrbc/bytecode` | `go-mrbvm` core | MIT |
+| [dlclark/regexp2](https://github.com/dlclark/regexp2) | `go-mrbvm` Regexp/MatchData | MIT |
+| [go-ruby-prism](https://github.com/danielgatis/go-ruby-prism) | `go-mrbc`, `gomruby`, `gomirb` | MIT |
+| [Prism](https://github.com/ruby/prism) (embedded as `prism.wasm`) | through go-ruby-prism | MIT |
+| [wazero](https://github.com/tetratelabs/wazero) | WebAssembly runtime for Prism | Apache-2.0 |
+
+mruby (MIT) is the bytecode and VM reference and test input; no mruby C code is
+linked. ChibiRuby (MIT) is referenced as prior art; no code is copied.
+
+A source distribution keeps `go.mod`, `go.sum`, `LICENSE`, `NOTICE`,
+`THIRD_PARTY_LICENSES.md`, and `third_party/`. A binary distribution includes
+the license and notice files for the code it links. The full component tables
+are in each repository's `THIRD_PARTY_LICENSES.md`.
+
 ## Compatibility target
 
 Both projects target:

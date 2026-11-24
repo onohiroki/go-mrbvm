@@ -250,8 +250,9 @@ The original source code and documentation in this repository are licensed
 under the **MIT License**; see [LICENSE](LICENSE).
 
 The `mrbvm` library consumes [go-mrbc](https://github.com/onohiroki/go-mrbc)'s
-`bytecode` package (MIT). The `gomruby` command can also link the compiler
-stack:
+`bytecode` package (MIT) and links [dlclark/regexp2](https://github.com/dlclark/regexp2)
+(MIT) for regular expressions. The `gomruby` and `gomirb` commands can also
+link the compiler stack:
 
 - [go-ruby-prism](https://github.com/danielgatis/go-ruby-prism) — MIT
 - [Prism](https://github.com/ruby/prism) — MIT, embedded as `prism.wasm`

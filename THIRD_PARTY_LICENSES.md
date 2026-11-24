@@ -10,11 +10,13 @@ texts are included in [`third_party/`](third_party/).
 
 ## The `mrbvm` library
 
-The `mrbvm` package imports the bytecode contract from `go-mrbc`:
+The `mrbvm` package imports the bytecode contract from `go-mrbc` and links the
+pure-Go regular expression engine:
 
-| Component | License | Copyright |
-| --- | --- | --- |
-| [go-mrbc](https://github.com/onohiroki/go-mrbc) `bytecode` | MIT | Copyright (c) 2026 go-mrbc contributors |
+| Component | Version | License | Copyright | License text |
+| --- | --- | --- | --- | --- |
+| [go-mrbc](https://github.com/onohiroki/go-mrbc) `bytecode` | local/tagged release | MIT | Copyright (c) 2026 go-mrbc contributors | https://github.com/onohiroki/go-mrbc/blob/main/LICENSE |
+| [dlclark/regexp2](https://github.com/dlclark/regexp2) | v1.11.5 | MIT | Copyright (c) Doug Clark | [LICENSE](third_party/regexp2/LICENSE) |
 
 The VM library itself does not link go-ruby-prism, Prism, or wazero.
 
@@ -33,6 +35,11 @@ compiler stack:
 
 A `gomruby` build that only runs precompiled `.mrb` files still links the same
 runtime code, so the notices apply to the binary distribution.
+
+## The `gomirb` command
+
+`gomirb` also compiles Ruby source entered at the prompt, so its binary links
+the same compiler stack as `gomruby`.
 
 ## Referenced but not linked
 
