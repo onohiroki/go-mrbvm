@@ -5,6 +5,9 @@ The two modules are released in dependency order. `go-mrbvm` imports
 
 Replace the example version `v0.1.0` with the version being released.
 
+`origin` is the public GitHub remote and `private` is the Gitea
+development remote. Push release tags to both.
+
 ## 1. Prepare a release candidate
 
 Both repositories:
@@ -53,6 +56,7 @@ go run ./cmd/gomirb -v
 ```sh
 cd go-mrbc
 git tag -a v0.1.0 -m "go-mrbc v0.1.0"
+git push private v0.1.0
 git push origin v0.1.0
 ```
 
@@ -93,6 +97,7 @@ implementation work.
 ```sh
 cd go-mrbvm
 git tag -a v0.1.0 -m "go-mrbvm v0.1.0"
+git push private v0.1.0
 git push origin v0.1.0
 ```
 
