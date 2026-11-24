@@ -33,15 +33,22 @@ jobs:
         with:
           ruby-version: "3.3"
 
-      - name: Build mruby 4.0.0
+      # The official test manifests target the development tree used locally,
+      # not the 4.0.0 release tag. Keep the test-input checkout pinned.
+      - name: Fetch the mruby development test tree
         working-directory: go-mrbvm
         run: |
-          git clone --depth 1 --branch 4.0.0 https://github.com/mruby/mruby.git mruby
-          cd mruby
+          git clone https://github.com/mruby/mruby.git mruby
+          git -C mruby checkout dbab56510f298159ebc04f6159eb91253ba7549e
+
+      - name: Build mruby 4.0.0 reference
+        run: |
+          git clone --depth 1 --branch 4.0.0 https://github.com/mruby/mruby.git mruby-4.0.0
+          cd mruby-4.0.0
           rake
 
-      - name: Add mruby to PATH
-        run: echo "$GITHUB_WORKSPACE/go-mrbvm/mruby/build/host/bin" >> "$GITHUB_PATH"
+      - name: Add mruby 4.0.0 to PATH
+        run: echo "$GITHUB_WORKSPACE/mruby-4.0.0/build/host/bin" >> "$GITHUB_PATH"
 
       - name: Vet and test
         working-directory: go-mrbvm
