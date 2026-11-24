@@ -1,5 +1,7 @@
 # go-mrbvm
 
+[![CI](https://github.com/onohiroki/go-mrbvm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/onohiroki/go-mrbvm/actions/workflows/ci.yml)
+
 A pure-Go implementation of the mruby 4.0.0 virtual machine.
 
 `go-mrbvm` executes **RITE 04.00** bytecode produced by
