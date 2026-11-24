@@ -15,7 +15,7 @@ pure-Go regular expression engine:
 
 | Component | Version | License | Copyright | License text |
 | --- | --- | --- | --- | --- |
-| [go-mrbc](https://github.com/onohiroki/go-mrbc) `bytecode` | local/tagged release | MIT | Copyright (c) 2026 go-mrbc contributors | https://github.com/onohiroki/go-mrbc/blob/main/LICENSE |
+| [go-mrbc](https://github.com/onohiroki/go-mrbc) `bytecode` | local/tagged release | MIT | Copyright (c) 2026 onohiroki and go-mrbc contributors | https://github.com/onohiroki/go-mrbc/blob/main/LICENSE |
 | [dlclark/regexp2](https://github.com/dlclark/regexp2) | v1.11.5 | MIT | Copyright (c) Doug Clark | [LICENSE](third_party/regexp2/LICENSE) |
 
 The VM library itself does not link go-ruby-prism, Prism, or wazero.
@@ -27,7 +27,7 @@ compiler stack:
 
 | Component | Version | License | Copyright | License text |
 | --- | --- | --- | --- | --- |
-| [go-mrbc](https://github.com/onohiroki/go-mrbc) | local/tagged release | MIT | Copyright (c) 2026 go-mrbc contributors | https://github.com/onohiroki/go-mrbc/blob/main/LICENSE |
+| [go-mrbc](https://github.com/onohiroki/go-mrbc) | local/tagged release | MIT | Copyright (c) 2026 onohiroki and go-mrbc contributors | https://github.com/onohiroki/go-mrbc/blob/main/LICENSE |
 | [go-ruby-prism](https://github.com/danielgatis/go-ruby-prism) | v1.3.0 | MIT | Copyright (c) 2024 Daniel Gatis | [LICENSE.txt](third_party/go-ruby-prism/LICENSE.txt) |
 | [Prism](https://github.com/ruby/prism) (embedded as `prism.wasm`) | as bundled by go-ruby-prism v1.3.0 | MIT | Copyright 2022-present, Ruby developers | [LICENSE.md](third_party/prism/LICENSE.md) |
 | [wazero](https://github.com/tetratelabs/wazero) | v1.9.0 | Apache-2.0 | Copyright 2020-2023 wazero authors | [LICENSE](third_party/wazero/LICENSE), [NOTICE](third_party/wazero/NOTICE) |

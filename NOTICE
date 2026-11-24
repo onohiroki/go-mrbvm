@@ -1,5 +1,5 @@
 go-mrbvm
-Copyright (c) 2026 go-mrbvm contributors
+Copyright (c) 2026 onohiroki and go-mrbvm contributors
 
 go-mrbvm is licensed under the MIT License. See LICENSE.
 
@@ -10,7 +10,7 @@ semantics implemented by this project follow mruby 4.0.0.
 The VM library consumes the bytecode package from go-mrbc and links the
 regexp2 engine:
 
-- go-mrbc (MIT), Copyright (c) 2026 go-mrbc contributors
+- go-mrbc (MIT), Copyright (c) 2026 onohiroki and go-mrbc contributors
 - dlclark/regexp2 v1.11.5 (MIT), Copyright (c) Doug Clark
 
 The gomruby command can also link the compiler stack:
