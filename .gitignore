@@ -7,3 +7,5 @@ dist/
 ChibiRuby
 mruby
 !mrbvm/mrblib.mrb
+gomirb
+gomruby
