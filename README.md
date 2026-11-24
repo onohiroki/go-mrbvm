@@ -7,6 +7,29 @@ A pure-Go implementation of the mruby 4.0.0 virtual machine.
 It is the runtime side of the macro-language stack; `go-mrbc` remains the
 compiler and the reference implementation is always C mruby 4.0.0.
 
+## Background
+
+I started this project after attending hadashiA's talk at RubyKaigi 2026,
+[mruby on C#: From VM Implementation to Game Scripting](https://rubykaigi.org/2026/presentations/hadashiA.html).
+The talk presents [ChibiRuby](https://github.com/hadashiA/ChibiRuby), a pure-C#
+mruby VM, and argues that running mruby without C compilation makes it much
+easier to embed in cross-platform applications. I came away with the conclusion
+that, when mruby is used as an application's macro language, it should be
+implemented in the language the application itself is written in. For a Go
+application, that means an mruby implementation in Go.
+
+I first built only the VM. It could execute RITE bytecode, but my intended use —
+macro scripts supplied as Ruby source — also needed a bytecode compiler. I
+discarded that VM and restarted from the compiler.
+[`go-mrbc`](https://github.com/onohiroki/go-mrbc) is the compiler, and this
+repository is the VM I rebuilt afterwards to run its output.
+
+The compiler was feasible because
+[go-ruby-prism](https://github.com/danielgatis/go-ruby-prism) exposes the Prism
+parser to pure Go (Prism itself is embedded as WebAssembly), so no Ruby parser
+had to be written from scratch. The implementation was written entirely with AI
+coding assistance.
+
 ## Status
 
 **VM-4 through VM-6 are implemented; VM-7 has started.** The VM loads RITE 04.00 through
@@ -243,6 +266,10 @@ The conformance corpus is embedded by the sibling `go-mrbc` repository's
 - `mrbtest` — run official mruby test files with `assert.rb`
 - `gomirb` — persistent-State REPL
 - `vmbench` — measure a script and optionally compare with reference `mruby`
+
+## Author
+
+Created and maintained by [onohiroki](https://github.com/onohiroki).
 
 ## License
 
