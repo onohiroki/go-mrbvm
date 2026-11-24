@@ -34,13 +34,14 @@ jobs:
           ruby-version: "3.3"
 
       - name: Build mruby 4.0.0
+        working-directory: go-mrbvm
         run: |
           git clone --depth 1 --branch 4.0.0 https://github.com/mruby/mruby.git mruby
           cd mruby
           rake
 
       - name: Add mruby to PATH
-        run: echo "$GITHUB_WORKSPACE/mruby/build/host/bin" >> "$GITHUB_PATH"
+        run: echo "$GITHUB_WORKSPACE/go-mrbvm/mruby/build/host/bin" >> "$GITHUB_PATH"
 
       - name: Vet and test
         working-directory: go-mrbvm
