@@ -26,16 +26,25 @@ func (s *State) installStringRegexpLibrary() {
 	class.define("partition", s.stringRegexpPartitionMethod(false))
 	class.define("rpartition", s.stringRegexpPartitionMethod(true))
 	class.define("split", s.stringRegexpSplitMethod)
-	class.define("sub", s.stringRegexpSubMethod)
-	class.define("sub!", s.stringRegexpSubBangMethod)
-	class.define("gsub", s.stringRegexpGsubMethod)
-	class.define("gsub!", s.stringRegexpGsubBangMethod)
+	s.installStringRegexpSubstitutionMethods()
 	class.define("scan", s.stringRegexpScanMethod)
 	class.define("start_with?", s.stringRegexpStartWithMethod)
 
 	s.SymbolClass.define("match", s.symbolRegexpDelegate("match"))
 	s.SymbolClass.define("match?", s.symbolRegexpDelegate("match?"))
 	s.SymbolClass.define("=~", s.symbolRegexpDelegate("=~"))
+}
+
+// installStringRegexpSubstitutionMethods installs the substitution methods
+// that accept both String and Regexp patterns. mruby's string.rb defines the
+// same names for String patterns only, so this is also called after loading
+// mrblib to keep the regexp-aware implementations authoritative.
+func (s *State) installStringRegexpSubstitutionMethods() {
+	class := s.StringClass
+	class.define("sub", s.stringRegexpSubMethod)
+	class.define("sub!", s.stringRegexpSubBangMethod)
+	class.define("gsub", s.stringRegexpGsubMethod)
+	class.define("gsub!", s.stringRegexpGsubBangMethod)
 }
 
 func (s *State) symbolRegexpDelegate(name string) NativeFunc {

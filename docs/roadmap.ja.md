@@ -118,6 +118,9 @@
 - 将来的に precompiled bytecode を `go:generate` + `go:embed` する。
 
 **判断ポイント**: ネイティブ実装と mrblib のどちらを正とするか。
+名前が重なる場合はネイティブ実装を正とし、mrblib は不足分を補う。
+たとえば mrblib の `string.rb` は String パターン専用の `sub` / `gsub`
+を定義するため、ロード後に Regexp 対応のネイティブ実装を再登録する。
 
 ### 4.6 ホスト API の設計着手（完了）
 

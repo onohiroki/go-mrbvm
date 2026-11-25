@@ -10,6 +10,36 @@ import (
 	"github.com/onohiroki/go-mrbvm/mrbvm"
 )
 
+// TestLoadMrblibRegexpSubGsub verifies that mrblib's String-only
+// sub/gsub definitions do not shadow the regexp-aware native ones.
+func TestLoadMrblibRegexpSubGsub(t *testing.T) {
+	source := `
+p "abc".sub(/b/, "X")
+p "a1b2".gsub(/\d/, "#")
+p "a1b2".gsub(/(\d)/, '<\1>')
+p "abc".sub("b", "X")
+p "a1b2".gsub("1", "X")
+p "abc".sub(/b/) { |m| m.upcase }
+s = "abc"
+p s.sub!(/b/) { |m| m.upcase }
+p s
+t = "a1b2"
+p t.gsub!(/\d/) { |m| (m.to_i * 2).to_s }
+p t
+`
+	data := compileSource(t, "mrblib_sub_gsub.rb", source)
+	var out bytes.Buffer
+	state := mrbvm.New(mrbvm.Options{Stdout: &out, LoadMrblib: true})
+	if _, err := state.Run(context.Background(), data); err != nil {
+		t.Fatalf("run: %v\n%s", err, out.String())
+	}
+	want := "\"aXc\"\n\"a#b#\"\n\"a<1>b<2>\"\n\"aXc\"\n\"aXb2\"\n" +
+		"\"aBc\"\n\"aBc\"\n\"aBc\"\n\"a2b4\"\n\"a2b4\"\n"
+	if got := out.String(); got != want {
+		t.Fatalf("output mismatch:\n got %q\nwant %q", got, want)
+	}
+}
+
 // TestLoadMrblib verifies the opt-in mrblib subset. It exercises Enumerable
 // and Comparable on user-defined classes plus NameError's Ruby-level
 // initialize.

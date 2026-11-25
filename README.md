@@ -73,7 +73,9 @@ coding assistance.
 - reflection: `instance_variables`, `instance_variable_get` / `set`,
   `const_get` / `set`, `ancestors`, and `methods`
 - an opt-in precompiled mrblib subset (`Options.LoadMrblib`):
-  `10error`, `compar`, `enum`, `array`, `hash`, `string`, `range`
+  `10error`, `compar`, `enum`, `array`, `hash`, `string`, `range`;
+  native implementations stay authoritative where names overlap, so
+  `String#sub` / `gsub` keep their Regexp support
 - a host API: `DefineFunction`, `DefineClass`, `DefineModule`,
   `DefineConst`, `Send`, `Raise`, and value conversion helpers
 - sandbox limits: instructions, wall time, call depth, output bytes,

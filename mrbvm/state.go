@@ -37,7 +37,9 @@ type Options struct {
 
 	// LoadMrblib loads a precompiled subset of mruby's Ruby-level core
 	// library (10error, compar, enum, array, hash, string, range) at VM
-	// creation.
+	// creation. Native implementations stay authoritative where mrblib
+	// defines the same method; in particular String#sub / gsub keep their
+	// Regexp support.
 	LoadMrblib bool
 
 	// Policy is the capability allow-list exposed to embeddings.
@@ -1225,6 +1227,12 @@ func New(opts Options) *State {
 		irep, err := s.LoadBytecode(mrblibBytecode)
 		if err == nil {
 			_, err = s.Execute(context.Background(), irep)
+		}
+		if err == nil {
+			// mrblib's string.rb redefines sub/gsub/sub!/gsub! for String
+			// patterns only. Restore the regexp-aware natives so Regexp
+			// patterns keep working with LoadMrblib enabled.
+			s.installStringRegexpSubstitutionMethods()
 		}
 		s.initErr = err
 	}
