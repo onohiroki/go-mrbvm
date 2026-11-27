@@ -54,6 +54,7 @@ func TestStringSizeLimitBypasses(t *testing.T) {
 		{"center", `"x".center(100)` + "\n"},
 		{"repeat", `"x" * 100` + "\n"},
 		{"format", `"%100s" % "x"` + "\n"},
+		{"gsub", `"aaaaaaaa".gsub(/a/, "bb")` + "\n"},
 		{"join", `(["x"] * 100).join` + "\n"},
 	}
 	for _, tc := range cases {

@@ -889,7 +889,7 @@ func (s *State) stringRegexpSubMethod(ctx context.Context, self Value, args []Va
 			return Nil, err
 		}
 		s.regexpSetGlobals(match)
-		return StringValue(text[:match.start] + expanded + text[match.end:]), nil
+		return s.checkedStringValue(text[:match.start] + expanded + text[match.end:])
 	}
 	if len(args) == 2 && useHash {
 		piece, err := s.replacementPiece(ctx, Nil, replacement, hashData, text[match.start:match.end])
@@ -897,14 +897,14 @@ func (s *State) stringRegexpSubMethod(ctx context.Context, self Value, args []Va
 			return Nil, err
 		}
 		s.regexpSetGlobals(match)
-		return StringValue(text[:match.start] + piece + text[match.end:]), nil
+		return s.checkedStringValue(text[:match.start] + piece + text[match.end:])
 	}
 	s.regexpSetGlobals(match)
 	piece, err := s.replacementPiece(ctx, block, Nil, nil, text[match.start:match.end])
 	if err != nil {
 		return Nil, err
 	}
-	return StringValue(text[:match.start] + piece + text[match.end:]), nil
+	return s.checkedStringValue(text[:match.start] + piece + text[match.end:])
 }
 
 func (s *State) stringRegexpSubBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -960,7 +960,11 @@ func (s *State) stringRegexpSubBangMethod(ctx context.Context, self Value, args 
 		if err != nil {
 			return Nil, err
 		}
-		if err := s.assignString(self, text[:match.start]+expanded+text[match.end:]); err != nil {
+		result := text[:match.start] + expanded + text[match.end:]
+		if err := s.checkStringSize(len(result)); err != nil {
+			return Nil, err
+		}
+		if err := s.assignString(self, result); err != nil {
 			return Nil, err
 		}
 		return self, nil
@@ -975,7 +979,11 @@ func (s *State) stringRegexpSubBangMethod(ctx context.Context, self Value, args 
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RuntimeErrorClass, "string modified")}
 		}
 		current := self.String()
-		if err := s.assignString(self, current[:match.start]+piece+current[match.end:]); err != nil {
+		result := current[:match.start] + piece + current[match.end:]
+		if err := s.checkStringSize(len(result)); err != nil {
+			return Nil, err
+		}
+		if err := s.assignString(self, result); err != nil {
 			return Nil, err
 		}
 		return self, nil
@@ -989,7 +997,11 @@ func (s *State) stringRegexpSubBangMethod(ctx context.Context, self Value, args 
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.RuntimeErrorClass, "string modified")}
 	}
 	current := self.String()
-	if err := s.assignString(self, current[:match.start]+piece+current[match.end:]); err != nil {
+	result := current[:match.start] + piece + current[match.end:]
+	if err := s.checkStringSize(len(result)); err != nil {
+		return Nil, err
+	}
+	if err := s.assignString(self, result); err != nil {
 		return Nil, err
 	}
 	return self, nil
@@ -1200,20 +1212,20 @@ func (s *State) stringRegexpGsubMethod(ctx context.Context, self Value, args []V
 			if err != nil {
 				return Nil, err
 			}
-			return StringValue(result), nil
+			return s.checkedStringValue(result)
 		}
 		replacement := args[1].ToS()
 		result, err := s.regexpGsubReplacement(ctx, self, pattern, literalPattern, literal, replacement, Nil, nil)
 		if err != nil {
 			return Nil, err
 		}
-		return StringValue(result), nil
+		return s.checkedStringValue(result)
 	}
 	result, err := s.regexpGsubWalk(ctx, pattern, literalPattern, literal, self, block, Nil, nil)
 	if err != nil {
 		return Nil, err
 	}
-	return StringValue(result), nil
+	return s.checkedStringValue(result)
 }
 
 func (s *State) stringRegexpGsubBangMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1269,6 +1281,9 @@ func (s *State) stringRegexpGsubBangMethod(ctx context.Context, self Value, args
 		result, err = s.regexpGsubWalk(ctx, pattern, literalPattern, literal, self, block, Nil, nil)
 	}
 	if err != nil {
+		return Nil, err
+	}
+	if err := s.checkStringSize(len(result)); err != nil {
 		return Nil, err
 	}
 	if err := s.assignString(self, result); err != nil {

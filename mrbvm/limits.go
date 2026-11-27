@@ -65,6 +65,13 @@ func (s *State) checkStringSize(size int) error {
 	return nil
 }
 
+func (s *State) checkedStringValue(text string) (Value, error) {
+	if err := s.checkStringSize(len(text)); err != nil {
+		return Nil, err
+	}
+	return StringValue(text), nil
+}
+
 func (s *State) reserveFiber() error {
 	s.resourceMu.Lock()
 	defer s.resourceMu.Unlock()
