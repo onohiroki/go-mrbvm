@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,7 +48,9 @@ func TestRunSourceFile(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr)
 	}
-	want := "[2, \"" + path + "\", false]\n"
+	// Ruby's p escapes backslashes in inspected strings, so Windows paths
+	// appear with doubled separators.
+	want := "[2, " + strconv.Quote(path) + ", false]\n"
 	if stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
