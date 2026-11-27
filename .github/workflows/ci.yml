@@ -5,6 +5,22 @@ on:
   pull_request:
 
 jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Unit tests
+        run: go test ./... -timeout 15m
+
   test:
     runs-on: ubuntu-latest
     steps:

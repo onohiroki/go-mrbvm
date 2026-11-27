@@ -140,7 +140,11 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if programPath != "" {
 		file, err := os.Open(programPath)
 		if err != nil {
-			fmt.Fprintf(stderr, "Cannot open program file. (%s)\n", programPath)
+			if info, statErr := os.Stat(programPath); statErr == nil && info.IsDir() {
+				fmt.Fprintf(stderr, "Cannot read program file. (%s)\n", programPath)
+			} else {
+				fmt.Fprintf(stderr, "Cannot open program file. (%s)\n", programPath)
+			}
 			return 1
 		}
 		defer file.Close()

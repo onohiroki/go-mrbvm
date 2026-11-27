@@ -115,7 +115,11 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if programPath != "-" {
 			file, err := os.Open(programPath)
 			if err != nil {
-				fmt.Fprintf(stderr, "%s: Cannot open program file: %s\n", prog, programPath)
+				if info, statErr := os.Stat(programPath); statErr == nil && info.IsDir() {
+					fmt.Fprintf(stderr, "%s: Cannot read program file: %s\n", prog, programPath)
+				} else {
+					fmt.Fprintf(stderr, "%s: Cannot open program file: %s\n", prog, programPath)
+				}
 				return 1
 			}
 			if info, statErr := file.Stat(); statErr == nil && info.IsDir() {
