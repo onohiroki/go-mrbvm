@@ -7,6 +7,8 @@ require (
 	github.com/onohiroki/go-mrbc v0.1.1
 )
 
+retract v0.1.1 // published go.sum did not match the module checksum
+
 require (
 	github.com/danielgatis/go-ruby-prism v1.3.0 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
