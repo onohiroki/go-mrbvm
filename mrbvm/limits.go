@@ -3,6 +3,7 @@ package mrbvm
 import (
 	"errors"
 	"io"
+	"runtime"
 	"time"
 )
 
@@ -15,6 +16,7 @@ var (
 	errStringLimit      = errors.New("mrbvm: string size limit exceeded")
 	errFiberLimit       = errors.New("mrbvm: fiber limit exceeded")
 	errEnumeratorLimit  = errors.New("mrbvm: enumerator limit exceeded")
+	errMemoryLimit      = errors.New("mrbvm: memory limit exceeded")
 )
 
 type outputBudget struct {
@@ -116,8 +118,17 @@ func (s *State) checkExecutionLimits() error {
 	if s.outputBudget != nil && s.outputBudget.exceeded {
 		return errOutputLimit
 	}
-	if s.maxTime > 0 && s.instructionCount%1024 == 0 && time.Since(s.startTime) > s.maxTime {
-		return errTimeLimit
+	if s.instructionCount%1024 == 0 {
+		if s.maxTime > 0 && time.Since(s.startTime) > s.maxTime {
+			return errTimeLimit
+		}
+		if s.maxMemory > 0 {
+			var stats runtime.MemStats
+			runtime.ReadMemStats(&stats)
+			if stats.HeapAlloc > s.memoryBase+uint64(s.maxMemory) {
+				return errMemoryLimit
+			}
+		}
 	}
 	return nil
 }
@@ -130,5 +141,11 @@ func (s *State) resetLimits() {
 	if s.outputBudget != nil {
 		s.outputBudget.remaining = s.maxOutputBytes
 		s.outputBudget.exceeded = false
+	}
+	if s.maxMemory > 0 {
+		runtime.GC()
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		s.memoryBase = stats.HeapAlloc
 	}
 }

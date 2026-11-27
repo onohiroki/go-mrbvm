@@ -105,6 +105,36 @@ func TestOutputLimitWithExecute(t *testing.T) {
 	}
 }
 
+func TestMemoryLimit(t *testing.T) {
+	source := `
+a = []
+200.times do
+  a << ("x" * 10000)
+end
+`
+	_, _, err := runWithBothOutputs(t, source, mrbvm.Options{MaxMemory: 1 << 20})
+	if err == nil || !strings.Contains(err.Error(), "memory limit") {
+		t.Fatalf("err = %v, want memory limit", err)
+	}
+}
+
+func TestMemoryLimitDisabled(t *testing.T) {
+	source := `
+a = []
+10.times do
+  a << ("x" * 100)
+end
+p :ok
+`
+	out, _, err := runWithBothOutputs(t, source, mrbvm.Options{})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(out, ":ok") {
+		t.Fatalf("output = %q, want :ok", out)
+	}
+}
+
 func TestLimitsResetPerExecute(t *testing.T) {
 	long, err := compileEvalForTest(context.Background(), []byte("while true; end\n"), mrbvm.CompileOptions{FilePath: "loop.rb"})
 	if err != nil {

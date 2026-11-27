@@ -57,6 +57,7 @@ type Options struct {
 	MaxStringSize   int
 	MaxFibers       int
 	MaxEnumerators  int
+	MaxMemory       int64
 
 	// Deterministic fixes Time.now and object_id values for reproducible
 	// execution. Clock overrides Time.now when set.
@@ -195,6 +196,8 @@ type State struct {
 	maxOutputBytes     int
 	maxFibers          int
 	maxEnumerators     int
+	maxMemory          int64
+	memoryBase         uint64
 	resourceMu         sync.Mutex
 	activeFibers       int
 	activeEnumerators  int
@@ -253,6 +256,7 @@ func New(opts Options) *State {
 		maxOutputBytes:  opts.MaxOutputBytes,
 		maxFibers:       opts.MaxFibers,
 		maxEnumerators:  opts.MaxEnumerators,
+		maxMemory:       opts.MaxMemory,
 		startTime:       time.Now(),
 		gcEnabled:       true,
 		compiler:        opts.Compiler,
@@ -273,7 +277,7 @@ func New(opts Options) *State {
 		s.stdout = &limitWriter{writer: stdout, budget: s.outputBudget}
 		s.stderr = &limitWriter{writer: stderr, budget: s.outputBudget}
 	}
-	s.limitsEnabled = s.maxInstructions > 0 || s.maxTime > 0 || s.outputBudget != nil
+	s.limitsEnabled = s.maxInstructions > 0 || s.maxTime > 0 || s.outputBudget != nil || s.maxMemory > 0
 	s.BasicObjectClass = newClass("BasicObject", nil)
 	s.ObjectClass = newClass("Object", s.BasicObjectClass)
 	s.KernelClass = newClass("Kernel", nil)

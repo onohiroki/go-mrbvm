@@ -375,7 +375,8 @@ Required limits:
 - maximum array/hash/string size
 - maximum active Fiber and Enumerator counts
 - maximum output size (stdout and stderr share one budget)
-- memory accounting (planned; not yet enforced)
+- `MaxMemory`: coarse heap-growth accounting checked at instruction boundaries
+- precise per-object memory accounting and `ObjectSpace` are planned
 
 Capability policy:
 
