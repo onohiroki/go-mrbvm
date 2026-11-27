@@ -86,6 +86,10 @@ coding assistance.
   and `require`; standard I/O is host-controlled
 - `State.Close` stops the fiber scheduler, waits for internal fiber/enumerator
   goroutines, and closes files still open through `File`
+- deterministic `Time.now` / `object_id`, active Fiber/Enumerator limits, and a
+  coarse `MaxMemory` budget
+- seeded random differential runs (`vmcompat -random`) and nightly soak /
+  benchmark workflows
 - `Rational` (arbitrary-precision exact parts), `Complex`, and the `Math`
   module
 - `Method` / `UnboundMethod` reflection (`call`, `arity`, `parameters`,
@@ -129,6 +133,7 @@ Design and plan:
 - [docs/ecosystem.md](docs/ecosystem.md) — how go-mrbc and go-mrbvm fit together
 - [docs/ecosystem.ja.md](docs/ecosystem.ja.md) — リポジトリの関係（日本語）
 - [docs/releasing.md](docs/releasing.md) — release order and module tagging
+- [docs/release-notes/v0.1.1.md](docs/release-notes/v0.1.1.md) — v0.1.1 hardening notes
 - [docs/architecture.md](docs/architecture.md) — architecture and design
 - [docs/implementation-plan.ja.md](docs/implementation-plan.ja.md) — implementation plan (Japanese)
 - [docs/roadmap.ja.md](docs/roadmap.ja.md) — phases, sprint plan, and quality gates (Japanese)
@@ -166,7 +171,7 @@ The shared contract is deliberately small:
 - instruction encoding/decoding
 - the conformance corpus owned by `go-mrbc` and consumed by both
 
-The released module pins `github.com/onohiroki/go-mrbc` v0.1.0. During
+The released module pins `github.com/onohiroki/go-mrbc` v0.1.1. During
 coordinated development, a working tree may instead use a `replace` for the
 sibling `../go-mrbc` checkout; a published release removes the replace and
 pins a tagged compiler version. The order is described in
@@ -192,11 +197,11 @@ not part of the module and are not required to build it.
 
 ## Getting started
 
-The v0.1.0 release is available from the Go module proxy:
+The v0.1.1 release is available from the Go module proxy:
 
 ```sh
-go install github.com/onohiroki/go-mrbvm/cmd/gomruby@v0.1.0
-go install github.com/onohiroki/go-mrbvm/cmd/gomirb@v0.1.0
+go install github.com/onohiroki/go-mrbvm/cmd/gomruby@v0.1.1
+go install github.com/onohiroki/go-mrbvm/cmd/gomirb@v0.1.1
 ```
 
 Or build all commands from a checkout:

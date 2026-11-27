@@ -26,7 +26,7 @@ change and a failing conformance case, then add the VM-side implementation.
 
 ## Development layout
 
-The released module pins `github.com/onohiroki/go-mrbc` v0.1.0, so a plain
+The released module pins `github.com/onohiroki/go-mrbc` v0.1.1, so a plain
 checkout builds without a sibling directory.
 
 For compiler work that needs local `go-mrbc` changes, temporarily use the

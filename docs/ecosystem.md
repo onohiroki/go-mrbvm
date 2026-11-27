@@ -140,7 +140,7 @@ This is part of the public VM contract.
 
 ## Development checkouts
 
-The v0.1.0 release pins `github.com/onohiroki/go-mrbc` v0.1.0, so it builds
+The v0.1.1 release pins `github.com/onohiroki/go-mrbc` v0.1.1, so it builds
 without a sibling checkout. For coordinated development, a working tree may
 use a local replace:
 
