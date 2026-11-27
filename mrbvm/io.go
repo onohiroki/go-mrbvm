@@ -42,7 +42,7 @@ func (s *State) installIOLibrary() {
 			}
 			total += n
 		}
-		if s.output != nil && s.output.exceeded {
+		if s.outputBudget != nil && s.outputBudget.exceeded {
 			return Nil, errOutputLimit
 		}
 		return IntValue(int64(total)), nil
@@ -57,7 +57,7 @@ func (s *State) installIOLibrary() {
 				return Nil, s.ioError(err)
 			}
 		}
-		if s.output != nil && s.output.exceeded {
+		if s.outputBudget != nil && s.outputBudget.exceeded {
 			return Nil, errOutputLimit
 		}
 		return Nil, nil
@@ -77,7 +77,7 @@ func (s *State) installIOLibrary() {
 				return Nil, s.ioError(err)
 			}
 		}
-		if s.output != nil && s.output.exceeded {
+		if s.outputBudget != nil && s.outputBudget.exceeded {
 			return Nil, errOutputLimit
 		}
 		return Nil, nil

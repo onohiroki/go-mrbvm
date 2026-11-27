@@ -133,9 +133,24 @@ func (s *State) installFileLibrary() {
 			return value, nil
 		}
 		result, err := s.callBlockWithSelf(ctx, block, value, []Value{value}, Nil)
-		closeErr := file.Close()
+		data, _ := fileOf(value)
 		if err != nil {
+			s.untrackFile(file)
+			if data == nil || !data.closed {
+				_ = file.Close()
+				if data != nil {
+					data.closed = true
+				}
+			}
 			return Nil, err
+		}
+		if data != nil && data.closed {
+			return result, nil
+		}
+		s.untrackFile(file)
+		closeErr := file.Close()
+		if data != nil {
+			data.closed = true
 		}
 		if closeErr != nil {
 			return Nil, s.ioError(closeErr)
@@ -207,6 +222,7 @@ func (s *State) installFileLibrary() {
 			return Nil, s.ioError(err)
 		}
 		data.closed = true
+		s.untrackFile(data.file)
 		return Nil, nil
 	})
 	fileClass.define("closed?", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -222,6 +238,7 @@ func (s *State) installFileLibrary() {
 }
 
 func (s *State) newFileValue(file *os.File, path string) Value {
+	s.trackFile(file)
 	return ObjectValue(&Object{class: s.FileClass, data: &fileData{file: file, path: path}})
 }
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/onohiroki/go-mrbc/mrbc"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
+	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
 func compileEvalForTest(ctx context.Context, source []byte, opts mrbvm.CompileOptions) (*mrbvm.Irep, error) {
@@ -53,7 +54,7 @@ p evalled_global_method
 `
 	data := compileSource(t, "eval_case.rb", source)
 	var out bytes.Buffer
-	state := mrbvm.New(mrbvm.Options{Stdout: &out, Compiler: compileEvalForTest})
+	state := mrbvm.New(mrbvm.Options{Stdout: &out, Compiler: compileEvalForTest, Policy: sandbox.New().Permit(sandbox.Eval)})
 	if _, err := state.Run(context.Background(), data); err != nil {
 		t.Fatalf("run: %v\n%s", err, out.String())
 	}

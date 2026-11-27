@@ -14,6 +14,7 @@ import (
 	"github.com/onohiroki/go-mrbc/mrbc"
 	"github.com/onohiroki/go-mrbvm/internal/cli"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
+	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
 var optionSpecs = []cli.Option{
@@ -136,7 +137,9 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		Stdout:   stdout,
 		Stderr:   stderr,
 		Compiler: compileEvalSource,
+		Policy:   sandbox.AllowAll(),
 	})
+	defer state.Close()
 	state.SetGlobal("$DEBUG", mrbvm.BoolValue(cfg.debug))
 	state.SetGlobal("$0", mrbvm.StringValue(programName))
 	state.DefineConst(nil, "ARGV", stringArray(programArgs))

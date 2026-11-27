@@ -10,6 +10,7 @@ import (
 
 	"github.com/onohiroki/go-mrbc/mrbc"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
+	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
 // TestOfficialSubset runs the mruby 4.0.0 core tests that go-mrbvm currently
@@ -69,7 +70,8 @@ func runManifest(t *testing.T, manifestPath, root, assertSource string) {
 				t.Fatalf("compile: %v", err)
 			}
 			var out bytes.Buffer
-			state := mrbvm.New(mrbvm.Options{Stdout: &out, Compiler: compileEvalSource})
+			state := mrbvm.New(mrbvm.Options{Stdout: &out, Compiler: compileEvalSource, Policy: sandbox.AllowAll()})
+			defer state.Close()
 			if _, err := state.Run(ctx, preludeBytecode); err != nil {
 				t.Fatalf("run assert.rb: %v\n%s", err, out.String())
 			}

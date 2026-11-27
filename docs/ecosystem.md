@@ -187,7 +187,7 @@ go run ./cmd/runtimecompat -fail -assert mruby/test/assert.rb mruby/test/t mruby
 
 ```sh
 go test ./...
-go run ./cmd/vmcompat -corpus
+go run ./cmd/vmcompat -strict -corpus
 go run ./cmd/mrbtest -manifest testdata/official.txt
 go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ```

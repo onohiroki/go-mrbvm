@@ -18,6 +18,7 @@ import (
 	"github.com/onohiroki/go-mrbc/mrbc"
 	localtoolchain "github.com/onohiroki/go-mrbvm/internal/toolchain"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
+	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
 type result struct {
@@ -29,6 +30,7 @@ type result struct {
 func main() {
 	verbose := flag.Bool("v", false, "print every comparison")
 	strict := flag.Bool("strict", false, "fail when mrbc or mruby is missing")
+	compareStderr := flag.Bool("stderr", false, "compare stderr as well")
 	corpus := flag.Bool("corpus", false, "run every case in the shared conformance corpus")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: vmcompat [-v] [-strict] [-corpus] [file.rb...]")
@@ -86,7 +88,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", name, err)
 				continue
 			}
-			if err := compareFile(ctx, path, mrubyPath, mrbcPath, *verbose); err != nil {
+			if err := compareFile(ctx, path, mrubyPath, mrbcPath, *verbose, *compareStderr); err != nil {
 				failures++
 				fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", name, err)
 			} else if *verbose {
@@ -95,7 +97,7 @@ func main() {
 		}
 	}
 	for _, path := range flag.Args() {
-		if err := compareFile(ctx, path, mrubyPath, mrbcPath, *verbose); err != nil {
+		if err := compareFile(ctx, path, mrubyPath, mrbcPath, *verbose, *compareStderr); err != nil {
 			failures++
 			fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", path, err)
 		} else if *verbose {
@@ -122,7 +124,7 @@ func findMRBC() (string, error) {
 	return "", fmt.Errorf("mrbc not found on PATH")
 }
 
-func compareFile(ctx context.Context, path, mrubyPath, mrbcPath string, verbose bool) error {
+func compareFile(ctx context.Context, path, mrubyPath, mrbcPath string, verbose, compareStderr bool) error {
 	var want result
 	if mrubyPath != "" {
 		run, err := localtoolchain.Run(mrubyPath, path)
@@ -138,7 +140,7 @@ func compareFile(ctx context.Context, path, mrubyPath, mrbcPath string, verbose 
 	}
 	goResult := runVM(ctx, goData)
 	if mrubyPath != "" {
-		if err := sameResult("go-mrbc", goResult, want); err != nil {
+		if err := sameResult("go-mrbc", goResult, want, compareStderr); err != nil {
 			return err
 		}
 	}
@@ -170,7 +172,7 @@ func compareFile(ctx context.Context, path, mrubyPath, mrbcPath string, verbose 
 	}
 	mrbcResult := runVM(ctx, data)
 	if mrubyPath != "" {
-		if err := sameResult("mrbc", mrbcResult, want); err != nil {
+		if err := sameResult("mrbc", mrbcResult, want, compareStderr); err != nil {
 			return err
 		}
 	}
@@ -182,7 +184,8 @@ func compareFile(ctx context.Context, path, mrubyPath, mrbcPath string, verbose 
 
 func runVM(ctx context.Context, data []byte) result {
 	var stdout, stderr bytes.Buffer
-	state := mrbvm.New(mrbvm.Options{Stdout: &stdout, Stderr: &stderr})
+	state := mrbvm.New(mrbvm.Options{Stdout: &stdout, Stderr: &stderr, Policy: sandbox.AllowAll()})
+	defer state.Close()
 	_, err := state.Run(ctx, data)
 	exitCode := 0
 	if err != nil {
@@ -192,9 +195,12 @@ func runVM(ctx context.Context, data []byte) result {
 	return result{stdout: stdout.String(), stderr: stderr.String(), exitCode: exitCode}
 }
 
-func sameResult(label string, got, want result) error {
+func sameResult(label string, got, want result, compareStderr bool) error {
 	if got.stdout != want.stdout {
 		return fmt.Errorf("%s stdout mismatch\n--- got ---\n%s--- want ---\n%s", label, got.stdout, want.stdout)
+	}
+	if compareStderr && got.stderr != want.stderr {
+		return fmt.Errorf("%s stderr mismatch\n--- got ---\n%s--- want ---\n%s", label, got.stderr, want.stderr)
 	}
 	if got.exitCode != want.exitCode {
 		return fmt.Errorf("%s exit status %d, want %d (stderr: %s)", label, got.exitCode, want.exitCode, got.stderr)

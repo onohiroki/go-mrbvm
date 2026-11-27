@@ -15,23 +15,30 @@ var (
 	errStringLimit      = errors.New("mrbvm: string size limit exceeded")
 )
 
-type limitWriter struct {
-	writer    io.Writer
+type outputBudget struct {
 	remaining int
 	exceeded  bool
 }
 
+type limitWriter struct {
+	writer io.Writer
+	budget *outputBudget
+}
+
 func (w *limitWriter) Write(p []byte) (int, error) {
-	if w.remaining <= 0 {
-		w.exceeded = true
+	if w.budget == nil {
+		return w.writer.Write(p)
+	}
+	if w.budget.remaining <= 0 {
+		w.budget.exceeded = true
 		return len(p), nil
 	}
-	if len(p) > w.remaining {
-		p = p[:w.remaining]
-		w.exceeded = true
+	if len(p) > w.budget.remaining {
+		p = p[:w.budget.remaining]
+		w.budget.exceeded = true
 	}
 	n, err := w.writer.Write(p)
-	w.remaining -= n
+	w.budget.remaining -= n
 	return n, err
 }
 
@@ -61,11 +68,22 @@ func (s *State) checkExecutionLimits() error {
 	if s.maxInstructions > 0 && s.instructionCount > s.maxInstructions {
 		return errInstructionLimit
 	}
-	if s.output != nil && s.output.exceeded {
+	if s.outputBudget != nil && s.outputBudget.exceeded {
 		return errOutputLimit
 	}
 	if s.maxTime > 0 && s.instructionCount%1024 == 0 && time.Since(s.startTime) > s.maxTime {
 		return errTimeLimit
 	}
 	return nil
+}
+
+// resetLimits starts a fresh per-execution budget. Instruction and wall-clock
+// limits are scoped to one Execute/Run call, not to the lifetime of a State.
+func (s *State) resetLimits() {
+	s.instructionCount = 0
+	s.startTime = time.Now()
+	if s.outputBudget != nil {
+		s.outputBudget.remaining = s.maxOutputBytes
+		s.outputBudget.exceeded = false
+	}
 }

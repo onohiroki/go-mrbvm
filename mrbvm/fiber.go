@@ -58,8 +58,11 @@ type fiberData struct {
 	status  fiberStatus
 	prev    *fiberData
 	started bool
-	storage Value
-	vm      fiberVMState
+	// shutdownLocked reports that this fiber holds State.shutdownMu while
+	// unwinding on Close.
+	shutdownLocked bool
+	storage        Value
+	vm             fiberVMState
 }
 
 type fiberContextKey struct{}
@@ -273,7 +276,18 @@ func fiberResult(values []Value) Value {
 	}
 }
 
+func (s *State) lockFiberShutdown(data *fiberData) {
+	if data == nil || data == s.rootFiber || data.shutdownLocked {
+		return
+	}
+	s.shutdownMu.Lock()
+	data.shutdownLocked = true
+}
+
 func (s *State) fiberSwitch(ctx context.Context, self Value, args []Value, kind fiberRequestKind, exception Value) (Value, error) {
+	if s.isClosed() {
+		return Nil, ErrStateClosed
+	}
 	target, ok := fiberOf(self)
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not a fiber")}
@@ -296,16 +310,31 @@ func (s *State) fiberSwitch(ctx context.Context, self Value, args []Value, kind 
 	if kind == fiberRequestRaise {
 		request.err = &unwindSignal{kind: unwindException, value: exception}
 	}
-	s.fiberSwitchCh <- request
-	event := <-current.ch
-	s.restoreFiberVM(current)
-	if event.err != nil {
-		return Nil, event.err
+	select {
+	case s.fiberSwitchCh <- request:
+	case <-s.fiberStop:
+		s.lockFiberShutdown(current)
+		s.restoreFiberVM(current)
+		return Nil, ErrStateClosed
 	}
-	return fiberResult(event.values), nil
+	select {
+	case event := <-current.ch:
+		s.restoreFiberVM(current)
+		if event.err != nil {
+			return Nil, event.err
+		}
+		return fiberResult(event.values), nil
+	case <-s.closed:
+		s.lockFiberShutdown(current)
+		s.restoreFiberVM(current)
+		return Nil, ErrStateClosed
+	}
 }
 
 func (s *State) fiberYieldMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if s.isClosed() {
+		return Nil, ErrStateClosed
+	}
 	current := fiberFromContext(ctx)
 	if current == nil || current == s.rootFiber {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.FiberErrorClass, "can't yield from root fiber")}
@@ -317,13 +346,25 @@ func (s *State) fiberYieldMethod(ctx context.Context, self Value, args []Value, 
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.FiberErrorClass, "attempt to yield on a not resumed fiber")}
 	}
 	s.saveFiberVM(current)
-	s.fiberSwitchCh <- fiberSwitchRequest{kind: fiberRequestYield, from: current, target: current.prev, values: append([]Value(nil), args...)}
-	event := <-current.ch
-	s.restoreFiberVM(current)
-	if event.err != nil {
-		return Nil, event.err
+	select {
+	case s.fiberSwitchCh <- fiberSwitchRequest{kind: fiberRequestYield, from: current, target: current.prev, values: append([]Value(nil), args...)}:
+	case <-s.fiberStop:
+		s.lockFiberShutdown(current)
+		s.restoreFiberVM(current)
+		return Nil, ErrStateClosed
 	}
-	return fiberResult(event.values), nil
+	select {
+	case event := <-current.ch:
+		s.restoreFiberVM(current)
+		if event.err != nil {
+			return Nil, event.err
+		}
+		return fiberResult(event.values), nil
+	case <-s.closed:
+		s.lockFiberShutdown(current)
+		s.restoreFiberVM(current)
+		return Nil, ErrStateClosed
+	}
 }
 
 func (s *State) fiberExceptionArg(ctx context.Context, args []Value) (Value, error) {
@@ -347,7 +388,13 @@ func (s *State) fiberExceptionArg(ctx context.Context, args []Value) (Value, err
 
 func (s *State) fiberScheduler() {
 	current := s.rootFiber
-	for request := range s.fiberSwitchCh {
+	for {
+		var request fiberSwitchRequest
+		select {
+		case <-s.fiberStop:
+			return
+		case request = <-s.fiberSwitchCh:
+		}
 		target := request.target
 		from := request.from
 		switch request.kind {
@@ -356,7 +403,9 @@ func (s *State) fiberScheduler() {
 			from.prev = nil
 			target.status = fiberRunning
 			current = target
-			target.ch <- fiberEvent{values: request.values}
+			if !s.sendFiberEvent(target.ch, fiberEvent{values: request.values}) {
+				return
+			}
 		case fiberRequestResume, fiberRequestRaise:
 			status := target.status
 			var failure string
@@ -376,7 +425,9 @@ func (s *State) fiberScheduler() {
 				failure = "cannot raise into an unstarted fiber"
 			}
 			if failure != "" {
-				from.ch <- fiberEvent{err: &unwindSignal{kind: unwindException, value: newException(s.FiberErrorClass, failure)}}
+				if !s.sendFiberEvent(from.ch, fiberEvent{err: &unwindSignal{kind: unwindException, value: newException(s.FiberErrorClass, failure)}}) {
+					return
+				}
 				continue
 			}
 			from.status = fiberResumed
@@ -385,9 +436,11 @@ func (s *State) fiberScheduler() {
 			current = target
 			if !target.started {
 				target.started = true
-				go s.fiberRun(target, request.values, nil)
+				s.startFiber(target, request.values)
 			} else {
-				target.ch <- fiberEvent{values: request.values, err: request.err}
+				if !s.sendFiberEvent(target.ch, fiberEvent{values: request.values, err: request.err}) {
+					return
+				}
 			}
 		case fiberRequestTransfer:
 			status := target.status
@@ -402,7 +455,9 @@ func (s *State) fiberScheduler() {
 					failure = "resuming dead fiber"
 				}
 				if failure != "" {
-					from.ch <- fiberEvent{err: &unwindSignal{kind: unwindException, value: newException(s.FiberErrorClass, failure)}}
+					if !s.sendFiberEvent(from.ch, fiberEvent{err: &unwindSignal{kind: unwindException, value: newException(s.FiberErrorClass, failure)}}) {
+						return
+					}
 					continue
 				}
 				target.prev = nil
@@ -412,9 +467,11 @@ func (s *State) fiberScheduler() {
 			current = target
 			if target != s.rootFiber && !target.started {
 				target.started = true
-				go s.fiberRun(target, request.values, nil)
+				s.startFiber(target, request.values)
 			} else {
-				target.ch <- fiberEvent{values: request.values}
+				if !s.sendFiberEvent(target.ch, fiberEvent{values: request.values}) {
+					return
+				}
 			}
 		case fiberRequestTerminate:
 			if target == nil {
@@ -422,13 +479,46 @@ func (s *State) fiberScheduler() {
 			}
 			target.status = fiberRunning
 			current = target
-			target.ch <- fiberEvent{values: request.values, err: request.err}
+			if !s.sendFiberEvent(target.ch, fiberEvent{values: request.values, err: request.err}) {
+				return
+			}
 		}
 		_ = current
 	}
 }
 
+func (s *State) sendFiberEvent(ch chan fiberEvent, event fiberEvent) bool {
+	select {
+	case ch <- event:
+		return true
+	case <-s.fiberStop:
+		return false
+	}
+}
+
+func (s *State) startFiber(data *fiberData, args []Value) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.fiberRun(data, args, nil)
+	}()
+}
+
 func (s *State) fiberRun(data *fiberData, args []Value, _ *fiberEvent) {
+	defer func() {
+		if data.shutdownLocked {
+			data.shutdownLocked = false
+			s.shutdownMu.Unlock()
+		}
+	}()
+	defer func() {
+		if panicValue := recover(); panicValue != nil {
+			s.fiberPanic(data, panicValue)
+		}
+	}()
+	if s.isClosed() {
+		return
+	}
 	s.restoreFiberVM(data)
 	ctx := context.WithValue(data.ctx, fiberContextKey{}, data)
 	result, err := s.callBlock(ctx, data.block, args, Nil)
@@ -443,7 +533,24 @@ func (s *State) fiberRun(data *fiberData, args []Value, _ *fiberEvent) {
 		target = s.rootFiber
 	}
 	data.prev = nil
-	s.fiberSwitchCh <- fiberSwitchRequest{kind: fiberRequestTerminate, from: data, target: target, values: []Value{result}, err: err}
+	select {
+	case s.fiberSwitchCh <- fiberSwitchRequest{kind: fiberRequestTerminate, from: data, target: target, values: []Value{result}, err: err}:
+	case <-s.fiberStop:
+	}
+}
+
+func (s *State) fiberPanic(data *fiberData, panicValue any) {
+	err := s.recordPanic(panicValue)
+	data.status = fiberTerminated
+	target := data.prev
+	if target == nil {
+		target = s.rootFiber
+	}
+	data.prev = nil
+	select {
+	case s.fiberSwitchCh <- fiberSwitchRequest{kind: fiberRequestTerminate, from: data, target: target, values: []Value{Nil}, err: err}:
+	case <-s.fiberStop:
+	}
 }
 
 func fiberStorageKey(s *State, value Value) (string, error) {

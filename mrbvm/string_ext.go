@@ -1077,7 +1077,11 @@ func (s *State) stringExtLjustMethod(ctx context.Context, self Value, args []Val
 	if pad == "" {
 		return Nil, s.stringExtError(s.ArgumentErrorClass, "zero width padding")
 	}
-	return stringValueLike(self, s.stringPad(self.String(), width, pad, false, true)), nil
+	padded, err := s.stringPad(self.String(), width, pad, false, true)
+	if err != nil {
+		return Nil, err
+	}
+	return stringValueLike(self, padded), nil
 }
 
 func (s *State) stringExtRjustMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1089,7 +1093,11 @@ func (s *State) stringExtRjustMethod(ctx context.Context, self Value, args []Val
 	if pad == "" {
 		return Nil, s.stringExtError(s.ArgumentErrorClass, "zero width padding")
 	}
-	return stringValueLike(self, s.stringPad(self.String(), width, pad, true, false)), nil
+	padded, err := s.stringPad(self.String(), width, pad, true, false)
+	if err != nil {
+		return Nil, err
+	}
+	return stringValueLike(self, padded), nil
 }
 
 func (s *State) stringExtCenterMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1101,7 +1109,11 @@ func (s *State) stringExtCenterMethod(ctx context.Context, self Value, args []Va
 	if pad == "" {
 		return Nil, s.stringExtError(s.ArgumentErrorClass, "zero width padding")
 	}
-	return stringValueLike(self, s.stringPad(self.String(), width, pad, true, true)), nil
+	padded, err := s.stringPad(self.String(), width, pad, true, true)
+	if err != nil {
+		return Nil, err
+	}
+	return stringValueLike(self, padded), nil
 }
 
 func (s *State) stringExtDeletePrefixMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {

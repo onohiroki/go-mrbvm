@@ -238,32 +238,91 @@ func (s *State) enumeratorEnsureLazy(ctx context.Context, data *enumeratorData) 
 	if data.lazy != nil {
 		return data.lazy
 	}
-	lazy := &enumeratorLazy{resume: make(chan enumeratorResume), out: make(chan enumeratorOut)}
+	lazy := &enumeratorLazy{
+		resume: make(chan enumeratorResume),
+		out:    make(chan enumeratorOut),
+		parked: make(chan struct{}),
+		exited: make(chan struct{}),
+	}
 	data.lazy = lazy
 	return lazy
 }
 
 func (s *State) enumeratorStartLazy(ctx context.Context, data *enumeratorData, lazy *enumeratorLazy) {
 	lazy.started = true
+	s.wg.Add(1)
 	go func() {
+		holdingShutdown := false
+		defer func() {
+			if holdingShutdown {
+				s.shutdownMu.Unlock()
+			}
+		}()
+		defer s.wg.Done()
+		defer close(lazy.exited)
+		sentDone := false
+		lockShutdown := func() {
+			if !holdingShutdown {
+				s.shutdownMu.Lock()
+				holdingShutdown = true
+			}
+		}
+		defer func() {
+			if panicValue := recover(); panicValue != nil {
+				err := s.recordPanic(panicValue)
+				if !sentDone {
+					select {
+					case lazy.out <- enumeratorOut{done: true, err: err}:
+					case <-s.closed:
+					}
+				}
+			}
+		}()
 		yield := func(values []Value) (Value, error) {
-			lazy.out <- enumeratorOut{values: append([]Value(nil), values...)}
-			reply := <-lazy.resume
-			if reply.cancel {
-				return Nil, errStopEnumeration
+			select {
+			case lazy.out <- enumeratorOut{values: append([]Value(nil), values...)}:
+			case <-s.closed:
+				lockShutdown()
+				return Nil, ErrStateClosed
 			}
-			if len(reply.values) == 0 {
-				return Nil, nil
+			// Tell the consumer that the producer is parked. The consumer
+			// must not touch the State until this handshake completes: the
+			// producer may still be unwinding the interpreter frame that
+			// called yield.
+			select {
+			case lazy.parked <- struct{}{}:
+			case <-s.closed:
+				lockShutdown()
+				return Nil, ErrStateClosed
 			}
-			return reply.values[0], nil
+			select {
+			case reply := <-lazy.resume:
+				if reply.cancel {
+					return Nil, errStopEnumeration
+				}
+				if len(reply.values) == 0 {
+					return Nil, nil
+				}
+				return reply.values[0], nil
+			case <-s.closed:
+				lockShutdown()
+				return Nil, ErrStateClosed
+			}
 		}
 		result, err := s.enumeratorRun(ctx, data, yield)
 		data.result = result
-		lazy.out <- enumeratorOut{done: true, err: err}
+		select {
+		case lazy.out <- enumeratorOut{done: true, err: err}:
+			sentDone = true
+		case <-s.closed:
+		}
 	}()
 }
 
 func (s *State) enumeratorNextValueList(ctx context.Context, self Value, data *enumeratorData) ([]Value, error) {
+	if s.isClosed() {
+		return nil, ErrStateClosed
+	}
 	lazy := s.enumeratorEnsureLazy(ctx, data)
 	if lazy.hasPending {
 		values := lazy.pending
@@ -283,11 +342,25 @@ func (s *State) enumeratorNextValueList(ctx context.Context, self Value, data *e
 			lazy.feedSet = false
 			lazy.feed = Nil
 		}
-		lazy.resume <- message
+		select {
+		case lazy.resume <- message:
+		case <-s.closed:
+			return nil, ErrStateClosed
+		}
 	}
-	out := <-lazy.out
+	var out enumeratorOut
+	select {
+	case out = <-lazy.out:
+	case <-s.closed:
+		return nil, ErrStateClosed
+	}
 	if out.done {
 		lazy.done = true
+		select {
+		case <-lazy.exited:
+		case <-s.closed:
+			return nil, ErrStateClosed
+		}
 		if out.err != nil {
 			if out.err == errStopEnumeration || s.isStopIteration(out.err) {
 				return nil, &unwindSignal{kind: unwindException, value: newException(s.StopIterationClass, "iteration reached an end")}
@@ -295,6 +368,14 @@ func (s *State) enumeratorNextValueList(ctx context.Context, self Value, data *e
 			return nil, out.err
 		}
 		return nil, &unwindSignal{kind: unwindException, value: newException(s.StopIterationClass, "iteration reached an end")}
+	}
+	// Wait until the producer is parked before returning. Otherwise the
+	// caller could start another enumerator while this producer is still
+	// unwinding its interpreter frame.
+	select {
+	case <-lazy.parked:
+	case <-s.closed:
+		return nil, ErrStateClosed
 	}
 	return out.values, nil
 }
@@ -380,12 +461,42 @@ func (s *State) enumeratorRewindMethod(ctx context.Context, self Value, args []V
 	if !ok {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "not an enumerator")}
 	}
-	if lazy := data.lazy; lazy != nil && lazy.started && !lazy.done {
-		go func() { lazy.resume <- enumeratorResume{cancel: true} }()
-	}
+	s.enumeratorStopLazy(data.lazy)
 	data.lazy = nil
 	data.result = Nil
 	return self, nil
+}
+
+// enumeratorStopLazy cancels a suspended producer and waits until its
+// goroutine has stopped touching the State. The producer is parked on
+// lazy.resume after each yield, so sending cancel and draining the final done
+// event is a synchronous handoff.
+func (s *State) enumeratorStopLazy(lazy *enumeratorLazy) {
+	if lazy == nil || !lazy.started || lazy.done {
+		return
+	}
+	select {
+	case lazy.resume <- enumeratorResume{cancel: true}:
+		for {
+			select {
+			case out := <-lazy.out:
+				if out.done {
+					goto wait
+				}
+			case <-s.closed:
+				return
+			}
+		}
+	case <-lazy.exited:
+		// The producer already finished; its done event may still be queued.
+	}
+wait:
+	select {
+	case <-lazy.exited:
+	case <-s.closed:
+		return
+	}
+	lazy.done = true
 }
 
 func (s *State) enumeratorSizeMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {

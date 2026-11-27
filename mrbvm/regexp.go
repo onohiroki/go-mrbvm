@@ -188,8 +188,23 @@ func (s *State) regexpInitializeData(self Value, source string, flags int64) (Va
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.RegexpErrorClass, err.Error())}
 	}
 	data.compiled = compiled
+	compiled.MatchTimeout = s.regexpMatchTimeout()
 	data.externalNames = externalNames
 	return self, nil
+}
+
+func (s *State) regexpMatchTimeout() time.Duration {
+	timeout := time.Second
+	if s.maxTime > 0 {
+		remaining := s.maxTime - time.Since(s.startTime)
+		if remaining < timeout {
+			timeout = remaining
+		}
+		if timeout <= 0 {
+			timeout = time.Millisecond
+		}
+	}
+	return timeout
 }
 
 func compileRegexpPattern(source string, flags int64) (*regexp2.Regexp, map[string]string, error) {

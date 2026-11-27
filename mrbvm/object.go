@@ -251,6 +251,8 @@ type enumeratorData struct {
 type enumeratorLazy struct {
 	resume     chan enumeratorResume
 	out        chan enumeratorOut
+	parked     chan struct{}
+	exited     chan struct{}
 	started    bool
 	done       bool
 	pending    []Value

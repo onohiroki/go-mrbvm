@@ -111,6 +111,9 @@ func (s *State) hashClassBracketMethod(ctx context.Context, self Value, args []V
 		}
 	}
 	_ = fromHash
+	if err := s.checkHashSize(len(entries)); err != nil {
+		return Nil, err
+	}
 	result := HashValue(entries)
 	if result.obj != nil {
 		result.obj.class = class

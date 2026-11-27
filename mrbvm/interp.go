@@ -62,6 +62,9 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 	if program, ok := s.programs[irep]; ok {
 		return program, nil
 	}
+	if irep.Nlocals > irep.Nregs {
+		return nil, fmt.Errorf("mrbvm: irep has nlocals=%d > nregs=%d", irep.Nlocals, irep.Nregs)
+	}
 	instructions, err := bytecode.Decode(irep.Code)
 	if err != nil {
 		return nil, err
@@ -94,9 +97,19 @@ func (s *State) program(irep *Irep) (*irepProgram, error) {
 	for i, in := range instructions {
 		switch in.Op {
 		case bytecode.OpJMP, bytecode.OpJMPUW, bytecode.OpJMPIF, bytecode.OpJMPNOT, bytecode.OpJMPNIL:
-			if target, err := jumpTarget(in, pcByOffset); err == nil {
-				jumpAt[i] = int32(target)
+			target, err := jumpTarget(in, pcByOffset)
+			if err != nil {
+				return nil, err
 			}
+			jumpAt[i] = int32(target)
+		}
+	}
+	for i, handler := range irep.Catch {
+		if handler.Begin >= handler.End || int(handler.End) > len(irep.Code) {
+			return nil, fmt.Errorf("mrbvm: catch handler %d has invalid range [%d,%d)", i, handler.Begin, handler.End)
+		}
+		if _, ok := pcByOffset[int(handler.Target)]; !ok {
+			return nil, fmt.Errorf("mrbvm: catch handler %d target %d is not an instruction boundary", i, handler.Target)
 		}
 	}
 	binaryOps := make([]binaryOp, len(instructions))

@@ -369,19 +369,31 @@ scripts. Sandboxing is a first-class feature, not a later add-on.
 
 Required limits:
 
-- instruction budget (check every N instructions)
+- instruction budget (per `Run` / `Execute`)
 - wall-clock timeout via `context.Context`
 - maximum call depth
 - maximum array/hash/string size
-- maximum output size
-- memory accounting (coarse at first, precise later)
+- maximum output size (stdout and stderr share one budget)
+- memory accounting (planned; not yet enforced)
 
 Capability policy:
 
-- `io`, `file`, `network`, `process`, `os`, `eval`, `load`, `require`
-- host-defined functions
-- clock and random source
-- regexp, bigint, fibers
+- `file` read/write; `eval`, `load`, and `require` are enforced
+- stdio (`STDIN` / `STDOUT` / `STDERR`) remains host-controlled; the `io`
+  capability is defined but not used to gate it
+- `network`, `process`, and `os` are defined but have no script APIs yet
+- host-defined functions are treated as trusted host code
+- clock, random source, regexp, bigint, and fibers are available to scripts;
+  they are not separately capability-gated yet
+
+Lifecycle and concurrency:
+
+- one `State` is owned by one goroutine
+- `Close` stops the fiber scheduler, waits for internal fiber/enumerator
+  goroutines, and closes tracked `File` handles
+- `Close` is idempotent and must not run concurrently with `Run` / `Execute`
+- internal Fiber/Enumerator goroutines hand the State back and forth; only
+  one of them may touch the State at a time
 
 Deterministic mode:
 

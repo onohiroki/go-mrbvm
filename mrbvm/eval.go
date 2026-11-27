@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
 type evalScope struct {
@@ -370,6 +372,9 @@ func writeEvalLocals(env *environment, captured map[string]Value) {
 }
 
 func (s *State) kernelEvalMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+	if err := s.requireCapability(sandbox.Eval); err != nil {
+		return Nil, err
+	}
 	if len(args) < 1 || len(args) > 4 {
 		return Nil, argumentCountError(s, len(args), "1..4")
 	}
@@ -449,6 +454,9 @@ func (s *State) instanceEvalMethod(ctx context.Context, self Value, args []Value
 	if args[0].Kind() != KindString {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion of "+s.classOf(args[0]).name+" into String")}
 	}
+	if err := s.requireCapability(sandbox.Eval); err != nil {
+		return Nil, err
+	}
 	filename := "(eval)"
 	line := 1
 	if len(args) > 1 && !args[1].IsNil() {
@@ -490,6 +498,9 @@ func (s *State) classEvalStringMethod(ctx context.Context, self Value, args []Va
 	if args[0].Kind() != KindString {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.TypeErrorClass, "no implicit conversion of "+s.classOf(args[0]).name+" into String")}
 	}
+	if err := s.requireCapability(sandbox.Eval); err != nil {
+		return Nil, err
+	}
 	filename := "(eval)"
 	line := 1
 	if len(args) > 1 && !args[1].IsNil() {
@@ -519,6 +530,9 @@ func (s *State) classEvalStringMethod(ctx context.Context, self Value, args []Va
 func (s *State) kernelLoadMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	if len(args) < 1 || len(args) > 2 || args[0].Kind() != KindString {
 		return Nil, argumentCountError(s, len(args), "1..2")
+	}
+	if err := s.requireCapability(sandbox.Load); err != nil {
+		return Nil, err
 	}
 	path := args[0].String()
 	wrapped := len(args) > 1 && args[1].IsTruthy()
@@ -587,6 +601,9 @@ func (s *State) kernelRequireRelativeMethod(ctx context.Context, self Value, arg
 func (s *State) requirePath(ctx context.Context, args []Value, relative bool) (Value, error) {
 	if len(args) != 1 || args[0].Kind() != KindString {
 		return Nil, argumentCountError(s, len(args), "1")
+	}
+	if err := s.requireCapability(sandbox.Require); err != nil {
+		return Nil, err
 	}
 	path, found := s.resolveRequirePath(ctx, args[0].String(), relative)
 	if !found {
@@ -695,6 +712,9 @@ func (s *State) bindingEvalMethod(ctx context.Context, self Value, args []Value,
 	}
 	if len(args) < 1 || len(args) > 3 || args[0].Kind() != KindString {
 		return Nil, argumentCountError(s, len(args), "1..3")
+	}
+	if err := s.requireCapability(sandbox.Eval); err != nil {
+		return Nil, err
 	}
 	filename := "(eval)"
 	line := 1

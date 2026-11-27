@@ -1219,6 +1219,9 @@ func (s *State) arrayJoinMethod(ctx context.Context, self Value, args []Value, k
 	if err != nil {
 		return Nil, err
 	}
+	if err := s.checkStringSize(len(joined)); err != nil {
+		return Nil, err
+	}
 	return StringValue(joined), nil
 }
 
@@ -1438,6 +1441,9 @@ func (s *State) arrayInitializeMethod(ctx context.Context, self Value, args []Va
 		if err != nil {
 			return Nil, err
 		}
+		if err := s.checkArraySize(count); err != nil {
+			return Nil, err
+		}
 		data.values = make([]Value, count)
 		if !block.IsNil() {
 			for i := range data.values {
@@ -1451,6 +1457,9 @@ func (s *State) arrayInitializeMethod(ctx context.Context, self Value, args []Va
 	case 2:
 		count, err := s.arrayLengthArg(args[0], "initialize")
 		if err != nil {
+			return Nil, err
+		}
+		if err := s.checkArraySize(count); err != nil {
 			return Nil, err
 		}
 		data.values = make([]Value, count)
@@ -1471,7 +1480,11 @@ func (s *State) arrayInitializeCopyMethod(ctx context.Context, self Value, args 
 	if !ok || len(args) != 1 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "initialize_copy expects one array")}
 	}
-	data.values = append([]Value(nil), arrayValues(args[0])...)
+	values := arrayValues(args[0])
+	if err := s.checkArraySize(len(values)); err != nil {
+		return Nil, err
+	}
+	data.values = append([]Value(nil), values...)
 	return self, nil
 }
 
@@ -1518,6 +1531,9 @@ func (s *State) arrayFlattenMethod(ctx context.Context, self Value, args []Value
 	if err != nil {
 		return Nil, err
 	}
+	if err := s.checkArraySize(len(values)); err != nil {
+		return Nil, err
+	}
 	return ArrayValue(values), nil
 }
 
@@ -1536,6 +1552,9 @@ func (s *State) arrayFlattenBangMethod(ctx context.Context, self Value, args []V
 	ancestors := map[*arrayData]bool{data: true}
 	values, err := s.arrayFlattenValues(data.values, depth, ancestors)
 	if err != nil {
+		return Nil, err
+	}
+	if err := s.checkArraySize(len(values)); err != nil {
 		return Nil, err
 	}
 	changed := len(values) != len(data.values)

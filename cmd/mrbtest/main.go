@@ -16,6 +16,7 @@ import (
 
 	"github.com/onohiroki/go-mrbc/mrbc"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
+	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
 func main() {
@@ -164,7 +165,8 @@ func runFile(ctx context.Context, path, assertSource string, verbose, stress boo
 	}
 
 	var output bytes.Buffer
-	state := mrbvm.New(mrbvm.Options{Stdout: &output, Stderr: &output, Compiler: compileEvalSource})
+	state := mrbvm.New(mrbvm.Options{Stdout: &output, Stderr: &output, Compiler: compileEvalSource, Policy: sandbox.AllowAll()})
+	defer state.Close()
 	if _, err := state.Run(ctx, preludeBytecode); err != nil {
 		return err
 	}

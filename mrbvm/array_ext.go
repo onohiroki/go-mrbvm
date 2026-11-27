@@ -495,6 +495,9 @@ func (s *State) arrayFillMethod(ctx context.Context, self Value, args []Value, k
 	if end > len(data.values)+1<<20 {
 		return Nil, s.newArrayError(s.RangeErrorClass, "index too big for array")
 	}
+	if err := s.checkArraySize(end); err != nil {
+		return Nil, err
+	}
 	for len(data.values) < end {
 		data.values = append(data.values, Nil)
 	}
@@ -650,6 +653,14 @@ func (s *State) arrayInsertMethod(ctx context.Context, self Value, args []Value,
 	}
 	if index > int(^uint(0)>>1)-len(args) {
 		return Nil, s.newArrayError(s.RangeErrorClass, "index too big for array")
+	}
+	finalLen := index
+	if len(data.values) > finalLen {
+		finalLen = len(data.values)
+	}
+	finalLen += len(args) - 1
+	if err := s.checkArraySize(finalLen); err != nil {
+		return Nil, err
 	}
 	if index > len(data.values) {
 		if index-len(data.values) > 1<<20 {

@@ -1608,15 +1608,29 @@ func (s *State) stringChopMethod(ctx context.Context, self Value, args []Value, 
 	return StringValue(trimmed), nil
 }
 
-func (s *State) stringPad(text string, width int, pad string, left, right bool) string {
+func (s *State) stringPad(text string, width int, pad string, left, right bool) (string, error) {
 	if width <= len([]rune(text)) {
-		return text
+		return text, nil
 	}
 	if pad == "" {
 		pad = " "
 	}
 	missing := width - len([]rune(text))
 	padRunes := []rune(pad)
+	maxPadBytes := 0
+	for _, r := range padRunes {
+		if n := utf8.RuneLen(r); n > maxPadBytes {
+			maxPadBytes = n
+		}
+	}
+	if missing > 0 && maxPadBytes > 0 && s.maxStringSize > 0 {
+		if len(text) > s.maxStringSize {
+			return "", errStringLimit
+		}
+		if missing > (s.maxStringSize-len(text))/maxPadBytes {
+			return "", errStringLimit
+		}
+	}
 	build := func(n int) string {
 		var builder strings.Builder
 		for i := 0; i < n; i++ {
@@ -1633,7 +1647,11 @@ func (s *State) stringPad(text string, width int, pad string, left, right bool) 
 	} else {
 		leftCount = missing
 	}
-	return build(leftCount) + text + build(rightCount)
+	result := build(leftCount) + text + build(rightCount)
+	if err := s.checkStringSize(len(result)); err != nil {
+		return "", err
+	}
+	return result, nil
 }
 
 func (s *State) stringLjustMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1642,7 +1660,11 @@ func (s *State) stringLjustMethod(ctx context.Context, self Value, args []Value,
 	if len(args) > 1 {
 		pad = args[1].String()
 	}
-	return StringValue(s.stringPad(self.String(), width, pad, false, true)), nil
+	padded, err := s.stringPad(self.String(), width, pad, false, true)
+	if err != nil {
+		return Nil, err
+	}
+	return StringValue(padded), nil
 }
 
 func (s *State) stringRjustMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1651,7 +1673,11 @@ func (s *State) stringRjustMethod(ctx context.Context, self Value, args []Value,
 	if len(args) > 1 {
 		pad = args[1].String()
 	}
-	return StringValue(s.stringPad(self.String(), width, pad, true, false)), nil
+	padded, err := s.stringPad(self.String(), width, pad, true, false)
+	if err != nil {
+		return Nil, err
+	}
+	return StringValue(padded), nil
 }
 
 func (s *State) stringCenterMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1660,7 +1686,11 @@ func (s *State) stringCenterMethod(ctx context.Context, self Value, args []Value
 	if len(args) > 1 {
 		pad = args[1].String()
 	}
-	return StringValue(s.stringPad(self.String(), width, pad, true, true)), nil
+	padded, err := s.stringPad(self.String(), width, pad, true, true)
+	if err != nil {
+		return Nil, err
+	}
+	return StringValue(padded), nil
 }
 
 func (s *State) stringRepeatMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
@@ -1703,6 +1733,9 @@ func (s *State) stringFormatMethod(ctx context.Context, self Value, args []Value
 	formatted, err := formatString(self.String(), values)
 	if err != nil {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, err.Error())}
+	}
+	if err := s.checkStringSize(len(formatted)); err != nil {
+		return Nil, err
 	}
 	return StringValue(formatted), nil
 }

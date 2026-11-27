@@ -15,6 +15,7 @@ import (
 	"github.com/onohiroki/go-mrbc/mrbc"
 	localtoolchain "github.com/onohiroki/go-mrbvm/internal/toolchain"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
+	"github.com/onohiroki/go-mrbvm/sandbox"
 )
 
 // compile produces RITE bytecode with go-mrbc or the reference mrbc.
@@ -84,11 +85,13 @@ func main() {
 
 	start := time.Now()
 	for i := 0; i < *iterations; i++ {
-		state := mrbvm.New(mrbvm.Options{Stdout: io.Discard, Stderr: io.Discard})
+		state := mrbvm.New(mrbvm.Options{Stdout: io.Discard, Stderr: io.Discard, Policy: sandbox.AllowAll()})
 		if _, err := state.Execute(ctx, irep); err != nil {
+			state.Close()
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		state.Close()
 	}
 	goDuration := time.Since(start)
 	fmt.Printf("go-mrbvm  %d iterations  %s  %.2f ops/s\n", *iterations, goDuration, float64(*iterations)/goDuration.Seconds())

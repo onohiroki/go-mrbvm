@@ -45,6 +45,7 @@ func TestConformance(t *testing.T) {
 			}
 			var out bytes.Buffer
 			state := mrbvm.New(mrbvm.Options{Stdout: &out})
+			defer state.Close()
 			if _, err := state.Run(ctx, data); err != nil {
 				t.Fatalf("run: %v", err)
 			}
@@ -88,6 +89,7 @@ func TestConformance(t *testing.T) {
 			}
 			var out bytes.Buffer
 			state := mrbvm.New(mrbvm.Options{Stdout: &out})
+			defer state.Close()
 			if _, err := state.Run(ctx, data); err != nil {
 				t.Fatalf("run: %v", err)
 			}

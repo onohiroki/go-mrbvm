@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/onohiroki/go-mrbc/bytecode"
@@ -184,7 +185,19 @@ type State struct {
 	maxArraySize       int
 	maxHashSize        int
 	maxStringSize      int
-	output             *limitWriter
+	maxOutputBytes     int
+	outputBudget       *outputBudget
+
+	closeOnce  sync.Once
+	stopOnce   sync.Once
+	closed     chan struct{}
+	fiberStop  chan struct{}
+	wg         sync.WaitGroup
+	shutdownMu sync.Mutex
+	filesMu    sync.Mutex
+	openFiles  map[*os.File]struct{}
+	panicMu    sync.Mutex
+	panicErr   error
 }
 
 // New creates a VM state with the minimal core needed to execute VM-0
@@ -220,20 +233,25 @@ func New(opts Options) *State {
 		maxArraySize:    opts.MaxArraySize,
 		maxHashSize:     opts.MaxHashSize,
 		maxStringSize:   opts.MaxStringSize,
+		maxOutputBytes:  opts.MaxOutputBytes,
 		startTime:       time.Now(),
 		gcEnabled:       true,
 		compiler:        opts.Compiler,
 		requiredFiles:   make(map[string]bool),
+		closed:          make(chan struct{}),
+		fiberStop:       make(chan struct{}),
+		openFiles:       make(map[*os.File]struct{}),
 	}
 	if s.maxDepth == 0 {
 		s.maxDepth = 200
 	}
 	s.programs = make(map[*Irep]*irepProgram)
 	if opts.MaxOutputBytes > 0 {
-		s.output = &limitWriter{writer: stdout, remaining: opts.MaxOutputBytes}
-		s.stdout = s.output
+		s.outputBudget = &outputBudget{remaining: opts.MaxOutputBytes}
+		s.stdout = &limitWriter{writer: stdout, budget: s.outputBudget}
+		s.stderr = &limitWriter{writer: stderr, budget: s.outputBudget}
 	}
-	s.limitsEnabled = s.maxInstructions > 0 || s.maxTime > 0 || s.output != nil
+	s.limitsEnabled = s.maxInstructions > 0 || s.maxTime > 0 || s.outputBudget != nil
 	s.BasicObjectClass = newClass("BasicObject", nil)
 	s.ObjectClass = newClass("Object", s.BasicObjectClass)
 	s.KernelClass = newClass("Kernel", nil)
@@ -1222,7 +1240,16 @@ func New(opts Options) *State {
 	rootData.self = s.RootFiber
 	s.rootFiber = rootData
 	s.fiberSwitchCh = make(chan fiberSwitchRequest)
-	go s.fiberScheduler()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() {
+			if panicValue := recover(); panicValue != nil {
+				s.recordPanic(panicValue)
+			}
+		}()
+		s.fiberScheduler()
+	}()
 	if opts.LoadMrblib {
 		irep, err := s.LoadBytecode(mrblibBytecode)
 		if err == nil {
@@ -1663,8 +1690,13 @@ func (s *State) arrayPlusMethod(ctx context.Context, self Value, args []Value, k
 	if len(args) != 1 {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "Array#+ expects one argument")}
 	}
-	values := append([]Value(nil), arrayValues(self)...)
-	values = append(values, arrayValues(args[0])...)
+	left := arrayValues(self)
+	right := arrayValues(args[0])
+	if err := s.checkArraySize(len(left) + len(right)); err != nil {
+		return Nil, err
+	}
+	values := append([]Value(nil), left...)
+	values = append(values, right...)
 	return ArrayValue(values), nil
 }
 
@@ -1678,7 +1710,17 @@ func (s *State) arrayRepeatMethod(ctx context.Context, self Value, args []Value,
 		if count < 0 {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "negative argument")}
 		}
-		result := make([]Value, 0, len(values)*int(count))
+		if count != 0 && int64(len(values)) > (int64(^uint(0)>>1))/count {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "array size too big")}
+		}
+		total := int64(len(values)) * count
+		if total > int64(^uint(0)>>1) {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.RangeErrorClass, "array size too big")}
+		}
+		if err := s.checkArraySize(int(total)); err != nil {
+			return Nil, err
+		}
+		result := make([]Value, 0, int(total))
 		for i := int64(0); i < count; i++ {
 			result = append(result, values...)
 		}
@@ -1686,6 +1728,9 @@ func (s *State) arrayRepeatMethod(ctx context.Context, self Value, args []Value,
 	}
 	joined, err := s.joinArrayValues(ctx, arrayDataOfValue(self), args[0].ToS(), map[*arrayData]bool{})
 	if err != nil {
+		return Nil, err
+	}
+	if err := s.checkStringSize(len(joined)); err != nil {
 		return Nil, err
 	}
 	return StringValue(joined), nil
@@ -3125,13 +3170,20 @@ func (s *State) LoadBytecode(data []byte) (*Irep, error) {
 }
 
 // Run loads and executes a RITE 04.00 binary.
-func (s *State) Run(ctx context.Context, data []byte) (Value, error) {
+func (s *State) Run(ctx context.Context, data []byte) (result Value, err error) {
+	if s.isClosed() {
+		return Nil, ErrStateClosed
+	}
+	if err := s.statePanicErr(); err != nil {
+		return Nil, err
+	}
+	defer s.recoverPanic(&result, &err)
 	irep, err := s.LoadBytecode(data)
 	if err != nil {
 		return Nil, err
 	}
-	result, err := s.Execute(ctx, irep)
-	if s.output != nil && s.output.exceeded {
+	result, err = s.Execute(ctx, irep)
+	if err == nil && s.outputBudget != nil && s.outputBudget.exceeded {
 		return result, errOutputLimit
 	}
 	return result, err
@@ -3143,14 +3195,26 @@ func (s *State) Allowed(capability sandbox.Capability) bool {
 	return s.policy.Allowed(capability)
 }
 
-func (s *State) Execute(ctx context.Context, irep *Irep) (Value, error) {
+func (s *State) Execute(ctx context.Context, irep *Irep) (result Value, err error) {
+	if s.isClosed() {
+		return Nil, ErrStateClosed
+	}
+	if err := s.statePanicErr(); err != nil {
+		return Nil, err
+	}
 	if s.initErr != nil {
 		return Nil, s.initErr
 	}
 	if irep == nil {
 		return Nil, fmt.Errorf("mrbvm: nil irep")
 	}
-	return s.executeFrame(ctx, irep, s.TopSelf, s.ObjectClass, nil, Nil, Nil, nil, "", nil, s.ObjectClass, false)
+	defer s.recoverPanic(&result, &err)
+	s.resetLimits()
+	result, err = s.executeFrame(ctx, irep, s.TopSelf, s.ObjectClass, nil, Nil, Nil, nil, "", nil, s.ObjectClass, false)
+	if err == nil && s.outputBudget != nil && s.outputBudget.exceeded {
+		err = errOutputLimit
+	}
+	return result, err
 }
 
 const (
@@ -3462,6 +3526,9 @@ func (s *State) setIndex(ctx context.Context, recv, index, value Value) (Value, 
 			if pos < 0 {
 				return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, fmt.Sprintf("index %d too small for array", pos))}
 			}
+			if err := s.checkArraySize(pos + 1); err != nil {
+				return Nil, err
+			}
 			for len(data.values) <= pos {
 				data.values = append(data.values, Nil)
 			}
@@ -3708,6 +3775,9 @@ func (s *State) arrayAssign(data *arrayData, start, length int, value Value) (Va
 	if start > len(data.values) {
 		if start-len(data.values) > 1<<20 {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.IndexErrorClass, "index too big for array")}
+		}
+		if err := s.checkArraySize(start); err != nil {
+			return Nil, err
 		}
 		for len(data.values) < start {
 			data.values = append(data.values, Nil)
@@ -4678,7 +4748,7 @@ func (s *State) callBlock(ctx context.Context, block Value, args []Value, kw Val
 func (s *State) kernelPrint(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	for _, arg := range args {
 		fmt.Fprint(s.stdout, arg.ToS())
-		if s.output != nil && s.output.exceeded {
+		if s.outputBudget != nil && s.outputBudget.exceeded {
 			return Nil, errOutputLimit
 		}
 	}
@@ -4700,6 +4770,9 @@ func (s *State) kernelPuts(ctx context.Context, self Value, args []Value, kw Val
 			}
 		}
 		fmt.Fprintln(s.stdout, arg.ToS())
+	}
+	if s.outputBudget != nil && s.outputBudget.exceeded {
+		return Nil, errOutputLimit
 	}
 	return Nil, nil
 }

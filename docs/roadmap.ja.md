@@ -304,7 +304,7 @@
 - `go-mrbc` に `conformance` パッケージを追加し、53 ケースを
   `embed.FS` で共有。`go-mrbvm` はローカルコピーを廃止し、
   `mrbvm/conformance_test.go` が全ケースを動的に実行する。
-- `cmd/vmcompat -corpus` で共有コーパス全体を C mruby /
+- `cmd/vmcompat -strict -corpus` で共有コーパス全体を C mruby /
   go-mrbc / 本家 mrbc の三者で比較できるようにした。
 - `Integer` / `Float` の
   `+ - * / % ** << >> & | ^ ~ -@` を実メソッドとして登録。
@@ -458,7 +458,7 @@ possessive quantifier、`\R` / `\h` / `\H`、`\u{...}`、POSIX bracket、
 gofmt -l .
 go vet ./...
 go test ./...
-go run ./cmd/vmcompat -corpus
+go run ./cmd/vmcompat -strict -corpus
 go run ./cmd/mrbtest -manifest testdata/official.txt
 go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ```

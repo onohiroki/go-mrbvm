@@ -229,10 +229,17 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 ## 10. サンドボックス
 
 - 命令数、実行時間、コール深さ、配列/ハッシュ/文字列サイズ、出力サイズ。
-- `io` / `file` / `network` / `process` / `os` / `eval` / `load` / `require`
-  の capability 許可リスト。
-- 決定性モード（乱数シード、仮想時計、object_id、環境非依存）。
-- ChibiRuby の `sandbox/` が参考になる。
+  - 命令数・時間・出力の budget は `Run` / `Execute` ごとにリセット。
+  - 出力 budget は stdout / stderr で共有。
+- サイズ制限は配列・文字列・ハッシュの主要な生成/変更経路で適用。
+- capability 許可リスト:
+  - `file` の読み書き、`eval`、`load`、`require` は実処理で強制。
+  - `io` は stdio をホスト管理とし、現状は未強制。
+  - `network` / `process` / `os` は API 自体が未公開。
+- `State.Close` で fiber scheduler、内部 Fiber/Enumerator goroutine、
+  未クローズの `File` を解放。
+- 1 `State` は 1 goroutine が所有。`Close` は実行完了後に呼ぶ。
+- 決定性モード（乱数シード、仮想時計、object_id、環境非依存）は今後。
 
 ## 11. コマンド
 
@@ -417,7 +424,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   （`module.rb` 86/86、`range.rb` 24/26）
 - Phase 8（共有コーパス）: `go-mrbc` の `conformance` パッケージを
   `embed.FS` で共有し、53 ケースを `go-mrbvm` の `go test` と
-  `vmcompat -corpus` で実行
+  `vmcompat -strict -corpus` で実行
 - Phase 9（演算子メソッド層）: `Integer` / `Float` の演算子を実メソッドに
   し、再定義時は opcode と `SEND` 高速パスを `s.call` にフォールバック。
   `TestOperatorRedefinition` で CRuby / 開発ツリーの挙動を固定

@@ -78,10 +78,13 @@ coding assistance.
   `String#sub` / `gsub` keep their Regexp support
 - a host API: `DefineFunction`, `DefineClass`, `DefineModule`,
   `DefineConst`, `Send`, `Raise`, and value conversion helpers
-- sandbox limits: instructions, wall time, call depth, output bytes,
-  array/hash/string sizes
-- a capability policy package (`sandbox.Policy`) for IO, files, network,
-  process, OS, eval, load, and require
+- sandbox limits: instructions, wall time, call depth, output bytes
+  (stdout and stderr), and array/hash/string sizes; budgets reset for each
+  `Run` / `Execute`
+- a capability policy (`sandbox.Policy`) enforced for files, `eval`, `load`,
+  and `require`; standard I/O is host-controlled
+- `State.Close` stops the fiber scheduler, waits for internal fiber/enumerator
+  goroutines, and closes files still open through `File`
 - `Rational` (arbitrary-precision exact parts), `Complex`, and the `Math`
   module
 - `Method` / `UnboundMethod` reflection (`call`, `arity`, `parameters`,
@@ -90,8 +93,9 @@ coding assistance.
   strings, and `load` / `require` / `require_relative`
 - `Time` (`now`, `at`, components, `strftime`, arithmetic)
 - `JSON` (`parse`, `generate`, `dump`, `pretty_generate`)
-- capability-gated `IO` / `File` with `STDIN` / `STDOUT` / `STDERR`,
-  read/write/open/close, path helpers, size, and delete
+- `File` (capability-gated) and `STDIN` / `STDOUT` / `STDERR`
+  (host-controlled) with read/write/open/close, path helpers, size, and
+  delete
 - `Regexp` / `MatchData` backed by the pure-Go `dlclark/regexp2` engine,
   including Ruby option semantics, `inspect` / `to_s` folding, `escape`,
   `union`, named captures, `$~` and `$1`-style globals, and regexp
@@ -227,7 +231,7 @@ go vet ./...
 go test ./...
 
 # Differential run against the reference mruby.
-go run ./cmd/vmcompat -corpus
+go run ./cmd/vmcompat -strict -corpus
 
 # Run the official mruby test manifests that currently pass.
 go run ./cmd/mrbtest -manifest testdata/official.txt
@@ -273,7 +277,20 @@ state := mrbvm.New(mrbvm.Options{
 	MaxStringSize:   1 << 20,
 	MaxTime:         2 * time.Second,
 })
+defer state.Close()
 ```
+
+`Policy` is enforced for `File` reads/writes and for `eval`, `load`, and
+`require`. With no `Policy`, those capabilities are denied; the `gomruby` and
+`gomirb` commands opt into `sandbox.AllowAll()` because they run local scripts.
+`STDIN` / `STDOUT` / `STDERR` remain available so that hosts can collect script
+output; use a dedicated writer for isolation.
+
+`State` is owned by one goroutine. `Run` / `Execute` limits are per call, and
+`Close` must be called after execution finishes; it is not safe to call
+`Close` concurrently with a running script. `Close` is idempotent. A call
+after `Close` returns `ErrStateClosed`; a recovered internal panic marks the
+State unusable and returns `ErrStatePanicked`.
 
 The conformance corpus is embedded by the sibling `go-mrbc` repository's
 `conformance` package, so compiler and VM always run the same cases.

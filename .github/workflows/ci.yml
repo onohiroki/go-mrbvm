@@ -45,11 +45,23 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
           go vet ./...
-          go test ./...
+          go test ./... -timeout 15m
+
+      - name: Race tests
+        working-directory: go-mrbvm
+        run: go test -race ./... -timeout 30m
+
+      - name: Fuzz smoke (VM runner)
+        working-directory: go-mrbvm
+        run: go test ./mrbvm -run '^$' -fuzz '^FuzzRun$' -fuzztime=15s
+
+      - name: Fuzz smoke (bytecode loader)
+        working-directory: go-mrbvm
+        run: go test ./mrbvm -run '^$' -fuzz '^FuzzDecodeBytecode$' -fuzztime=15s
 
       - name: Differential run over the shared corpus
         working-directory: go-mrbvm
-        run: go run ./cmd/vmcompat -corpus
+        run: go run ./cmd/vmcompat -strict -corpus
 
       - name: Official core test manifest
         working-directory: go-mrbvm
