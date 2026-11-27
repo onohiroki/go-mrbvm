@@ -101,6 +101,9 @@ coding assistance.
   `Fiber[]` / `storage`
 - `gomirb`, a persistent-State REPL with multi-line continuation,
   history persistence, and completion candidates
+- `gomruby` / `gomirb` switch parsing compatible with mruby / mirb,
+  including stdin programs, `-r`, `ARGV`, and `$DEBUG`; `gomruby` also
+  supports `-e` and initializes `$0`
 - VM-7 benchmark tooling, register pooling, and a GC shim
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
@@ -199,8 +202,18 @@ go install github.com/onohiroki/go-mrbvm/cmd/gomruby@latest
 go install github.com/onohiroki/go-mrbvm/cmd/gomirb@latest
 ```
 
-`gomruby` runs `.mrb` bytecode directly and compiles `.rb` through the linked
-`go-mrbc`. `gomirb` is the persistent REPL.
+`gomruby` runs `.mrb` bytecode directly and compiles `.rb` (and any file that
+is neither `.mrb` nor RITE bytecode) through the linked `go-mrbc`. It accepts
+the mruby switches `-b`, `-c`, `-d`, `-e`, `-r`, `-v`, `--verbose`,
+`--version`, `--copyright`, and `-h`; with no program file it reads standard
+input, and trailing arguments become `ARGV`. `$0` and `$DEBUG` are also
+initialized.
+
+`gomirb` is the persistent REPL. It accepts mirb's `-d`, `-r`, `-v`,
+`--verbose`, `--version`, and `--copyright`, plus the go-mrbvm extensions
+`-q` (quiet results) and `-H` (history file). `-r` loads `.rb` or `.mrb`
+libraries, and may be repeated. A program file and trailing arguments are
+supported, with the arguments exposed as `ARGV`.
 
 ## Development
 
@@ -244,6 +257,9 @@ state.DefineConst(nil, "ANSWER", mrbvm.IntValue(42))
 result, err := state.Send(ctx, state.TopSelf, "ruby_method", mrbvm.IntValue(1))
 ```
 
+`SetGlobal` initializes global variables such as `$DEBUG` and `$0`; `DefineConst`
+can define top-level constants such as `ARGV`.
+
 Sandbox limits are set through `mrbvm.Options`:
 
 ```go
@@ -265,10 +281,13 @@ The conformance corpus is embedded by the sibling `go-mrbc` repository's
 
 ## Commands
 
-- `gomruby` — run `.mrb` bytecode, or compile `.rb` with `go-mrbc`
+- `gomruby` — mruby-compatible runner: `-b`, `-c`, `-d`, `-e`, `-r`, `-v`,
+  `--verbose`, `--version`, `--copyright`, stdin, and `ARGV`
+- `gomirb` — persistent-State REPL: `-d`, `-r` (`.rb` / `.mrb`),
+  `-v`, `--verbose`, `--version`, `--copyright`, plus `-q` / `-H`,
+  a program file, and `ARGV`
 - `vmcompat` — compare go-mrbc/mrbc bytecode against the reference `mruby`
 - `mrbtest` — run official mruby test files with `assert.rb`
-- `gomirb` — persistent-State REPL
 - `vmbench` — measure a script and optionally compare with reference `mruby`
 
 ## Author

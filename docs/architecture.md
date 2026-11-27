@@ -340,6 +340,7 @@ func (s *State) DefineFunction(name string, fn Func)
 func (s *State) DefineClass(name string, super *Class, configure func(*Class))
 func (s *State) DefineModule(name string, configure func(*Module))
 func (s *State) DefineConst(scope *Module, name string, value Value)
+func (s *State) SetGlobal(name string, value Value)
 
 func (s *State) Send(ctx context.Context, recv Value, name string, args ...Value) (Value, error)
 func (s *State) Raise(exceptionClass *Class, message string)
@@ -394,14 +395,25 @@ Deterministic mode:
 
 ### `gomruby`
 
-mruby-compatible runner.
+mruby-compatible runner following mruby's switch syntax (clustered short
+options, attached arguments, long options, and `--`).
 
+- `gomruby [switches] [programfile] [arguments]` — with no program file,
+  read source from standard input; `-` also means standard input.
 - `gomruby file.mrb` — load and execute bytecode.
-- `gomruby file.rb` — compile with `go-mrbc` and execute.
-- `-e 'code'` — compile and run a snippet.
-- `-r library` / `-I path` — load precompiled libraries.
-- `-v` — version.
-- `-c` — compile only (delegates to `go-mrbc`).
+- `gomruby file.rb` (or any file that is neither `.mrb` nor RITE bytecode) —
+  compile with `go-mrbc` and execute.
+- `-b` — force bytecode loading.
+- `-c` — check syntax only, printing `Syntax OK`.
+- `-d` — set `$DEBUG` to true.
+- `-e 'code'` — compile and run a snippet; may be repeated.
+- `-r library` — load `.rb` or `.mrb` libraries before the program; may be
+  repeated.
+- `-v` — print the version, then run in verbose mode; alone it exits.
+- `--verbose` — run in verbose mode without printing the version.
+- `--version` / `--copyright` — print and exit.
+- `-h` — usage.
+- trailing arguments become `ARGV`; `$0` is the program file, `-`, or `-e`.
 
 ### `gomirb`
 
@@ -411,9 +423,15 @@ Interactive shell.
 - compile each input with `go-mrbc`
 - print `inspect` of the result
 - multiline input
-- history
-- `-r` preload
-- sandbox option
+- history (`-H file`; empty disables persistence)
+- `-r` preload: `.rb` or `.mrb` (RITE header detection), repeatable
+- `-d` sets `$DEBUG`
+- `-v` prints the version and continues in verbose mode; `--verbose` does
+  the same without the version line
+- `--version` / `--copyright` print and exit
+- `programfile` and trailing arguments are supported; the arguments become
+  `ARGV`
+- `-q` suppresses expression results (go-mrbvm extension)
 
 `gomirb` is a thin CLI over `go-mrbc` and `go-mrbvm`; it does not need its
 own repository initially.

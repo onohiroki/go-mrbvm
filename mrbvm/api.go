@@ -63,6 +63,12 @@ func (s *State) DefineConst(scope *Class, name string, value Value) {
 	}
 }
 
+// SetGlobal defines a global variable. The name includes the leading dollar
+// sign, for example "$DEBUG" or "$0".
+func (s *State) SetGlobal(name string, value Value) {
+	s.globals[name] = value
+}
+
 // Send calls a Ruby method from Go.
 func (s *State) Send(ctx context.Context, receiver Value, name string, args ...Value) (Value, error) {
 	return s.call(ctx, receiver, name, args, Nil, Nil)

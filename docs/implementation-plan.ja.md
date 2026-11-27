@@ -210,6 +210,7 @@ func (s *State) DefineFunction(name string, fn Func)
 func (s *State) DefineClass(name string, super *Class, configure func(*Class))
 func (s *State) DefineModule(name string, configure func(*Module))
 func (s *State) DefineConst(scope *Module, name string, value Value)
+func (s *State) SetGlobal(name string, value Value)
 
 func (s *State) Send(ctx context.Context, recv Value, name string, args ...Value) (Value, error)
 func (s *State) Raise(class *Class, message string)
@@ -237,16 +238,25 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 
 ### `gomruby`
 
-- `gomruby file.mrb` — バイトコードを実行
-- `gomruby file.rb` — `go-mrbc` でコンパイルして実行
-- `-e` / `-r` / `-I` / `-v` / `-c`
+本家 mruby のオプション構文（短オプション連結、引数密着、long option、
+`--`）に従う。
+
+- `gomruby [switches] [programfile] [arguments]`
+- programfile 省略時は stdin。`-` も stdin
+- `.mrb` / `-b` / RITE マジックはバイトコード、それ以外は Ruby ソース
+- `-b` / `-c` / `-d` / `-e` / `-r` / `-v` / `--verbose` / `--version` /
+  `--copyright` / `-h`
+- 後続引数は `ARGV`、`$0` は programfile / `-` / `-e`
 
 ### `gomirb`
 
 - 永続 `State`
 - 入力ごとに `go-mrbc` でコンパイル
 - 結果を `inspect`
-- 複数行入力、履歴、`-r` preload、サンドボックス
+- 複数行入力、履歴、`-r` preload（`.rb` / `.mrb`）、サンドボックス
+- `-d` / `-r` / `-v` / `--verbose` / `--version` / `--copyright`
+- programfile と後続引数（`ARGV`）に対応
+- `-q` / `-H` は go-mrbvm の拡張
 
 ## 12. テスト計画
 

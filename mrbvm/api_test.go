@@ -85,3 +85,22 @@ end
 		t.Fatalf("Send result = %s, want 9", result.Inspect())
 	}
 }
+
+func TestSetGlobal(t *testing.T) {
+	ctx := context.Background()
+	var out bytes.Buffer
+	state := mrbvm.New(mrbvm.Options{Stdout: &out})
+	state.SetGlobal("$DEBUG", mrbvm.BoolValue(true))
+	state.SetGlobal("$0", mrbvm.StringValue("script.rb"))
+
+	irep, err := mrbc.Compile(ctx, []byte("p [$DEBUG, $0]\n"), mrbc.Options{FilePath: "test.rb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Execute(ctx, irep); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if got, want := out.String(), "[true, \"script.rb\"]\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
