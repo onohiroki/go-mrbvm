@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/onohiroki/go-mrbvm/mrbvm
+cpu: Apple M4
+BenchmarkArithmeticLoop-10    	    2209	    532843 ns/op	  387408 B/op	    3537 allocs/op
+BenchmarkMethodCall-10        	     972	   1253165 ns/op	  709577 B/op	    8561 allocs/op
+BenchmarkArrayMap-10          	    1236	   1044975 ns/op	  942743 B/op	   14070 allocs/op
+BenchmarkHashWrite-10         	     549	   2189676 ns/op	 2255040 B/op	   18572 allocs/op
+BenchmarkStringAppend-10      	     811	   1628812 ns/op	 5216712 B/op	   15537 allocs/op
+BenchmarkRescue-10            	     885	   1446251 ns/op	 1541391 B/op	   17548 allocs/op
+PASS
+ok  	github.com/onohiroki/go-mrbvm/mrbvm	11.192s

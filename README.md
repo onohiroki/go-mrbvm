@@ -133,6 +133,7 @@ Design and plan:
 - [docs/roadmap.ja.md](docs/roadmap.ja.md) — phases, sprint plan, and quality gates (Japanese)
 - [docs/official-tests.md](docs/official-tests.md) — official suite coverage and exclusions
 - [docs/benchmarks.ja.md](docs/benchmarks.ja.md) — microbenchmarks and C mruby comparison (Japanese)
+- [benchmark/README.md](benchmark/README.md) — VM benchmark baseline and comparison workflow
 - [docs/bytecode-format.md](docs/bytecode-format.md) — RITE 04.00 format
 - [CONTRIBUTING.md](CONTRIBUTING.md) — patch checklist and repository routing
 
