@@ -117,7 +117,7 @@ repository as the importable `conformance` package. Every case passes with
 bytecode from both `go-mrbc` and the official mruby 4.0.0 `mrbc`.
 
 The VM is tested against the official mruby 4.0.0 core and mrbgem suites.
-The current manifests cover **42 core files** and **34 mrbgem suites**.
+The current manifests cover **43 core files** and **35 mrbgem test files**.
 `mruby-eval` passes 45/48 in `eval.rb` (one C-helper skip, two stress cases
 not run) and 14/14 in `binding.rb`. Remaining Regexp exclusions are listed in
 the roadmap; they are constructs the pure-Go `regexp2` engine cannot express,
@@ -131,6 +131,7 @@ Design and plan:
 - [docs/architecture.md](docs/architecture.md) — architecture and design
 - [docs/implementation-plan.ja.md](docs/implementation-plan.ja.md) — implementation plan (Japanese)
 - [docs/roadmap.ja.md](docs/roadmap.ja.md) — phases, sprint plan, and quality gates (Japanese)
+- [docs/official-tests.md](docs/official-tests.md) — official suite coverage and exclusions
 - [docs/benchmarks.ja.md](docs/benchmarks.ja.md) — microbenchmarks and C mruby comparison (Japanese)
 - [docs/bytecode-format.md](docs/bytecode-format.md) — RITE 04.00 format
 - [CONTRIBUTING.md](CONTRIBUTING.md) — patch checklist and repository routing
@@ -240,8 +241,8 @@ go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ```
 
 The VM uses UTF-8 character indexing for `String` (`bytesize` and the byte APIs
-remain byte-based). The core manifest covers **42** official test files and the
-gem manifest (`testdata/official-gems.txt`) covers **34** mrbgem suites,
+remain byte-based). The core manifest covers **43** official test files and the
+gem manifest (`testdata/official-gems.txt`) covers **35** mrbgem test files,
 including Array/Hash/String/Enumerable extensions, Enumerator, Method,
 metaprogramming, Rational, Complex, Regexp/MatchData, Fiber, Set, Struct,
 Data, and eval/Binding.

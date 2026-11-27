@@ -21,7 +21,7 @@
     両方で成功（`go-mrbc/conformance` パッケージを共有）
   - `Integer` / `Float` の演算子メソッド層、`send` / alias /
     リフレクション、再定義時の opcode フォールバック
-  - 公式テスト **42 ファイル**が成功（`testdata/official.txt`）
+  - 公式テスト **43 ファイル**が成功（`testdata/official.txt`）
   - mrbgem テスト **18 スイート**が成功（`testdata/official-gems.txt`）
   - 言語意味論 L0–L4 完了（Symbol/Proc/Array/Hash/String/Enumerable/
     Enumerator/Kernel/メタプログラミング/Method/Rational/Complex/
@@ -367,7 +367,7 @@ conformance は 53 ケースに拡大（`go-mrbc` の `conformance` パッケー
 
 ### 4.15 言語意味論 L0–L4（2026-11-23）
 
-公式コアテストを 35 から **42 ファイル**、mrbgem テストを **34 スイート**
+公式コアテストを 35 から **43 ファイル**、mrbgem テストを **35 ファイル**
 まで拡大した。L0–L4 の順に、各マイルストーンをコミットで固定している。
 
 - **L0** 通過済みコアテストのマニフェスト化
@@ -484,7 +484,7 @@ go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ## 7. マイルストーン目安
 
 - **VM-4a**: `t/array.rb` 完了（2026-11-22）、conformance 38
-- **VM-4b**: 公式テスト 42 ファイル、mrbgem 34 スイート（達成）
+- **VM-4b**: 公式テスト 43 ファイル、mrbgem 35 ファイル（達成）
 - **VM-4c**: backtrace / reflection / exception 系テスト（達成、高度な cause 連鎖は継続）
 - **VM-5**: ホスト API とサンドボックス（達成）
 - **VM-6**: `gomirb` / Time / JSON / IO / Regexp / Fiber / 履歴・補完 / 言語意味論 L0–L4 完了、デバッガと残りの gem suite が残り
