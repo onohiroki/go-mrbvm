@@ -79,6 +79,10 @@ jobs:
         working-directory: go-mrbvm
         run: go run ./cmd/vmcompat -strict -stderr -corpus
 
+      - name: Random differential run
+        working-directory: go-mrbvm
+        run: go run ./cmd/vmcompat -strict -stderr -random 50 -seed 1
+
       - name: Official core test manifest
         working-directory: go-mrbvm
         run: go run ./cmd/mrbtest -manifest testdata/official.txt

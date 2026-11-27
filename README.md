@@ -232,6 +232,7 @@ go test ./...
 
 # Differential run against the reference mruby.
 go run ./cmd/vmcompat -strict -stderr -corpus
+go run ./cmd/vmcompat -strict -stderr -random 100 -seed 1
 
 # Run the official mruby test manifests that currently pass.
 go run ./cmd/mrbtest -manifest testdata/official.txt

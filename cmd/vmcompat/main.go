@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,12 +34,14 @@ func main() {
 	strict := flag.Bool("strict", false, "fail when mrbc or mruby is missing")
 	compareStderr := flag.Bool("stderr", false, "compare stderr as well")
 	corpus := flag.Bool("corpus", false, "run every case in the shared conformance corpus")
+	random := flag.Int("random", 0, "run N generated programs")
+	seed := flag.Int64("seed", 1, "seed for -random")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: vmcompat [-v] [-strict] [-corpus] [file.rb...]")
+		fmt.Fprintln(os.Stderr, "usage: vmcompat [-v] [-strict] [-corpus] [-random N] [-seed N] [file.rb...]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
-	if flag.NArg() == 0 && !*corpus {
+	if flag.NArg() == 0 && !*corpus && *random == 0 {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -94,6 +97,30 @@ func main() {
 				fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", name, err)
 			} else if *verbose {
 				fmt.Printf("ok   %s\n", name)
+			}
+		}
+	}
+	if *random > 0 {
+		dir, err := os.MkdirTemp("", "vmcompat-random-*")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "vmcompat: create temp dir: %v\n", err)
+			os.Exit(2)
+		}
+		defer os.RemoveAll(dir)
+		rng := rand.New(rand.NewSource(*seed))
+		for i := 0; i < *random; i++ {
+			source := randomProgram(rng)
+			path := filepath.Join(dir, fmt.Sprintf("random-%04d.rb", i))
+			if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+				failures++
+				fmt.Fprintf(os.Stderr, "FAIL random %d: %v\n", i, err)
+				continue
+			}
+			if err := compareFile(ctx, path, mrubyPath, mrbcPath, *verbose, *compareStderr); err != nil {
+				failures++
+				fmt.Fprintf(os.Stderr, "FAIL random seed=%d case=%d\n--- source ---\n%s--- error ---\n%v\n", *seed, i, source, err)
+			} else if *verbose {
+				fmt.Printf("ok   random seed=%d case=%d\n", *seed, i)
 			}
 		}
 	}
