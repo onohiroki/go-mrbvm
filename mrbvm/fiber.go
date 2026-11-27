@@ -61,6 +61,7 @@ type fiberData struct {
 	// shutdownLocked reports that this fiber holds State.shutdownMu while
 	// unwinding on Close.
 	shutdownLocked bool
+	counted        bool
 	storage        Value
 	vm             fiberVMState
 }
@@ -81,7 +82,10 @@ func (s *State) installFiberClass() {
 		if err != nil {
 			return Nil, err
 		}
-		data := &fiberData{block: block, ctx: ctx, ch: make(chan fiberEvent), status: fiberCreated, storage: storage}
+		if err := s.reserveFiber(); err != nil {
+			return Nil, err
+		}
+		data := &fiberData{block: block, ctx: ctx, ch: make(chan fiberEvent), status: fiberCreated, storage: storage, counted: true}
 		value := ObjectValue(&Object{class: fiberClass, data: data})
 		data.self = value
 		return value, nil
@@ -500,6 +504,12 @@ func (s *State) startFiber(data *fiberData, args []Value) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer func() {
+			if data.counted {
+				data.counted = false
+				s.releaseFiber()
+			}
+		}()
 		s.fiberRun(data, args, nil)
 	}()
 }
@@ -528,6 +538,10 @@ func (s *State) fiberRun(data *fiberData, args []Value, _ *fiberEvent) {
 	}
 	s.saveFiberVM(data)
 	data.status = fiberTerminated
+	if data.counted {
+		data.counted = false
+		s.releaseFiber()
+	}
 	target := data.prev
 	if target == nil {
 		target = s.rootFiber
@@ -542,6 +556,10 @@ func (s *State) fiberRun(data *fiberData, args []Value, _ *fiberEvent) {
 func (s *State) fiberPanic(data *fiberData, panicValue any) {
 	err := s.recordPanic(panicValue)
 	data.status = fiberTerminated
+	if data.counted {
+		data.counted = false
+		s.releaseFiber()
+	}
 	target := data.prev
 	if target == nil {
 		target = s.rootFiber

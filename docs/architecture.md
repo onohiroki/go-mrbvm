@@ -373,6 +373,7 @@ Required limits:
 - wall-clock timeout via `context.Context`
 - maximum call depth
 - maximum array/hash/string size
+- maximum active Fiber and Enumerator counts
 - maximum output size (stdout and stderr share one budget)
 - memory accounting (planned; not yet enforced)
 

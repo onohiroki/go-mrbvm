@@ -13,6 +13,8 @@ var (
 	errArrayLimit       = errors.New("mrbvm: array size limit exceeded")
 	errHashLimit        = errors.New("mrbvm: hash size limit exceeded")
 	errStringLimit      = errors.New("mrbvm: string size limit exceeded")
+	errFiberLimit       = errors.New("mrbvm: fiber limit exceeded")
+	errEnumeratorLimit  = errors.New("mrbvm: enumerator limit exceeded")
 )
 
 type outputBudget struct {
@@ -61,6 +63,42 @@ func (s *State) checkStringSize(size int) error {
 		return errStringLimit
 	}
 	return nil
+}
+
+func (s *State) reserveFiber() error {
+	s.resourceMu.Lock()
+	defer s.resourceMu.Unlock()
+	if s.maxFibers > 0 && s.activeFibers >= s.maxFibers {
+		return errFiberLimit
+	}
+	s.activeFibers++
+	return nil
+}
+
+func (s *State) releaseFiber() {
+	s.resourceMu.Lock()
+	if s.activeFibers > 0 {
+		s.activeFibers--
+	}
+	s.resourceMu.Unlock()
+}
+
+func (s *State) reserveEnumerator() error {
+	s.resourceMu.Lock()
+	defer s.resourceMu.Unlock()
+	if s.maxEnumerators > 0 && s.activeEnumerators >= s.maxEnumerators {
+		return errEnumeratorLimit
+	}
+	s.activeEnumerators++
+	return nil
+}
+
+func (s *State) releaseEnumerator() {
+	s.resourceMu.Lock()
+	if s.activeEnumerators > 0 {
+		s.activeEnumerators--
+	}
+	s.resourceMu.Unlock()
 }
 
 func (s *State) checkExecutionLimits() error {

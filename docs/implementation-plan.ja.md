@@ -228,7 +228,8 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 
 ## 10. サンドボックス
 
-- 命令数、実行時間、コール深さ、配列/ハッシュ/文字列サイズ、出力サイズ。
+- 命令数、実行時間、コール深さ、配列/ハッシュ/文字列サイズ、出力サイズ、
+  active Fiber / Enumerator 数。
   - 命令数・時間・出力の budget は `Run` / `Execute` ごとにリセット。
   - 出力 budget は stdout / stderr で共有。
 - サイズ制限は配列・文字列・ハッシュの主要な生成/変更経路で適用。

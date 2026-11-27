@@ -55,6 +55,8 @@ type Options struct {
 	MaxArraySize    int
 	MaxHashSize     int
 	MaxStringSize   int
+	MaxFibers       int
+	MaxEnumerators  int
 }
 
 // State is one mruby VM instance. A State is owned by a single goroutine.
@@ -186,6 +188,11 @@ type State struct {
 	maxHashSize        int
 	maxStringSize      int
 	maxOutputBytes     int
+	maxFibers          int
+	maxEnumerators     int
+	resourceMu         sync.Mutex
+	activeFibers       int
+	activeEnumerators  int
 	outputBudget       *outputBudget
 
 	closeOnce  sync.Once
@@ -234,6 +241,8 @@ func New(opts Options) *State {
 		maxHashSize:     opts.MaxHashSize,
 		maxStringSize:   opts.MaxStringSize,
 		maxOutputBytes:  opts.MaxOutputBytes,
+		maxFibers:       opts.MaxFibers,
+		maxEnumerators:  opts.MaxEnumerators,
 		startTime:       time.Now(),
 		gcEnabled:       true,
 		compiler:        opts.Compiler,

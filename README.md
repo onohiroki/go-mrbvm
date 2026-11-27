@@ -79,8 +79,8 @@ coding assistance.
 - a host API: `DefineFunction`, `DefineClass`, `DefineModule`,
   `DefineConst`, `Send`, `Raise`, and value conversion helpers
 - sandbox limits: instructions, wall time, call depth, output bytes
-  (stdout and stderr), and array/hash/string sizes; budgets reset for each
-  `Run` / `Execute`
+  (stdout and stderr), array/hash/string sizes, and active Fiber/Enumerator
+  counts; budgets reset for each `Run` / `Execute`
 - a capability policy (`sandbox.Policy`) enforced for files, `eval`, `load`,
   and `require`; standard I/O is host-controlled
 - `State.Close` stops the fiber scheduler, waits for internal fiber/enumerator
@@ -275,6 +275,8 @@ state := mrbvm.New(mrbvm.Options{
 	MaxArraySize:    10_000,
 	MaxHashSize:     10_000,
 	MaxStringSize:   1 << 20,
+	MaxFibers:       64,
+	MaxEnumerators:  64,
 	MaxTime:         2 * time.Second,
 })
 defer state.Close()

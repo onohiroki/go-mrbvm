@@ -253,12 +253,19 @@ func (s *State) enumeratorStartLazy(ctx context.Context, data *enumeratorData, l
 	s.wg.Add(1)
 	go func() {
 		holdingShutdown := false
+		counted := true
+		defer func() {
+			if counted {
+				s.releaseEnumerator()
+			}
+		}()
 		defer func() {
 			if holdingShutdown {
 				s.shutdownMu.Unlock()
 			}
 		}()
 		defer s.wg.Done()
+		defer s.releaseEnumerator()
 		defer close(lazy.exited)
 		sentDone := false
 		lockShutdown := func() {
@@ -311,6 +318,10 @@ func (s *State) enumeratorStartLazy(ctx context.Context, data *enumeratorData, l
 		}
 		result, err := s.enumeratorRun(ctx, data, yield)
 		data.result = result
+		if counted {
+			counted = false
+			s.releaseEnumerator()
+		}
 		select {
 		case lazy.out <- enumeratorOut{done: true, err: err}:
 			sentDone = true
@@ -334,6 +345,9 @@ func (s *State) enumeratorNextValueList(ctx context.Context, self Value, data *e
 		return nil, &unwindSignal{kind: unwindException, value: newException(s.StopIterationClass, "iteration reached an end")}
 	}
 	if !lazy.started {
+		if err := s.reserveEnumerator(); err != nil {
+			return nil, err
+		}
 		s.enumeratorStartLazy(ctx, data, lazy)
 	} else {
 		message := enumeratorResume{}
