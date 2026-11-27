@@ -26,7 +26,11 @@ change and a failing conformance case, then add the VM-side implementation.
 
 ## Development layout
 
-`go-mrbvm/go.mod` expects the sibling checkout:
+The released module pins `github.com/onohiroki/go-mrbc` v0.1.0, so a plain
+checkout builds without a sibling directory.
+
+For compiler work that needs local `go-mrbc` changes, temporarily use the
+sibling checkout:
 
 ```text
 workspace/
@@ -34,8 +38,12 @@ workspace/
 └── go-mrbvm/
 ```
 
-Keep the `replace ../go-mrbc` directive until a compiler tag is being used for
-a release. See [`docs/releasing.md`](docs/releasing.md).
+```text
+replace github.com/onohiroki/go-mrbc => ../go-mrbc
+```
+
+Keep that replace out of release commits; see
+[`docs/releasing.md`](docs/releasing.md).
 
 ## Before opening a pull request
 

@@ -133,13 +133,15 @@ byte 単位のままとする。これは mruby との意図的な差分であ�
 
 ## 開発時の配置
 
-開発中は `go-mrbvm/go.mod` が隣接チェックアウトを参照する:
+v0.1.0 リリースは `github.com/onohiroki/go-mrbc` v0.1.0 を固定しているため、
+隣接チェックアウトなしでビルドできる。コンパイラ側の変更を同時に試す場合は、
+作業ツリーでローカル `replace` を使う:
 
 ```text
 replace github.com/onohiroki/go-mrbc => ../go-mrbc
 ```
 
-想定する配置:
+その場合の想定配置:
 
 ```text
 workspace/
@@ -147,8 +149,7 @@ workspace/
 └── go-mrbvm/
 ```
 
-CI も 2 つのリポジトリを並べてチェックアウトする。公開リリースでは
-`replace` を外し、タグ付けした `go-mrbc` を固定する。手順は
+公開リリースでは `replace` を外し、タグ付けした `go-mrbc` を固定する。手順は
 [`releasing.md`](releasing.md) を参照。
 
 ## バージョンとリリース順

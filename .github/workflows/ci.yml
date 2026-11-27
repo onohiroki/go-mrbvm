@@ -13,16 +13,6 @@ jobs:
         with:
           path: go-mrbvm
 
-      # go-mrbvm's go.mod uses `replace ../go-mrbc` during development.
-      # The token fallback works for a public go-mrbc repository; set
-      # GO_MRBC_TOKEN when it is private.
-      - name: Check out go-mrbc
-        uses: actions/checkout@v7
-        with:
-          repository: onohiroki/go-mrbc
-          path: go-mrbc
-          token: ${{ secrets.GO_MRBC_TOKEN || github.token }}
-
       - uses: actions/setup-go@v7
         with:
           go-version-file: go-mrbvm/go.mod

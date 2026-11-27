@@ -75,7 +75,7 @@ but external users cannot install an unreleased module.
 ```sh
 cd go-mrbvm
 go mod edit -dropreplace=github.com/onohiroki/go-mrbc
-go get github.com/onohiroki/go-mrbc@v0.1.0
+go mod edit -require=github.com/onohiroki/go-mrbc@v0.1.0
 go mod tidy
 ```
 

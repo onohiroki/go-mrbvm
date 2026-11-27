@@ -140,13 +140,15 @@ This is part of the public VM contract.
 
 ## Development checkouts
 
-During development, `go-mrbvm/go.mod` uses a local replace:
+The v0.1.0 release pins `github.com/onohiroki/go-mrbc` v0.1.0, so it builds
+without a sibling checkout. For coordinated development, a working tree may
+use a local replace:
 
 ```text
 replace github.com/onohiroki/go-mrbc => ../go-mrbc
 ```
 
-The expected layout is therefore:
+The expected layout in that case is:
 
 ```text
 workspace/
@@ -154,9 +156,8 @@ workspace/
 └── go-mrbvm/
 ```
 
-CI checks out both repositories side by side. A published `go-mrbvm`
-release removes the replace and pins a tagged `go-mrbc` version; see
-[`docs/releasing.md`](releasing.md).
+A published `go-mrbvm` release removes the replace and pins a tagged
+`go-mrbc` version; see [`docs/releasing.md`](releasing.md).
 
 ## Versioning and release order
 

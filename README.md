@@ -159,9 +159,10 @@ The shared contract is deliberately small:
 - instruction encoding/decoding
 - the conformance corpus owned by `go-mrbc` and consumed by both
 
-During local development, `go.mod` has a `replace` for the sibling
-`../go-mrbc` checkout. A published release removes the replace and pins a
-tagged compiler version; the order is described in
+The released module pins `github.com/onohiroki/go-mrbc` v0.1.0. During
+coordinated development, a working tree may instead use a `replace` for the
+sibling `../go-mrbc` checkout; a published release removes the replace and
+pins a tagged compiler version. The order is described in
 [docs/releasing.md](docs/releasing.md) and the full split in
 [docs/ecosystem.md](docs/ecosystem.md).
 
@@ -184,22 +185,20 @@ not part of the module and are not required to build it.
 
 ## Getting started
 
-The repositories are not yet tagged for `go install`. Build from sibling
-checkouts while the local `replace` is in place:
+The v0.1.0 release is available from the Go module proxy:
 
 ```sh
-git clone https://github.com/onohiroki/go-mrbc.git
-git clone https://github.com/onohiroki/go-mrbvm.git
-cd go-mrbvm
-go build -o gomruby ./cmd/gomruby
-./gomruby -v
+go install github.com/onohiroki/go-mrbvm/cmd/gomruby@v0.1.0
+go install github.com/onohiroki/go-mrbvm/cmd/gomirb@v0.1.0
 ```
 
-After the first tagged release, the install path is:
+Or build all commands from a checkout:
 
 ```sh
-go install github.com/onohiroki/go-mrbvm/cmd/gomruby@latest
-go install github.com/onohiroki/go-mrbvm/cmd/gomirb@latest
+git clone https://github.com/onohiroki/go-mrbvm.git
+cd go-mrbvm
+make build
+./bin/gomruby -v
 ```
 
 `gomruby` runs `.mrb` bytecode directly and compiles `.rb` (and any file that
