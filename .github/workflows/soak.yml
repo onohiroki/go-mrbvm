@@ -1,0 +1,19 @@
+name: Soak
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Lifecycle and goroutine soak
+        run: go test -race -tags soak ./mrbvm -run '^TestSoak' -count=1 -timeout 30m
