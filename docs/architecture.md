@@ -398,11 +398,12 @@ Lifecycle and concurrency:
 
 Deterministic mode:
 
-- fixed random seed
-- virtual clock
-- stable object IDs or no ID exposure
+- `Options.Deterministic` and `Options.Clock`
+- `Time.now` uses the supplied clock or a fixed epoch
+- `object_id` uses a stable per-State sequence
 - stable hash iteration order (mruby hashes preserve insertion order)
-- no ambient environment or filesystem access
+- File and env access remain capability-controlled
+- a seeded `rand` API is not implemented yet
 
 ## 9. Commands
 

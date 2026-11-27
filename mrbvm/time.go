@@ -14,7 +14,7 @@ type timeData struct {
 func (s *State) installTimeClass() {
 	class := s.TimeClass
 	class.classMethods["now"] = &method{owner: class, name: "now", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return s.newTimeValue(time.Now()), nil
+		return s.newTimeValue(s.now()), nil
 	}}
 	class.classMethods["at"] = &method{owner: class, name: "at", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 {

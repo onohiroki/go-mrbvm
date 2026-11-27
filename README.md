@@ -280,6 +280,7 @@ state := mrbvm.New(mrbvm.Options{
 	MaxFibers:       64,
 	MaxEnumerators:  64,
 	MaxTime:         2 * time.Second,
+	Deterministic:   true,
 })
 defer state.Close()
 ```
@@ -290,7 +291,7 @@ defer state.Close()
 `STDIN` / `STDOUT` / `STDERR` remain available so that hosts can collect script
 output; use a dedicated writer for isolation.
 
-`State` is owned by one goroutine. `Run` / `Execute` limits are per call, and
+`Deterministic` fixes `Time.now` and `object_id` for reproducible runs; `Clock` supplies an explicit clock when needed. `State` is owned by one goroutine. `Run` / `Execute` limits are per call, and
 `Close` must be called after execution finishes; it is not safe to call
 `Close` concurrently with a running script. `Close` is idempotent. A call
 after `Close` returns `ErrStateClosed`; a recovered internal panic marks the

@@ -856,13 +856,13 @@ func (s *State) installObjectLibrary() {
 		if len(args) != 0 || !kw.IsNil() {
 			return Nil, argumentCountError(s, len(args), "0")
 		}
-		return IntValue(objectIdentityID(self)), nil
+		return IntValue(s.objectID(self)), nil
 	})
 	class.define("object_id", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 0 {
 			return Nil, argumentCountError(s, len(args), "0")
 		}
-		return IntValue(objectIdentityID(self)), nil
+		return IntValue(s.objectID(self)), nil
 	})
 	class.define("instance_eval", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if block.IsNil() {

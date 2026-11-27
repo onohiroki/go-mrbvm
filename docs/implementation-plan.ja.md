@@ -240,7 +240,8 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - `State.Close` で fiber scheduler、内部 Fiber/Enumerator goroutine、
   未クローズの `File` を解放。
 - 1 `State` は 1 goroutine が所有。`Close` は実行完了後に呼ぶ。
-- 決定性モード（乱数シード、仮想時計、object_id、環境非依存）は今後。
+- 決定性モード: `Deterministic` / `Clock` による `Time.now` 固定と
+  `object_id` の安定化を実装。乱数 API は今後。
 
 ## 11. コマンド
 
@@ -354,7 +355,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 ### VM-4b / VM-4c / VM-5（2026-11-22 完了）
 
 - **VM-4b**
-  - 公式テスト 42 ファイルを `testdata/official.txt` に固定
+  - 公式テスト 43 ファイルを `testdata/official.txt` に固定
   - mrbgem 18 スイートを `testdata/official-gems.txt` に固定
   - mrblib subset を `10error` / `compar` / `enum` / `array` / `hash` /
     `string` / `range` に拡張
@@ -432,7 +433,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
 - Phase 10（コア言語）: Proc/Enumerable/BasicObject/defined?/メソッドフック/
   block 引数/ensure/Int・Float の厳密比較/Numeric#step/autoload/Hash 再入ガード/
   UTF-8 文字単位 String を実装し、公式テストを 35 ファイルへ拡大。続く
-  言語意味論 L0–L4 で 42 ファイル・mrbgem 18 スイートへ拡大。残りは
+  言語意味論 L0–L4 で 43 ファイル・mrbgem 18 スイートへ拡大。残りは
   GC/REnv/C gem ヘルパ、4.0.0 以降の構文、Onigmo 構文 suite、
   `Set` / `Struct` / `Data`
 - `Float::NAN == Float::NAN` は 4.0.0 の `OP_EQ` が `true`、開発ツリーと

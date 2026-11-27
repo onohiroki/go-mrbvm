@@ -218,7 +218,7 @@ func (s *State) installFiberClass() {
 				status = "resumed"
 			}
 		}
-		return StringValue(fmt.Sprintf("#<Fiber:0x%x (%s)>", objectIdentityID(self), status)), nil
+		return StringValue(fmt.Sprintf("#<Fiber:0x%x (%s)>", s.objectID(self), status)), nil
 	})
 	class.define("to_s", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		return s.call(ctx, self, "inspect", nil, Nil, Nil)

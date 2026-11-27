@@ -898,24 +898,24 @@ func regexpFoldLeadingGroup(source string, flags int64) (string, int64) {
 func (s *State) regexpInspectMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 	data, ok := regexpOf(self)
 	if !ok || data == nil || self.obj == nil {
-		return StringValue(regexpDefaultInspect(self)), nil
+		return StringValue(s.regexpDefaultInspect(self)), nil
 	}
 	source, found := self.obj.ivars["@source"]
 	if !found || source.Kind() != KindString {
-		return StringValue(regexpDefaultInspect(self)), nil
+		return StringValue(s.regexpDefaultInspect(self)), nil
 	}
 	flags, found := self.obj.ivars["@flags"]
 	if !found || flags.Kind() != KindInt {
-		return StringValue(regexpDefaultInspect(self)), nil
+		return StringValue(s.regexpDefaultInspect(self)), nil
 	}
 	return StringValue("/" + source.String() + "/" + regexpDisplayFlags(flags.Int(), true)), nil
 }
 
-func regexpDefaultInspect(value Value) string {
+func (s *State) regexpDefaultInspect(value Value) string {
 	if value.obj == nil {
 		return "#<Regexp>"
 	}
-	return fmt.Sprintf("#<Regexp:0x%x>", objectIdentityID(value))
+	return fmt.Sprintf("#<Regexp:0x%x>", s.objectID(value))
 }
 
 func (s *State) regexpEqualMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {

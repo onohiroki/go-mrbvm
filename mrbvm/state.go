@@ -57,6 +57,11 @@ type Options struct {
 	MaxStringSize   int
 	MaxFibers       int
 	MaxEnumerators  int
+
+	// Deterministic fixes Time.now and object_id values for reproducible
+	// execution. Clock overrides Time.now when set.
+	Deterministic bool
+	Clock         func() time.Time
 }
 
 // State is one mruby VM instance. A State is owned by a single goroutine.
@@ -195,16 +200,21 @@ type State struct {
 	activeEnumerators  int
 	outputBudget       *outputBudget
 
-	closeOnce  sync.Once
-	stopOnce   sync.Once
-	closed     chan struct{}
-	fiberStop  chan struct{}
-	wg         sync.WaitGroup
-	shutdownMu sync.Mutex
-	filesMu    sync.Mutex
-	openFiles  map[*os.File]struct{}
-	panicMu    sync.Mutex
-	panicErr   error
+	closeOnce     sync.Once
+	stopOnce      sync.Once
+	closed        chan struct{}
+	fiberStop     chan struct{}
+	wg            sync.WaitGroup
+	shutdownMu    sync.Mutex
+	filesMu       sync.Mutex
+	openFiles     map[*os.File]struct{}
+	panicMu       sync.Mutex
+	panicErr      error
+	deterministic bool
+	clock         func() time.Time
+	objectIDsMu   sync.Mutex
+	objectIDs     map[*Object]int64
+	nextObjectID  int64
 }
 
 // New creates a VM state with the minimal core needed to execute VM-0
@@ -250,6 +260,9 @@ func New(opts Options) *State {
 		closed:          make(chan struct{}),
 		fiberStop:       make(chan struct{}),
 		openFiles:       make(map[*os.File]struct{}),
+		deterministic:   opts.Deterministic,
+		clock:           opts.Clock,
+		objectIDs:       make(map[*Object]int64),
 	}
 	if s.maxDepth == 0 {
 		s.maxDepth = 200
@@ -361,7 +374,7 @@ func New(opts Options) *State {
 		if len(args) != 0 || !kw.IsNil() {
 			return Nil, argumentCountError(s, len(args), "0")
 		}
-		return IntValue(objectIdentityID(self)), nil
+		return IntValue(s.objectID(self)), nil
 	})
 	s.BasicObjectClass.define("__send__", s.objectSendMethod)
 	s.ClassClass.define("new", s.classNewMethod)

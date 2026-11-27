@@ -87,7 +87,7 @@ func (s *State) installEvalLibrary() {
 		return Nil, nil
 	})
 	class.define("inspect", func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		return StringValue(fmt.Sprintf("#<Binding:0x%x>", objectIdentityID(self))), nil
+		return StringValue(fmt.Sprintf("#<Binding:0x%x>", s.objectID(self))), nil
 	})
 }
 
