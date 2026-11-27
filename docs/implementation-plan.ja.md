@@ -424,7 +424,7 @@ type Func func(ctx context.Context, s *State, self Value, args []Value, block Va
   （`module.rb` 86/86、`range.rb` 24/26）
 - Phase 8（共有コーパス）: `go-mrbc` の `conformance` パッケージを
   `embed.FS` で共有し、53 ケースを `go-mrbvm` の `go test` と
-  `vmcompat -strict -corpus` で実行
+  `vmcompat -strict -stderr -corpus` で実行
 - Phase 9（演算子メソッド層）: `Integer` / `Float` の演算子を実メソッドに
   し、再定義時は opcode と `SEND` 高速パスを `s.call` にフォールバック。
   `TestOperatorRedefinition` で CRuby / 開発ツリーの挙動を固定

@@ -32,7 +32,7 @@ go run ./cmd/runtimecompat -fail -assert mruby/test/assert.rb mruby/test/t mruby
 go test -race ./...
 go test ./mrbvm -run '^$' -fuzz '^FuzzRun$' -fuzztime=30s
 go test ./mrbvm -run '^$' -fuzz '^FuzzDecodeBytecode$' -fuzztime=30s
-go run ./cmd/vmcompat -strict -corpus
+go run ./cmd/vmcompat -strict -stderr -corpus
 go run ./cmd/mrbtest -manifest testdata/official.txt
 go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ```
@@ -87,7 +87,7 @@ Check both the direct `bytecode` import and the command dependencies:
 ```sh
 go list -m all | grep go-mrbc
 go test ./...
-go run ./cmd/vmcompat -strict -corpus
+go run ./cmd/vmcompat -strict -stderr -corpus
 go run ./cmd/mrbtest -manifest testdata/official.txt
 go run ./cmd/mrbtest -manifest testdata/official-gems.txt
 ```

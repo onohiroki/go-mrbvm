@@ -61,7 +61,7 @@ jobs:
 
       - name: Differential run over the shared corpus
         working-directory: go-mrbvm
-        run: go run ./cmd/vmcompat -strict -corpus
+        run: go run ./cmd/vmcompat -strict -stderr -corpus
 
       - name: Official core test manifest
         working-directory: go-mrbvm

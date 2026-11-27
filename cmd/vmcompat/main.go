@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/onohiroki/go-mrbc/conformance"
 	"github.com/onohiroki/go-mrbc/mrbc"
@@ -199,13 +200,32 @@ func sameResult(label string, got, want result, compareStderr bool) error {
 	if got.stdout != want.stdout {
 		return fmt.Errorf("%s stdout mismatch\n--- got ---\n%s--- want ---\n%s", label, got.stdout, want.stdout)
 	}
-	if compareStderr && got.stderr != want.stderr {
-		return fmt.Errorf("%s stderr mismatch\n--- got ---\n%s--- want ---\n%s", label, got.stderr, want.stderr)
+	if compareStderr {
+		gotErr := normalizeStderr(got.stderr)
+		wantErr := normalizeStderr(want.stderr)
+		if gotErr != wantErr {
+			return fmt.Errorf("%s stderr mismatch\n--- got ---\n%s--- want ---\n%s", label, gotErr, wantErr)
+		}
 	}
 	if got.exitCode != want.exitCode {
 		return fmt.Errorf("%s exit status %d, want %d (stderr: %s)", label, got.exitCode, want.exitCode, got.stderr)
 	}
 	return nil
+}
+
+// normalizeStderr keeps diagnostics comparable across the two parsers. The
+// reference compiler emits parser warnings that go-mrbc does not reproduce;
+// those lines are not part of the runtime contract.
+func normalizeStderr(text string) string {
+	lines := strings.Split(text, "\n")
+	out := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(line, "warning:") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n")
 }
 
 func init() {

@@ -231,7 +231,7 @@ go vet ./...
 go test ./...
 
 # Differential run against the reference mruby.
-go run ./cmd/vmcompat -strict -corpus
+go run ./cmd/vmcompat -strict -stderr -corpus
 
 # Run the official mruby test manifests that currently pass.
 go run ./cmd/mrbtest -manifest testdata/official.txt
