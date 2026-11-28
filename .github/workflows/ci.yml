@@ -63,6 +63,10 @@ jobs:
           go vet ./...
           go test ./... -timeout 15m
 
+      - name: Bundle smoke test
+        working-directory: go-mrbvm
+        run: make bundle-smoke
+
       - name: Race tests
         working-directory: go-mrbvm
         run: go test -race ./... -timeout 30m
