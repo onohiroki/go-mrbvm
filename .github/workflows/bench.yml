@@ -17,7 +17,11 @@ jobs:
           cache-dependency-path: go.sum
       - name: Run benchmarks
         run: make bench
+      - name: Run bundle benchmark
+        run: make bundle-bench
       - uses: actions/upload-artifact@v4
         with:
           name: benchmarks
-          path: benchmark/latest.txt
+          path: |
+            benchmark/latest.txt
+            benchmark/bundle-latest.txt
