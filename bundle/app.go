@@ -29,6 +29,11 @@ type Options struct {
 	// archive defaults are applied. It can set execution limits or override
 	// any field.
 	Configure func(*mrbvm.Options)
+
+	// Setup, when non-nil, runs after the State is created and after $0,
+	// ARGV, and $DEBUG are initialized, but before the entry point executes.
+	// It is where an embedding registers host functions and classes.
+	Setup func(*mrbvm.State) error
 }
 
 // DefaultPolicy returns the capability set used when Options.Policy is nil:
@@ -79,6 +84,12 @@ func (b *Bundle) Run(ctx context.Context, argv []string, stdin io.Reader, stdout
 	state.SetGlobal("$DEBUG", mrbvm.BoolValue(opts.Debug))
 	state.SetGlobal("$0", mrbvm.StringValue(b.manifest.Entry))
 	state.DefineConst(nil, "ARGV", stringArray(programArgs))
+	if opts.Setup != nil {
+		if err := opts.Setup(state); err != nil {
+			fmt.Fprintf(stderr, "bundle: setup: %v\n", err)
+			return 1
+		}
+	}
 
 	data := b.files[b.manifest.Entry]
 	irep, err := b.compileEntry(ctx, data, opts.Compiler)

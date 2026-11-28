@@ -3,6 +3,7 @@ package bundle_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -141,6 +142,46 @@ p [helper_value, ARGV, $0]
 	want := "[\"ok\", [\"a\", \"b\"], \"main.mrb\"]\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
+func TestRunSetupRegistersHostFunctions(t *testing.T) {
+	data := archive(t, "main.mrb", nil, []bundle.Entry{
+		{Path: "main.mrb", Data: compile(t, "main.rb", `p [host_echo(ARGV[0]), $0]`)},
+	})
+	var stdout, stderr bytes.Buffer
+	code := bundle.Run(context.Background(), data, []string{"app", "hello"}, strings.NewReader(""), &stdout, &stderr, bundle.Options{
+		Setup: func(state *mrbvm.State) error {
+			state.DefineFunction("host_echo", func(ctx context.Context, s *mrbvm.State, self mrbvm.Value, args []mrbvm.Value, block mrbvm.Value) (mrbvm.Value, error) {
+				return mrbvm.StringValue("host:" + args[0].String()), nil
+			})
+			return nil
+		},
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
+	}
+	if want := "[\"host:hello\", \"main.mrb\"]\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
+func TestRunSetupError(t *testing.T) {
+	data := archive(t, "main.mrb", nil, []bundle.Entry{
+		{Path: "main.mrb", Data: compile(t, "main.rb", `puts "unreachable"`)},
+	})
+	var stdout, stderr bytes.Buffer
+	code := bundle.Run(context.Background(), data, []string{"app"}, strings.NewReader(""), &stdout, &stderr, bundle.Options{
+		Setup: func(*mrbvm.State) error { return errors.New("boom") },
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stderr.String(), "bundle: setup: boom") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
 
