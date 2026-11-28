@@ -5,7 +5,7 @@
 [implementation-plan.ja.md](implementation-plan.ja.md)、設計は
 [architecture.md](architecture.md) を参照。
 
-最終更新: 2026-11-23
+最終更新: 2026-11-28
 
 ## 1. 現状
 
@@ -449,6 +449,25 @@ possessive quantifier、`\R` / `\h` / `\H`、`\u{...}`、POSIX bracket、
   ヘルパだけを skip する。
 - GC 内部・`ObjectSpace`・C テストヘルパに依存するテストは引き続き除外。
 - VM-7 の性能・GC 作業は継続。
+
+### 4.17 バンドル / gomrbpack（2026-11-28）
+
+- 完了
+  - `Options.SourceFS` / `Options.AssetFS` / `Options.LoadPaths`
+  - `load` / `require` / `require_relative` の FS 注入と `.mrb` require
+  - `$LOAD_PATH` の初期化と `require` からの参照、`gomruby -I`
+  - `File.read` / `exist?` / `size` の同梱データ優先（capability 不要）
+  - `bundle` パッケージ（`.mrbb` ZIP、manifest、SHA-256、上限、fuzz）
+  - `gomrbpack pack` / `build` / `run` / `list` / `info` / `extract`
+  - `--include` によるデータ同梱、`--with-compiler` による eval 対応
+  - `gomruby` の ZIP マジック判定
+  - `bundle.Options.Setup` によるホスト API 登録
+  - `make bundle-smoke` / `make bundle-bench`、CI と夜間 artifact
+  - `docs/bundling.md` / `docs/bundling.ja.md`、v0.1.3 リリースノート
+- 残り
+  - `File.open` の同梱データ対応
+  - `ObjectSpace` / finalizer（VM-7 側）
+  - バンドルサイズの削減（現状は strip なし 8.9 MiB）
 
 ## 5. 品質ゲート
 

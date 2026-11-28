@@ -138,6 +138,7 @@ Design and plan:
 - [docs/ecosystem.md](docs/ecosystem.md) — how go-mrbc and go-mrbvm fit together
 - [docs/ecosystem.ja.md](docs/ecosystem.ja.md) — リポジトリの関係（日本語）
 - [docs/releasing.md](docs/releasing.md) — release order and module tagging
+- [docs/release-notes/v0.1.3.md](docs/release-notes/v0.1.3.md) — v0.1.3 bundling notes
 - [docs/release-notes/v0.1.2.md](docs/release-notes/v0.1.2.md) — v0.1.2 hardening notes
 - [docs/architecture.md](docs/architecture.md) — architecture and design
 - [docs/implementation-plan.ja.md](docs/implementation-plan.ja.md) — implementation plan (Japanese)
@@ -206,14 +207,13 @@ not part of the module and are not required to build it.
 
 ## Getting started
 
-The v0.1.2 release is available from the Go module proxy:
+The v0.1.3 release is available from the Go module proxy:
 
 ```sh
-go install github.com/onohiroki/go-mrbvm/cmd/gomruby@v0.1.2
-go install github.com/onohiroki/go-mrbvm/cmd/gomirb@v0.1.2
+go install github.com/onohiroki/go-mrbvm/cmd/gomruby@v0.1.3
+go install github.com/onohiroki/go-mrbvm/cmd/gomirb@v0.1.3
+go install github.com/onohiroki/go-mrbvm/cmd/gomrbpack@v0.1.3
 ```
-
-`gomrbpack` is newer than v0.1.2; build it from a checkout as shown below.
 
 Or build all commands from a checkout:
 
