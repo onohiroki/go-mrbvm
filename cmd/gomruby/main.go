@@ -108,8 +108,9 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ctx := context.Background()
 
 	// A .mrbb bundle is a self-contained program; run it through the bundle
-	// runtime so that its embedded filesystem and entry point are used.
-	if !cfg.hasCode && len(rest) > 0 && rest[0] != "-" && strings.EqualFold(filepath.Ext(rest[0]), bundle.Extension) {
+	// runtime so that its embedded filesystem and entry point are used. The
+	// ZIP magic is accepted so a renamed bundle keeps working.
+	if !cfg.hasCode && len(rest) > 0 && rest[0] != "-" && looksLikeBundle(rest[0]) {
 		if len(cfg.libs) > 0 {
 			fmt.Fprintf(stderr, "%s: -r cannot be combined with a %s bundle\n", prog, bundle.Extension)
 			return 1
@@ -206,6 +207,25 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "Syntax OK")
 	}
 	return 0
+}
+
+// looksLikeBundle reports whether path is a .mrbb archive. The extension is
+// checked first; otherwise the first four bytes are compared with the ZIP
+// local file header.
+func looksLikeBundle(path string) bool {
+	if strings.EqualFold(filepath.Ext(path), bundle.Extension) {
+		return true
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	var magic [4]byte
+	if _, err := io.ReadFull(file, magic[:]); err != nil {
+		return false
+	}
+	return bundle.IsArchive(magic[:])
 }
 
 // runBundleProgram executes a .mrbb archive, setting ARGV from the arguments

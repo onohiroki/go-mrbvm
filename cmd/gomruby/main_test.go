@@ -78,6 +78,15 @@ p [helper_value, ARGV, $0]
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
 
+	renamed := writeTestFile(t, "app.bin", string(archive.Bytes()))
+	code, stdout, stderr = runGomruby(t, "", renamed, "c")
+	if code != 0 {
+		t.Fatalf("renamed bundle exit = %d, stderr = %q", code, stderr)
+	}
+	if want := "[\"bundle\", [\"c\"], \"main.mrb\"]\n"; stdout != want {
+		t.Fatalf("renamed stdout = %q, want %q", stdout, want)
+	}
+
 	code, _, stderr = runGomruby(t, "", "-r", path, path)
 	if code == 0 || !strings.Contains(stderr, "cannot be combined") {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr)
