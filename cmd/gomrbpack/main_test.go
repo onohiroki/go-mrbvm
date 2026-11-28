@@ -247,6 +247,59 @@ func TestPackRejectsUnsupportedFile(t *testing.T) {
 	}
 }
 
+func TestBuildWithCompiler(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go build in -short mode")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go command not available")
+	}
+	dir := t.TempDir()
+	source := filepath.Join(dir, "main.rb")
+	writeFile(t, source, `puts eval("6 * 7")`+"\n")
+	moduleRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withCompiler := filepath.Join(dir, "with-compiler")
+	code, stdout, stderr := runTool(t, "build", "--root", dir, "--entry", "main.rb", "--replace", moduleRoot,
+		"--with-compiler", "--quiet", "-o", withCompiler, source)
+	if code != 0 {
+		t.Fatalf("build exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(withCompiler); err != nil {
+			withCompiler += ".exe"
+		}
+	}
+	if out, err := exec.Command(withCompiler).CombinedOutput(); err != nil || string(out) != "42\n" {
+		t.Fatalf("with-compiler app: %v, output = %q", err, out)
+	}
+
+	withoutCompiler := filepath.Join(dir, "without-compiler")
+	code, stdout, stderr = runTool(t, "build", "--root", dir, "--entry", "main.rb", "--replace", moduleRoot,
+		"--quiet", "-o", withoutCompiler, source)
+	if code != 0 {
+		t.Fatalf("build exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(withoutCompiler); err != nil {
+			withoutCompiler += ".exe"
+		}
+	}
+	cmd := exec.Command(withoutCompiler)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("eval unexpectedly succeeded: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "capability denied: eval") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
 func TestBuild(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go build in -short mode")
