@@ -22,7 +22,8 @@ built binary. The output also records the three binary sizes. It writes
 
 `make bundle-smoke` performs the same build and runs each form once, checking
 that all three produce identical output. It is the CI gate; timing numbers are
-informational only.
+informational only. The nightly Bench workflow runs `make bundle-bench` and
+uploads `latest.txt` and `bundle-latest.txt` together.
 
 To compare two runs, install `benchstat` and run:
 

@@ -113,11 +113,11 @@ coding assistance.
 - `gomruby` / `gomirb` switch parsing compatible with mruby / mirb,
   including stdin programs, `-r`, `ARGV`, and `$DEBUG`; `gomruby` also
   supports `-e` and initializes `$0`
-- `gomrbpack`, which compiles multiple `.rb` / `.mrb` inputs into a `.mrbb`
-  bundle and builds a single executable that embeds it
-- an injectable read-only filesystem (`Options.SourceFS`, `Options.LoadPaths`)
-  used by `load`, `require`, and `require_relative`, plus `.mrb` support in
-  `require`
+- `gomrbpack`, which compiles multiple `.rb` / `.mrb` inputs and data files
+  into a `.mrbb` bundle and builds a single executable that embeds it
+- an injectable read-only filesystem (`Options.SourceFS`, `Options.AssetFS`,
+  `Options.LoadPaths`) used by `load` / `require` / `require_relative` and by
+  bundled `File.read` access, plus `.mrb` support in `require`
 - VM-7 benchmark tooling, register pooling, and a GC shim
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
@@ -146,7 +146,8 @@ Design and plan:
 - [docs/benchmarks.ja.md](docs/benchmarks.ja.md) — microbenchmarks and C mruby comparison (Japanese)
 - [benchmark/README.md](benchmark/README.md) — VM benchmark baseline and comparison workflow
 - [docs/bytecode-format.md](docs/bytecode-format.md) — RITE 04.00 format
-- [docs/bundling.ja.md](docs/bundling.ja.md) — `.mrbb` bundles and single-binary builds (Japanese)
+- [docs/bundling.md](docs/bundling.md) — `.mrbb` bundles and single-binary builds
+- [docs/bundling.ja.md](docs/bundling.ja.md) — バンドルと単一バイナリ（日本語）
 - [CONTRIBUTING.md](CONTRIBUTING.md) — patch checklist and repository routing
 
 ## Relationship to go-mrbc
@@ -242,24 +243,31 @@ supported, with the arguments exposed as `ARGV`.
 single executable from it:
 
 ```sh
-gomrbpack pack  --entry main.rb -I lib -o app.mrbb main.rb lib/
+gomrbpack pack  --entry main.rb -I lib --include data -o app.mrbb main.rb lib/
 gomrbpack run   app.mrbb arg1 arg2
-gomrbpack build --entry main.rb -I lib -o app main.rb lib/
+gomrbpack build --entry main.rb -I lib --include data -o app main.rb lib/
 ./app arg1 arg2
 ```
 
-The `.rb` inputs are compiled to RITE bytecode at pack time, so the built
-binary does not link the compiler (Prism/wazero) and starts without parsing
-source. Inside the bundle, `require` / `require_relative` resolve against the
-archive through `Options.SourceFS`; the host filesystem is not consulted. The
-default capability policy allows only `require` and `load`, so bundled
-programs cannot read host files. `gomruby app.mrbb` runs the same archive.
+The `.rb` inputs are compiled to RITE bytecode at pack time, so the default
+built binary does not link the compiler (Prism/wazero) and starts without
+parsing source. Inside the bundle, `require` / `require_relative` resolve
+against the archive through `Options.SourceFS`; the host filesystem is not
+consulted. `--include` members are exposed to `File.read` / `exist?` / `size`
+through `Options.AssetFS`. The default capability policy allows only
+`require` and `load`, so bundled programs cannot read host files, while
+bundled data needs no capability. `gomruby app.mrbb` runs the same archive and
+detects it by extension or ZIP magic.
+
+`-I` seeds `$LOAD_PATH`, and Ruby code may append to it. `gomrbpack build
+--with-compiler` links go-mrbc so `eval` works (the default is compiler-free).
 
 `build` generates a small `main.go` that `//go:embed`s the archive and calls
 `bundle.Run`, then runs `go mod tidy` and `go build`. Use `--replace` to point
 at a local checkout during development, and `--goos` / `--goarch` for
-cross-compilation. See [docs/bundling.ja.md](docs/bundling.ja.md) for the
-archive format, path resolution, and embedding without `gomrbpack build`.
+cross-compilation. `bundle.Options.Setup` registers host functions before the
+entry point runs. See [docs/bundling.md](docs/bundling.md) for the archive
+format, path resolution, and embedding without `gomrbpack build`.
 
 ## Development
 
