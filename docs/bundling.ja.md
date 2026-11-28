@@ -202,7 +202,8 @@ state := mrbvm.New(mrbvm.Options{
 - `--workdir` を指定すると生成物を残す。指定しない場合は一時
   ディレクトリを使い、終了時に削除する（`--keep-work` で保持）。
 - `--goos` / `--goarch` / `--tags` / `--ldflags` / `--strip` /
-  `--no-trimpath` を `go build` に渡せる。
+  `--no-trimpath` を `go build` に渡せる。出力先が Windows で拡張子がない
+  場合は `.exe` を自動で付ける。
 - `--with-compiler` を指定すると、生成する `main.go` が `go-mrbc` を
   リンクして `eval` を有効にする。`go.mod` への追加は `go mod tidy` が
   解決する。バイナリサイズは大きくなる。

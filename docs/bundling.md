@@ -194,7 +194,8 @@ A `.mrbb` file is a ZIP whose first member is `manifest.json`.
 - `--workdir` keeps the generated files; otherwise a temporary directory is
   removed unless `--keep-work` is set.
 - `--goos`, `--goarch`, `--tags`, `--ldflags`, `--strip`, and
-  `--no-trimpath` are forwarded to `go build`.
+  `--no-trimpath` are forwarded to `go build`. When the target is Windows and
+  `-o` has no extension, `.exe` is appended automatically.
 - `--with-compiler` links go-mrbc and permits `eval`. `go mod tidy` resolves
   the dependency. The binary is larger.
 - The `go` command and module downloads (or a populated module cache) are

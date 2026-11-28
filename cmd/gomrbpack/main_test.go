@@ -46,6 +46,15 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// builtExecutable returns the path the build command writes. On Windows,
+// build appends .exe when the requested output has no extension.
+func builtExecutable(path string) string {
+	if runtime.GOOS == "windows" {
+		return path + ".exe"
+	}
+	return path
+}
+
 func TestPackAndRun(t *testing.T) {
 	dir := t.TempDir()
 	writeApp(t, dir)
@@ -268,12 +277,7 @@ func TestBuildWithCompiler(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("build exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
-	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(withCompiler); err != nil {
-			withCompiler += ".exe"
-		}
-	}
-	if out, err := exec.Command(withCompiler).CombinedOutput(); err != nil || string(out) != "42\n" {
+	if out, err := exec.Command(builtExecutable(withCompiler)).CombinedOutput(); err != nil || string(out) != "42\n" {
 		t.Fatalf("with-compiler app: %v, output = %q", err, out)
 	}
 
@@ -283,12 +287,7 @@ func TestBuildWithCompiler(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("build exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
-	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(withoutCompiler); err != nil {
-			withoutCompiler += ".exe"
-		}
-	}
-	cmd := exec.Command(withoutCompiler)
+	cmd := exec.Command(builtExecutable(withoutCompiler))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -319,13 +318,7 @@ func TestBuild(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("build exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
 	}
-	executable := output
-	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(executable); err != nil {
-			executable += ".exe"
-		}
-	}
-	cmd := exec.Command(executable, "x", "y")
+	cmd := exec.Command(builtExecutable(output), "x", "y")
 	var runOut bytes.Buffer
 	cmd.Stdout = &runOut
 	cmd.Stderr = &runOut

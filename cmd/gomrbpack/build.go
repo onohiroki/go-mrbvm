@@ -95,6 +95,11 @@ func runBuild(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintf(stderr, "gomrbpack: %v\n", err)
 		return 1
 	}
+	// Windows cannot reliably execute an extensionless file through os/exec
+	// and PATH lookup, so give the target an .exe suffix.
+	if targetOS(&cfg) == "windows" && filepath.Ext(output) == "" {
+		output += ".exe"
+	}
 
 	dir, remove, err := buildDir(cfg.workdir)
 	if err != nil {
@@ -191,6 +196,13 @@ func buildDir(requested string) (string, bool, error) {
 		return "", false, err
 	}
 	return dir, true, nil
+}
+
+func targetOS(cfg *buildConfig) string {
+	if cfg.goos != "" {
+		return cfg.goos
+	}
+	return runtime.GOOS
 }
 
 func buildEnv(cfg *buildConfig) []string {
