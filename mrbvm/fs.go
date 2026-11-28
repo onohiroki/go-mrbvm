@@ -61,6 +61,30 @@ func (f *fsSource) Stat(name string) (fs.FileInfo, error) {
 	return fs.Stat(f.fsys, clean)
 }
 
+// readAsset returns a bundled asset. The second result reports whether the
+// asset exists; errors (including invalid paths) fall through to the host.
+func (s *State) readAsset(name string) ([]byte, bool) {
+	if s.assetFS == nil {
+		return nil, false
+	}
+	data, err := s.assetFS.ReadFile(name)
+	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+func (s *State) assetStat(name string) (fs.FileInfo, bool) {
+	if s.assetFS == nil {
+		return nil, false
+	}
+	info, err := s.assetFS.Stat(name)
+	if err != nil {
+		return nil, false
+	}
+	return info, true
+}
+
 func (s *State) sourceReadFile(name string) ([]byte, error) {
 	if s.sourceFS == nil {
 		return os.ReadFile(name)

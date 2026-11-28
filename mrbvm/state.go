@@ -50,6 +50,11 @@ type Options struct {
 	// require_relative. Nil selects the host filesystem.
 	SourceFS SourceFS
 
+	// AssetFS is consulted by File.read, File.exist?, and File.size before
+	// the host filesystem. Bundled assets are application content and do not
+	// require the FileRead capability; host access still does.
+	AssetFS SourceFS
+
 	// LoadPaths are searched by require after the current directory. They
 	// are also what a bundle manifest records for an embedded program.
 	LoadPaths []string
@@ -124,6 +129,7 @@ type State struct {
 	fiberCBoundary         int
 	compiler               CompileFunc
 	sourceFS               SourceFS
+	assetFS                SourceFS
 	loadPaths              []string
 	evalScopes             []*evalScope
 	requiredFiles          map[string]bool
@@ -271,6 +277,7 @@ func New(opts Options) *State {
 		gcEnabled:       true,
 		compiler:        opts.Compiler,
 		sourceFS:        opts.SourceFS,
+		assetFS:         opts.AssetFS,
 		loadPaths:       append([]string(nil), opts.LoadPaths...),
 		requiredFiles:   make(map[string]bool),
 		closed:          make(chan struct{}),

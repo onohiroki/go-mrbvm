@@ -18,13 +18,17 @@ type fileData struct {
 func (s *State) installFileLibrary() {
 	fileClass := s.FileClass
 	fileClass.classMethods["read"] = &method{owner: fileClass, name: "read", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		if err := s.requireCapability(sandbox.FileRead); err != nil {
-			return Nil, err
-		}
 		if len(args) < 1 {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "File.read expects a path")}
 		}
-		data, err := os.ReadFile(args[0].ToS())
+		path := args[0].ToS()
+		if data, found := s.readAsset(path); found {
+			return StringValue(string(data)), nil
+		}
+		if err := s.requireCapability(sandbox.FileRead); err != nil {
+			return Nil, err
+		}
+		data, err := os.ReadFile(path)
 		if err != nil {
 			return Nil, s.ioError(err)
 		}
@@ -44,23 +48,31 @@ func (s *State) installFileLibrary() {
 		return IntValue(int64(len(data))), nil
 	}}
 	fileClass.classMethods["exist?"] = &method{owner: fileClass, name: "exist?", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
-		if err := s.requireCapability(sandbox.FileRead); err != nil {
-			return Nil, err
-		}
 		if len(args) != 1 {
 			return False, nil
 		}
-		_, err := os.Stat(args[0].ToS())
-		return BoolValue(err == nil), nil
-	}}
-	fileClass.classMethods["size"] = &method{owner: fileClass, name: "size", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
+		path := args[0].ToS()
+		if _, found := s.assetStat(path); found {
+			return True, nil
+		}
 		if err := s.requireCapability(sandbox.FileRead); err != nil {
 			return Nil, err
 		}
+		_, err := os.Stat(path)
+		return BoolValue(err == nil), nil
+	}}
+	fileClass.classMethods["size"] = &method{owner: fileClass, name: "size", native: func(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
 		if len(args) != 1 {
 			return Nil, &unwindSignal{kind: unwindException, value: newException(s.ArgumentErrorClass, "File.size expects a path")}
 		}
-		info, err := os.Stat(args[0].ToS())
+		path := args[0].ToS()
+		if info, found := s.assetStat(path); found {
+			return IntValue(info.Size()), nil
+		}
+		if err := s.requireCapability(sandbox.FileRead); err != nil {
+			return Nil, err
+		}
+		info, err := os.Stat(path)
 		if err != nil {
 			return Nil, s.ioError(err)
 		}

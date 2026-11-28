@@ -31,6 +31,16 @@ const ManifestName = "manifest.json"
 // Extension is the conventional file extension for a bundle.
 const Extension = ".mrbb"
 
+// Member kinds recorded in the manifest.
+const (
+	// KindSource is Ruby source.
+	KindSource = "rb"
+	// KindBytecode is RITE 04.00 bytecode.
+	KindBytecode = "mrb"
+	// KindData is an opaque asset read through File.
+	KindData = "data"
+)
+
 const (
 	maxBundleSize = 256 << 20
 	maxFileSize   = 64 << 20
@@ -55,9 +65,11 @@ type Manifest struct {
 	Files     []File   `json:"files"`
 }
 
-// Entry is one input file to Write.
+// Entry is one input file to Write. Kind is optional; an empty Kind is
+// derived from the data (RITE bytecode or Ruby source).
 type Entry struct {
 	Path string
+	Kind string
 	Data []byte
 }
 
@@ -101,11 +113,18 @@ func Write(w io.Writer, entry string, loadPaths []string, entries []Entry) error
 		LoadPaths: make([]string, 0, len(loadPaths)),
 	}
 	foundEntry := false
+	entryKind := ""
 	for _, item := range sorted {
 		sum := sha256.Sum256(item.Data)
-		kind := "rb"
-		if bytes.HasPrefix(item.Data, []byte("RITE")) {
-			kind = "mrb"
+		kind := item.Kind
+		if kind == "" {
+			kind = KindSource
+			if bytes.HasPrefix(item.Data, []byte("RITE")) {
+				kind = KindBytecode
+			}
+		}
+		if err := validateKind(kind, item.Data); err != nil {
+			return fmt.Errorf("bundle: %s: %w", item.Path, err)
 		}
 		manifest.Files = append(manifest.Files, File{
 			Path:   item.Path,
@@ -115,10 +134,14 @@ func Write(w io.Writer, entry string, loadPaths []string, entries []Entry) error
 		})
 		if item.Path == entry {
 			foundEntry = true
+			entryKind = kind
 		}
 	}
 	if !foundEntry {
 		return fmt.Errorf("bundle: entry %s is not one of the input files", entry)
+	}
+	if entryKind == KindData {
+		return fmt.Errorf("bundle: entry %s is a data file, not executable code", entry)
 	}
 	for _, loadPath := range loadPaths {
 		clean, err := cleanDirName(loadPath)
@@ -161,6 +184,8 @@ func writeMember(zw *zip.Writer, name string, data []byte, method uint16) error 
 type Bundle struct {
 	manifest Manifest
 	files    map[string][]byte
+	code     map[string][]byte
+	assets   map[string][]byte
 }
 
 // Open decodes an in-memory archive.
@@ -229,6 +254,8 @@ func Open(data []byte) (*Bundle, error) {
 		return nil, fmt.Errorf("bundle: entry %s is missing", m.Entry)
 	}
 
+	code := make(map[string][]byte)
+	assets := make(map[string][]byte)
 	listed := make(map[string]bool, len(m.Files))
 	for _, file := range m.Files {
 		if _, err := cleanEntryName(file.Path); err != nil {
@@ -246,6 +273,17 @@ func Open(data []byte) (*Bundle, error) {
 		if hex.EncodeToString(sum[:]) != file.SHA256 {
 			return nil, fmt.Errorf("bundle: %s: checksum mismatch", file.Path)
 		}
+		if err := validateKind(file.Kind, data); err != nil {
+			return nil, fmt.Errorf("bundle: %s: %w", file.Path, err)
+		}
+		if file.Kind == KindData {
+			assets[file.Path] = data
+		} else {
+			code[file.Path] = data
+		}
+	}
+	if _, ok := code[m.Entry]; !ok {
+		return nil, fmt.Errorf("bundle: entry %s is not executable code", m.Entry)
 	}
 	for name := range members {
 		if !listed[name] {
@@ -260,7 +298,21 @@ func Open(data []byte) (*Bundle, error) {
 		m.LoadPaths[i] = clean
 	}
 
-	return &Bundle{manifest: m, files: members}, nil
+	return &Bundle{manifest: m, files: members, code: code, assets: assets}, nil
+}
+
+func validateKind(kind string, data []byte) error {
+	switch kind {
+	case KindSource, KindData:
+		return nil
+	case KindBytecode:
+		if !bytes.HasPrefix(data, []byte("RITE")) {
+			return errors.New("bytecode member does not start with RITE")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown kind %q", kind)
+	}
 }
 
 // OpenFile reads and decodes an archive from disk.
@@ -336,9 +388,16 @@ func (b *Bundle) Extract(dir string) error {
 	return nil
 }
 
-// SourceFS returns a read-only view of the archive for mrbvm.Options.SourceFS.
+// SourceFS returns a read-only view of the executable members for
+// mrbvm.Options.SourceFS. Data members are not visible here.
 func (b *Bundle) SourceFS() mrbvm.SourceFS {
-	return mrbvmSourceFS{bundle: b}
+	return memberFS{members: b.code}
+}
+
+// AssetFS returns a read-only view of the data members for
+// mrbvm.Options.AssetFS.
+func (b *Bundle) AssetFS() mrbvm.SourceFS {
+	return memberFS{members: b.assets}
 }
 
 // CleanPath normalizes and validates a path relative to the bundle root.

@@ -73,6 +73,7 @@ func (b *Bundle) Run(ctx context.Context, argv []string, stdin io.Reader, stdout
 		Compiler:  opts.Compiler,
 		Policy:    policy,
 		SourceFS:  b.SourceFS(),
+		AssetFS:   b.AssetFS(),
 		LoadPaths: b.manifest.LoadPaths,
 	}
 	if opts.Configure != nil {

@@ -145,6 +145,41 @@ p [helper_value, ARGV, $0]
 	}
 }
 
+func TestArchiveDataAssets(t *testing.T) {
+	data := archive(t, "main.mrb", nil, []bundle.Entry{
+		{Path: "main.mrb", Data: compile(t, "main.rb", `
+p [File.read("data/msg.txt"), File.exist?("data/msg.txt"), File.size("data/msg.txt")]
+`)},
+		{Path: "data/msg.txt", Kind: bundle.KindData, Data: []byte("asset")},
+	})
+	b, err := bundle.Open(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.SourceFS().ReadFile("data/msg.txt"); err == nil {
+		t.Fatal("data asset is visible through SourceFS")
+	}
+	if got, err := b.AssetFS().ReadFile("data/msg.txt"); err != nil || string(got) != "asset" {
+		t.Fatalf("asset = %q, %v", got, err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := bundle.Run(context.Background(), data, []string{"app"}, strings.NewReader(""), &stdout, &stderr, bundle.Options{})
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr.String())
+	}
+	if want := "[\"asset\", true, 5]\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+
+	var buf bytes.Buffer
+	if err := bundle.Write(&buf, "data/msg.txt", nil, []bundle.Entry{
+		{Path: "data/msg.txt", Kind: bundle.KindData, Data: []byte("asset")},
+	}); err == nil {
+		t.Fatal("expected a data entry to be rejected")
+	}
+}
+
 func TestRunSetupRegistersHostFunctions(t *testing.T) {
 	data := archive(t, "main.mrb", nil, []bundle.Entry{
 		{Path: "main.mrb", Data: compile(t, "main.rb", `p [host_echo(ARGV[0]), $0]`)},

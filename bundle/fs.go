@@ -8,17 +8,25 @@ import (
 	"github.com/onohiroki/go-mrbvm/mrbvm"
 )
 
-// mrbvmSourceFS adapts a Bundle to mrbvm.SourceFS.
-type mrbvmSourceFS struct {
-	bundle *Bundle
+// memberFS is a read-only view of one class of bundle members.
+type memberFS struct {
+	members map[string][]byte
 }
 
-func (f mrbvmSourceFS) ReadFile(name string) ([]byte, error) {
-	return f.bundle.ReadFile(name)
+func (f memberFS) ReadFile(name string) ([]byte, error) {
+	clean, err := cleanEntryName(name)
+	if err != nil {
+		return nil, err
+	}
+	data, ok := f.members[clean]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return data, nil
 }
 
-func (f mrbvmSourceFS) Stat(name string) (fs.FileInfo, error) {
-	data, err := f.bundle.ReadFile(name)
+func (f memberFS) Stat(name string) (fs.FileInfo, error) {
+	data, err := f.ReadFile(name)
 	if err != nil {
 		return nil, err
 	}
@@ -37,4 +45,4 @@ func (i bundleFileInfo) ModTime() time.Time { return time.Unix(0, 0).UTC() }
 func (i bundleFileInfo) IsDir() bool        { return false }
 func (i bundleFileInfo) Sys() any           { return nil }
 
-var _ mrbvm.SourceFS = mrbvmSourceFS{}
+var _ mrbvm.SourceFS = memberFS{}

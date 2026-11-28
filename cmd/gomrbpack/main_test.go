@@ -65,6 +65,49 @@ func TestPackAndRun(t *testing.T) {
 	}
 }
 
+func TestPackDataAssets(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "main.rb"), `puts File.read("data/msg.txt")`+"\n")
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "data", "msg.txt"), "asset\n")
+
+	output := filepath.Join(dir, "app.mrbb")
+	code, _, stderr := runTool(t, "pack", "--root", dir, "--entry", "main.rb", "--include", filepath.Join(dir, "data"),
+		"--quiet", "-o", output, filepath.Join(dir, "main.rb"))
+	if code != 0 {
+		t.Fatalf("pack exit = %d, stderr = %q", code, stderr)
+	}
+
+	code, stdout, stderr := runTool(t, "run", output)
+	if code != 0 {
+		t.Fatalf("run exit = %d, stderr = %q", code, stderr)
+	}
+	if stdout != "asset\n\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+
+	code, stdout, stderr = runTool(t, "list", output)
+	if code != 0 {
+		t.Fatalf("list exit = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "data/msg.txt") {
+		t.Fatalf("list = %q", stdout)
+	}
+}
+
+func TestPackRejectsCodeAndDataCollision(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.rb")
+	writeFile(t, path, "puts 1\n")
+	code, _, stderr := runTool(t, "pack", "--root", dir, "-o", filepath.Join(dir, "app.mrbb"),
+		"--include", path, path)
+	if code == 0 || !strings.Contains(stderr, "both code and data") {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr)
+	}
+}
+
 func TestPackIsDeterministic(t *testing.T) {
 	dir := t.TempDir()
 	writeApp(t, dir)
