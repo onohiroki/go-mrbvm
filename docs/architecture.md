@@ -85,12 +85,14 @@ go-mrbvm/
 │   ├── core/                    core classes and methods
 │   ├── gc/                      object registry, GC shims
 │   └── bytecode/                adapters around go-mrbc/bytecode
+├── bundle/                      .mrbb archive and embedded-program runtime
 ├── sandbox/                     limits, capability policy, deterministic mode
 ├── host/                        optional host integrations
 ├── debugger/                    DAP/debug adapter (later)
 ├── cmd/
 │   ├── gomruby/                 mruby-compatible runner
-│   └── gomirb/                  interactive shell
+│   ├── gomirb/                  interactive shell
+│   └── gomrbpack/               .mrbb packer and single-binary builder
 ├── testdata/                    VM-specific fixtures
 ├── docs/
 └── Makefile

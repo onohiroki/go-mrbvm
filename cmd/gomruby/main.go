@@ -12,6 +12,7 @@ import (
 
 	"github.com/onohiroki/go-mrbc/bytecode"
 	"github.com/onohiroki/go-mrbc/mrbc"
+	"github.com/onohiroki/go-mrbvm/bundle"
 	"github.com/onohiroki/go-mrbvm/internal/cli"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
 	"github.com/onohiroki/go-mrbvm/sandbox"
@@ -100,6 +101,18 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	ctx := context.Background()
+
+	// A .mrbb bundle is a self-contained program; run it through the bundle
+	// runtime so that its embedded filesystem and entry point are used.
+	if !cfg.hasCode && len(rest) > 0 && rest[0] != "-" && strings.EqualFold(filepath.Ext(rest[0]), bundle.Extension) {
+		if len(cfg.libs) > 0 {
+			fmt.Fprintf(stderr, "%s: -r cannot be combined with a %s bundle\n", prog, bundle.Extension)
+			return 1
+		}
+		return runBundleProgram(ctx, prog, rest, cfg, stdin, stdout, stderr)
+	}
+
 	programName := "-"
 	var programArgs []string
 	var programPath string
@@ -135,7 +148,6 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		defer programFile.Close()
 	}
 
-	ctx := context.Background()
 	state := mrbvm.New(mrbvm.Options{
 		Stdin:    stdin,
 		Stdout:   stdout,
@@ -189,6 +201,38 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "Syntax OK")
 	}
 	return 0
+}
+
+// runBundleProgram executes a .mrbb archive, setting ARGV from the arguments
+// after the bundle path.
+func runBundleProgram(ctx context.Context, prog string, argv []string, cfg config, stdin io.Reader, stdout, stderr io.Writer) int {
+	path := argv[0]
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: Cannot open program file: %s\n", prog, path)
+		return 1
+	}
+	app, err := bundle.Open(data)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", prog, err)
+		return 1
+	}
+	if cfg.checkSyntax {
+		fmt.Fprintln(stdout, "Syntax OK")
+		return 0
+	}
+	if cfg.verbose {
+		manifest := app.Manifest()
+		fmt.Fprintf(stdout, "bundle entry: %s\n", manifest.Entry)
+		for _, file := range manifest.Files {
+			fmt.Fprintf(stdout, "  %-6s %8d %s\n", file.Kind, file.Size, file.Path)
+		}
+	}
+	return app.Run(ctx, argv, stdin, stdout, stderr, bundle.Options{
+		Compiler: compileEvalSource,
+		Policy:   sandbox.AllowAll(),
+		Debug:    cfg.debug,
+	})
 }
 
 // runChunk compiles or decodes one program chunk, optionally disassembles it,

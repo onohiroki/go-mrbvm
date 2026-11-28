@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/onohiroki/go-mrbc/bytecode"
 	"github.com/onohiroki/go-mrbc/mrbc"
+	"github.com/onohiroki/go-mrbvm/bundle"
 	"github.com/onohiroki/go-mrbvm/mrbvm"
 )
 
@@ -40,6 +42,46 @@ func compileTestBytecode(t *testing.T, source string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func compileBundleMember(t *testing.T, filePath, source string) []byte {
+	t.Helper()
+	irep, err := mrbc.Compile(context.Background(), []byte(source), mrbc.Options{FilePath: filePath, DebugInfo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := mrbc.DumpWithOptions(irep, bytecode.DumpOptions{DebugInfo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestRunBundle(t *testing.T) {
+	var archive bytes.Buffer
+	err := bundle.Write(&archive, "main.mrb", nil, []bundle.Entry{
+		{Path: "main.mrb", Data: compileBundleMember(t, "main.rb", `
+require_relative "lib/helper"
+p [helper_value, ARGV, $0]
+`)},
+		{Path: "lib/helper.mrb", Data: compileBundleMember(t, "lib/helper.rb", "def helper_value; \"bundle\"; end\n")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeTestFile(t, "app.mrbb", string(archive.Bytes()))
+	code, stdout, stderr := runGomruby(t, "", path, "a", "b")
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr)
+	}
+	if want := "[\"bundle\", [\"a\", \"b\"], \"main.mrb\"]\n"; stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+
+	code, _, stderr = runGomruby(t, "", "-r", path, path)
+	if code == 0 || !strings.Contains(stderr, "cannot be combined") {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr)
+	}
 }
 
 func TestRunSourceFile(t *testing.T) {

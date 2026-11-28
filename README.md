@@ -113,6 +113,11 @@ coding assistance.
 - `gomruby` / `gomirb` switch parsing compatible with mruby / mirb,
   including stdin programs, `-r`, `ARGV`, and `$DEBUG`; `gomruby` also
   supports `-e` and initializes `$0`
+- `gomrbpack`, which compiles multiple `.rb` / `.mrb` inputs into a `.mrbb`
+  bundle and builds a single executable that embeds it
+- an injectable read-only filesystem (`Options.SourceFS`, `Options.LoadPaths`)
+  used by `load`, `require`, and `require_relative`, plus `.mrb` support in
+  `require`
 - VM-7 benchmark tooling, register pooling, and a GC shim
 - `cmd/vmcompat` for differential runs against the reference mruby
 - `cmd/mrbtest` plus `testdata/official.txt` for official mruby tests
@@ -141,6 +146,7 @@ Design and plan:
 - [docs/benchmarks.ja.md](docs/benchmarks.ja.md) — microbenchmarks and C mruby comparison (Japanese)
 - [benchmark/README.md](benchmark/README.md) — VM benchmark baseline and comparison workflow
 - [docs/bytecode-format.md](docs/bytecode-format.md) — RITE 04.00 format
+- [docs/bundling.ja.md](docs/bundling.ja.md) — `.mrbb` bundles and single-binary builds (Japanese)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — patch checklist and repository routing
 
 ## Relationship to go-mrbc
@@ -184,8 +190,10 @@ pins a tagged compiler version. The order is described in
 go-mrbvm/
 ├── mrbvm/                 public embedding API, interpreter, object model,
 │                          core library, Regexp, Fiber, eval, Set/Struct/Data
+├── bundle/                .mrbb archive format and embedded-program runtime
 ├── sandbox/               resource limits and capability policy
-├── cmd/                   gomruby, gomirb, vmcompat, mrbtest, vmbench
+├── cmd/                   gomruby, gomirb, gomrbpack, vmcompat, mrbtest,
+│                          vmbench
 ├── docs/                  architecture, ecosystem, roadmap, release process
 ├── examples/              sample macro scripts
 ├── testdata/              official mruby test manifests
@@ -203,6 +211,8 @@ The v0.1.2 release is available from the Go module proxy:
 go install github.com/onohiroki/go-mrbvm/cmd/gomruby@v0.1.2
 go install github.com/onohiroki/go-mrbvm/cmd/gomirb@v0.1.2
 ```
+
+`gomrbpack` is newer than v0.1.2; build it from a checkout as shown below.
 
 Or build all commands from a checkout:
 
@@ -225,6 +235,31 @@ initialized.
 `-q` (quiet results) and `-H` (history file). `-r` loads `.rb` or `.mrb`
 libraries, and may be repeated. A program file and trailing arguments are
 supported, with the arguments exposed as `ARGV`.
+
+### Bundling an application
+
+`gomrbpack` compiles multiple sources into a `.mrbb` archive and can build a
+single executable from it:
+
+```sh
+gomrbpack pack  --entry main.rb -I lib -o app.mrbb main.rb lib/
+gomrbpack run   app.mrbb arg1 arg2
+gomrbpack build --entry main.rb -I lib -o app main.rb lib/
+./app arg1 arg2
+```
+
+The `.rb` inputs are compiled to RITE bytecode at pack time, so the built
+binary does not link the compiler (Prism/wazero) and starts without parsing
+source. Inside the bundle, `require` / `require_relative` resolve against the
+archive through `Options.SourceFS`; the host filesystem is not consulted. The
+default capability policy allows only `require` and `load`, so bundled
+programs cannot read host files. `gomruby app.mrbb` runs the same archive.
+
+`build` generates a small `main.go` that `//go:embed`s the archive and calls
+`bundle.Run`, then runs `go mod tidy` and `go build`. Use `--replace` to point
+at a local checkout during development, and `--goos` / `--goarch` for
+cross-compilation. See [docs/bundling.ja.md](docs/bundling.ja.md) for the
+archive format, path resolution, and embedding without `gomrbpack build`.
 
 ## Development
 
