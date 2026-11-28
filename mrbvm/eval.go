@@ -609,7 +609,7 @@ func (s *State) requireCandidates(name string, relative bool) []string {
 		}
 		roots = []string{base}
 	} else {
-		roots = append([]string{""}, s.loadPaths...)
+		roots = append([]string{""}, s.loadPathRoots()...)
 	}
 
 	seen := make(map[string]bool, len(roots)*len(names))

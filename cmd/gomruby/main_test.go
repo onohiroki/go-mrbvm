@@ -213,6 +213,30 @@ func TestCheckSyntax(t *testing.T) {
 	}
 }
 
+func TestIncludePath(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "lib")
+	if err := os.MkdirAll(lib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lib, "helper.rb"), []byte("def helper_value; \"from-lib\"; end\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "script.rb")
+	if err := os.WriteFile(script, []byte("require \"helper\"\np [helper_value, $LOAD_PATH.first]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runGomruby(t, "", "-I", lib, script)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, stderr)
+	}
+	want := "[\"from-lib\", " + strconv.Quote(lib) + "]\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+}
+
 func TestPreloadLibraries(t *testing.T) {
 	sourceLib := writeTestFile(t, "lib.rb", "def libfn; 40; end\n")
 	code, stdout, stderr := runGomruby(t, "", "-r", sourceLib, "-e", "p libfn + 2")

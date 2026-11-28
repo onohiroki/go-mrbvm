@@ -85,6 +85,38 @@ func (s *State) assetStat(name string) (fs.FileInfo, bool) {
 	return info, true
 }
 
+// stringArrayValue builds a Ruby Array of Strings for $LOAD_PATH and ARGV.
+func stringArrayValue(values []string) Value {
+	items := make([]Value, len(values))
+	for i, value := range values {
+		items[i] = StringValue(value)
+	}
+	return ArrayValue(items)
+}
+
+// loadPathRoots returns the current $LOAD_PATH entries. Require consults the
+// global each time so Ruby code can push or replace directories.
+func (s *State) loadPathRoots() []string {
+	value, ok := s.globals["$LOAD_PATH"]
+	if !ok {
+		return append([]string(nil), s.loadPaths...)
+	}
+	if value.obj == nil {
+		return nil
+	}
+	data, ok := value.obj.data.(*arrayData)
+	if !ok {
+		return nil
+	}
+	roots := make([]string, 0, len(data.values))
+	for _, item := range data.values {
+		if item.Kind() == KindString {
+			roots = append(roots, item.String())
+		}
+	}
+	return roots
+}
+
 func (s *State) sourceReadFile(name string) ([]byte, error) {
 	if s.sourceFS == nil {
 		return os.ReadFile(name)

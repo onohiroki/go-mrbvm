@@ -290,6 +290,7 @@ func New(opts Options) *State {
 	if s.maxDepth == 0 {
 		s.maxDepth = 200
 	}
+	s.globals["$LOAD_PATH"] = stringArrayValue(s.loadPaths)
 	s.programs = make(map[*Irep]*irepProgram)
 	if opts.MaxOutputBytes > 0 {
 		s.outputBudget = &outputBudget{remaining: opts.MaxOutputBytes}

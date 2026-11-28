@@ -24,6 +24,7 @@ var optionSpecs = []cli.Option{
 	{Short: 'd'},
 	{Short: 'e', HasArg: true},
 	{Short: 'h'},
+	{Short: 'I', HasArg: true},
 	{Long: "help"},
 	{Short: 'r', HasArg: true},
 	{Short: 'v'},
@@ -33,14 +34,15 @@ var optionSpecs = []cli.Option{
 }
 
 type config struct {
-	bytecode    bool
-	checkSyntax bool
-	debug       bool
-	code        []string
-	hasCode     bool
-	libs        []string
-	verbose     bool
-	versionSeen bool
+	bytecode     bool
+	checkSyntax  bool
+	debug        bool
+	code         []string
+	hasCode      bool
+	libs         []string
+	includePaths []string
+	verbose      bool
+	versionSeen  bool
 }
 
 func main() {
@@ -72,6 +74,8 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			cfg.code = append(cfg.code, match.Arg)
 		case match.Option.Short == 'r':
 			cfg.libs = append(cfg.libs, match.Arg)
+		case match.Option.Short == 'I':
+			cfg.includePaths = append(cfg.includePaths, match.Arg)
 		case match.Option.Short == 'v':
 			if !cfg.verbose {
 				printVersion(stdout)
@@ -149,11 +153,12 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	state := mrbvm.New(mrbvm.Options{
-		Stdin:    stdin,
-		Stdout:   stdout,
-		Stderr:   stderr,
-		Compiler: compileEvalSource,
-		Policy:   sandbox.AllowAll(),
+		Stdin:     stdin,
+		Stdout:    stdout,
+		Stderr:    stderr,
+		Compiler:  compileEvalSource,
+		Policy:    sandbox.AllowAll(),
+		LoadPaths: cfg.includePaths,
 	})
 	defer state.Close()
 	state.SetGlobal("$DEBUG", mrbvm.BoolValue(cfg.debug))
@@ -306,6 +311,7 @@ func printUsage(w io.Writer, prog string) {
 	fmt.Fprintln(w, "  -d           set debugging flags (set $DEBUG to true)")
 	fmt.Fprintln(w, "  -e 'command' one line of script")
 	fmt.Fprintln(w, "  -h           print this help")
+	fmt.Fprintln(w, "  -I directory add the directory to $LOAD_PATH")
 	fmt.Fprintln(w, "  -r library   load the library before executing your script")
 	fmt.Fprintln(w, "  -v           print version number, then run in verbose mode")
 	fmt.Fprintln(w, "  --verbose    run in verbose mode")

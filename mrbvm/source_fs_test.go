@@ -89,6 +89,55 @@ end
 	}
 }
 
+func TestLoadPathGlobal(t *testing.T) {
+	fsys := fstest.MapFS{
+		"lib/foo.rb": {Data: []byte("def foo; \"foo\"; end\n")},
+	}
+	source := `
+p $LOAD_PATH
+$LOAD_PATH << "lib"
+require "foo"
+p foo
+`
+	var out bytes.Buffer
+	state := mrbvm.New(mrbvm.Options{
+		Stdout:   &out,
+		Compiler: compileEvalForTest,
+		Policy:   sandbox.AllowAll(),
+		SourceFS: mrbvm.NewSourceFS(fsys),
+	})
+	irep, err := compileEvalForTest(context.Background(), []byte(source), mrbvm.CompileOptions{FilePath: "main.rb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Execute(context.Background(), irep); err != nil {
+		t.Fatalf("execute: %v\n%s", err, out.String())
+	}
+	want := "[]\n\"foo\"\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestLoadPathsSeedLoadPath(t *testing.T) {
+	var out bytes.Buffer
+	state := mrbvm.New(mrbvm.Options{
+		Stdout:    &out,
+		Compiler:  compileEvalForTest,
+		LoadPaths: []string{"lib", "vendor"},
+	})
+	irep, err := compileEvalForTest(context.Background(), []byte("p $LOAD_PATH\n"), mrbvm.CompileOptions{FilePath: "main.rb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Execute(context.Background(), irep); err != nil {
+		t.Fatal(err)
+	}
+	if want := "[\"lib\", \"vendor\"]\n"; out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
 func TestSourceFSRequiresCompilerForSource(t *testing.T) {
 	fsys := fstest.MapFS{
 		"lib/foo.rb": {Data: []byte("def foo; 1; end\n")},
