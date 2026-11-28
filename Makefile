@@ -1,7 +1,7 @@
 GO ?= go
 BINARY_DIR ?= bin
 
-.PHONY: build test vet fmt clean corpus soak bench
+.PHONY: build test vet fmt clean corpus soak bench bundle-smoke bundle-bench
 
 build:
 	$(GO) build -o $(BINARY_DIR)/ ./cmd/...
@@ -23,6 +23,12 @@ soak:
 
 bench:
 	$(GO) test ./mrbvm -run '^$$' -bench . -benchmem -count=1 | tee benchmark/latest.txt
+
+bundle-smoke:
+	$(GO) run ./benchmark/bundlebench -smoke
+
+bundle-bench:
+	$(GO) run ./benchmark/bundlebench -o benchmark/bundle-latest.txt
 
 clean:
 	rm -rf $(BINARY_DIR)

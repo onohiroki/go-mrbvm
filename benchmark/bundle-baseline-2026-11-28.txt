@@ -1,0 +1,16 @@
+# gomrbpack bundle benchmark
+date: 2026-11-28T18:49:21+09:00
+commit: 56f5a49
+go: go1.27.4
+platform: darwin/arm64
+runs: 20 (warmup 3)
+
+sizes:
+  gomruby        14.5 MiB  (15221762 bytes)
+  built app       8.9 MiB  (9345058 bytes)
+  app.mrbb        1.1 KiB  (1134 bytes)
+
+wall clock (median, min, mean):
+  gomruby main.rb      193.62 ms  (189.57, 194.89)
+  gomruby app.mrbb       6.53 ms  (  4.97,   6.24)
+  built app              6.35 ms  (  3.56,   6.21)

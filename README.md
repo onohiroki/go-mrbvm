@@ -280,6 +280,10 @@ go run ./cmd/vmcompat -strict -stderr -random 100 -seed 1
 # Run the official mruby test manifests that currently pass.
 go run ./cmd/mrbtest -manifest testdata/official.txt
 go run ./cmd/mrbtest -manifest testdata/official-gems.txt
+
+# Bundle smoke test and bundle size/startup benchmark.
+make bundle-smoke
+make bundle-bench
 ```
 
 The VM uses UTF-8 character indexing for `String` (`bytesize` and the byte APIs

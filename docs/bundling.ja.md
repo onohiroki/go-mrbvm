@@ -164,6 +164,34 @@ state := mrbvm.New(mrbvm.Options{
   `--no-trimpath` を `go build` に渡せる。
 - `go` コマンドとモジュールの取得（またはキャッシュ）が必要。
 
+## 計測
+
+`make bundle-bench` は `benchmark/bundle/` のサンプルアプリについて、
+起動から終了までの時間とバイナリサイズを計測し、
+`benchmark/bundle-latest.txt` に保存する。実装は
+`benchmark/bundlebench` にあり、次の 3 通りを同じ出力で比較する。
+
+- `gomruby main.rb` — 起動時にソースをコンパイル
+- `gomruby app.mrbb` — パック済みアーカイブを実行
+- `built app` — `gomrbpack build` した単体バイナリ
+
+初回の記録は
+[`benchmark/bundle-baseline-2026-11-28.txt`](../benchmark/bundle-baseline-2026-11-28.txt)。
+Apple M4 / macOS arm64 / go1.27.4、20 回の中央値では次のとおり。
+
+| 実行方法 | 中央値 | 最小 |
+| --- | ---: | ---: |
+| `gomruby main.rb` | 193.62 ms | 189.57 ms |
+| `gomruby app.mrbb` | 6.53 ms | 4.97 ms |
+| `built app` | 6.35 ms | 3.56 ms |
+
+サイズは `gomruby` 14.5 MiB、生成バイナリ 8.9 MiB、`app.mrbb` 1.1 KiB。
+ランタイム起動はほぼ同じで、差の大部分は起動時のコンパイル時間である。
+数値はマシン依存なので、リリースごとに同じ環境で取り直す。
+
+CI では `make bundle-smoke` がサンプルを pack / build / 実行し、3 通りの
+出力が一致することを確認する。
+
 ## 制限と注意
 
 - 生成バイナリには `eval` 用のコンパイラが入らない。必要なら
