@@ -46,6 +46,14 @@ type Options struct {
 	// Policy is the capability allow-list exposed to embeddings.
 	Policy *sandbox.Policy
 
+	// SourceFS is the read-only filesystem used by load, require, and
+	// require_relative. Nil selects the host filesystem.
+	SourceFS SourceFS
+
+	// LoadPaths are searched by require after the current directory. They
+	// are also what a bundle manifest records for an embedded program.
+	LoadPaths []string
+
 	// Execution limits. Zero means unlimited, except MaxDepth, where zero
 	// selects the default depth.
 	MaxInstructions uint64
@@ -115,6 +123,8 @@ type State struct {
 	fiberSwitchCh          chan fiberSwitchRequest
 	fiberCBoundary         int
 	compiler               CompileFunc
+	sourceFS               SourceFS
+	loadPaths              []string
 	evalScopes             []*evalScope
 	requiredFiles          map[string]bool
 
@@ -260,6 +270,8 @@ func New(opts Options) *State {
 		startTime:       time.Now(),
 		gcEnabled:       true,
 		compiler:        opts.Compiler,
+		sourceFS:        opts.SourceFS,
+		loadPaths:       append([]string(nil), opts.LoadPaths...),
 		requiredFiles:   make(map[string]bool),
 		closed:          make(chan struct{}),
 		fiberStop:       make(chan struct{}),

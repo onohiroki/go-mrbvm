@@ -1,10 +1,9 @@
 package mrbvm
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/onohiroki/go-mrbvm/sandbox"
@@ -540,10 +539,7 @@ func (s *State) kernelLoadMethod(ctx context.Context, self Value, args []Value, 
 }
 
 func (s *State) loadFile(ctx context.Context, path string, wrapped, required bool) (Value, error) {
-	if s.compiler == nil {
-		return Nil, &unwindSignal{kind: unwindException, value: newException(s.NotImplementedErrorClass, "no compiler is configured for load")}
-	}
-	source, err := os.ReadFile(path)
+	data, err := s.sourceReadFile(path)
 	if err != nil {
 		return Nil, &unwindSignal{kind: unwindException, value: newException(s.LoadErrorClass, "cannot load such file -- "+path)}
 	}
@@ -554,9 +550,23 @@ func (s *State) loadFile(ctx context.Context, path string, wrapped, required boo
 		s.ensureClassObject(module)
 		scope = evalContext{self: s.classValue(module), targetClass: module, cref: module, owner: module, method: "<top (required)>"}
 	}
-	_, err = s.evalString(ctx, string(source), path, 1, scope)
-	if err != nil {
-		return Nil, err
+
+	if s.isBytecodeSource(path, data) {
+		irep, err := DecodeBytecode(data)
+		if err != nil {
+			return Nil, err
+		}
+		_, err = s.executeFrame(ctx, irep, scope.self, scope.targetClass, nil, Nil, Nil, nil, "<top (required)>", scope.owner, scope.cref, false)
+		if err != nil {
+			return Nil, err
+		}
+	} else {
+		if s.compiler == nil {
+			return Nil, &unwindSignal{kind: unwindException, value: newException(s.NotImplementedErrorClass, "no compiler is configured for load")}
+		}
+		if _, err := s.evalString(ctx, string(data), path, 1, scope); err != nil {
+			return Nil, err
+		}
 	}
 	if required {
 		s.requiredFiles[path] = true
@@ -564,30 +574,57 @@ func (s *State) loadFile(ctx context.Context, path string, wrapped, required boo
 	return True, nil
 }
 
+// isBytecodeSource reports whether data should be decoded as RITE bytecode
+// rather than compiled as Ruby source.
+func (s *State) isBytecodeSource(path string, data []byte) bool {
+	if s.sourceExt(path) == ".mrb" {
+		return true
+	}
+	return bytes.HasPrefix(data, []byte("RITE"))
+}
+
 func (s *State) resolveRequirePath(ctx context.Context, path string, relative bool) (string, bool) {
-	candidates := []string{path}
-	if filepath.Ext(path) == "" {
-		candidates = append(candidates, path+".rb")
-	}
-	if relative {
-		base := ""
-		if len(s.frames) > 0 {
-			base = filepath.Dir(s.frames[len(s.frames)-1].file)
-		}
-		for i, candidate := range candidates {
-			candidates[i] = filepath.Join(base, candidate)
-		}
-	}
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			absolute, err := filepath.Abs(candidate)
-			if err == nil {
-				return absolute, true
-			}
-			return candidate, true
+	for _, candidate := range s.requireCandidates(path, relative) {
+		if info, err := s.sourceStat(candidate); err == nil && !info.IsDir() {
+			return s.canonicalSourcePath(candidate), true
 		}
 	}
 	return "", false
+}
+
+// requireCandidates returns the search order for a require name: the name
+// itself and .rb/.mrb variants, for each of the load-path roots. Relative
+// requires only search the directory of the requiring file.
+func (s *State) requireCandidates(name string, relative bool) []string {
+	names := []string{name}
+	if s.sourceExt(name) == "" {
+		names = append(names, name+".rb", name+".mrb")
+	}
+
+	var roots []string
+	if relative {
+		base := ""
+		if len(s.frames) > 0 {
+			base = s.sourceDir(s.frames[len(s.frames)-1].file)
+		}
+		roots = []string{base}
+	} else {
+		roots = append([]string{""}, s.loadPaths...)
+	}
+
+	seen := make(map[string]bool, len(roots)*len(names))
+	candidates := make([]string, 0, len(roots)*len(names))
+	for _, root := range roots {
+		for _, candidate := range names {
+			joined := s.sourceJoin(root, candidate)
+			if seen[joined] {
+				continue
+			}
+			seen[joined] = true
+			candidates = append(candidates, joined)
+		}
+	}
+	return candidates
 }
 
 func (s *State) kernelRequireMethod(ctx context.Context, self Value, args []Value, kw Value, block Value) (Value, error) {
